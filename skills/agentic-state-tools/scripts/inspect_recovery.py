@@ -23,6 +23,7 @@ from runtime_utils import (
     validate_identifier,
     write_json_atomic,
 )
+from task_state_contract import validate_execution_identity
 from write_artifact import write_validated
 
 
@@ -125,10 +126,10 @@ def validate_lease_binding(task: dict, lease: dict) -> list[str]:
         errors.append("lease task_id does not match task state")
     if "revision" in task and lease.get("task_revision") is not None and lease.get("task_revision") != task.get("revision"):
         errors.append("lease task revision does not match task state")
-    for field in ("run_id", "attempt_id"):
+    for field in ("run_id", "attempt_id", "dispatch_id"):
         expected = task.get(field)
         actual = lease.get(field)
-        if expected is not None and actual != expected:
+        if expected is not None and actual is not None and actual != expected:
             errors.append(f"lease {field} does not match task state")
     if not isinstance(lease.get("owner_identity"), str) or not lease["owner_identity"].strip():
         errors.append("lease owner_identity is missing")
@@ -152,6 +153,7 @@ def reconcile_runtime_artifacts(root: Path, task_id: str, task_status: str) -> l
 
     queue_path = runtime_root / "queue.json"
     queue_entry = None
+    queue = None
     if queue_path.is_file():
         try:
             queue = read_object(queue_path)
@@ -164,6 +166,12 @@ def reconcile_runtime_artifacts(root: Path, task_id: str, task_status: str) -> l
                 queue_state = str(queue_entry.get("queue_state", "")).upper()
                 if task_status in {"RUNNING", "QUEUED", "QUEUED_ASYNC", "QUEUED_SYNC"} and queue_state not in {"DISPATCHED", "RUNNING", "QUEUED"}:
                     reasons.append(f"queue state does not match active task: {queue_state}")
+            task_path = root / "work" / task_id / "task-state.json"
+            if task_path.is_file() and isinstance(queue, dict):
+                try:
+                    validate_execution_identity(read_object(task_path), None, queue)
+                except ValueError as exc:
+                    reasons.append(f"queue execution identity mismatch: {exc}")
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             reasons.append(f"queue is unreadable: {exc}")
 

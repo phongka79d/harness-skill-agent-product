@@ -26,6 +26,7 @@ from runtime_utils import (
     utc_now,
     write_json_atomic,
 )
+from task_state_contract import EXECUTION_IDENTITY_FIELDS, merge_task_state, validate_execution_identity
 from validate_payload import validate
 from write_artifact import write_validated
 
@@ -108,7 +109,7 @@ def _validate_idempotent_retry(
         raise ValueError("idempotency key conflicts with a different task revision")
     if task.get("revision") != existing.get("task_revision"):
         raise ValueError("idempotent dispatch task state revision no longer matches the published envelope")
-    for field in ("run_id", "attempt_id"):
+    for field in (*EXECUTION_IDENTITY_FIELDS, "plan_revision", "worktree_path", "branch_name", "input_artifact_hashes"):
         if task.get(field) != existing.get(field):
             raise ValueError(f"idempotent dispatch {field} does not match task state")
 
@@ -208,6 +209,11 @@ def persist_dispatch(
         next_status = "QUEUED_ASYNC" if mode == "ASYNC" else "QUEUED_SYNC"
         next_revision = current_revision + 1
         envelope = dict(dispatch)
+        binding_metadata = {
+            field: dispatch.get(field, current_task.get(field))
+            for field in ("plan_revision", "worktree_path", "branch_name", "input_artifact_hashes")
+            if dispatch.get(field, current_task.get(field)) is not None
+        }
         envelope.update(
             {
                 "status": "RECORDED",
@@ -216,6 +222,7 @@ def persist_dispatch(
                 "attempt_id": attempt_id,
                 "task_revision": next_revision,
                 "operation_id": operation_id,
+                **binding_metadata,
             }
         )
 
@@ -245,13 +252,15 @@ def persist_dispatch(
                 "revision": next_revision,
                 "run_id": run_id,
                 "attempt_id": attempt_id,
+                "dispatch_id": envelope["dispatch_id"],
+                **binding_metadata,
             }
             tasks = [item for item in queue.get("tasks", []) if not isinstance(item, dict) or item.get("task_id") != task_id]
             tasks.append(task_entry)
             queue["tasks"] = tasks
             queue["dispatches"] = [*queue.get("dispatches", []), envelope]
             queue["task_states"] = [item for item in queue.get("task_states", []) if not isinstance(item, dict) or item.get("task_id") != task_id] + [
-                {"task_id": task_id, "status": next_status, "revision": next_revision, "run_id": run_id, "attempt_id": attempt_id}
+                {"task_id": task_id, "status": next_status, "revision": next_revision, "run_id": run_id, "attempt_id": attempt_id, "dispatch_id": envelope["dispatch_id"], **binding_metadata}
             ]
             queue["revision"] = int(queue.get("revision", 0)) + 1
             _validated_write(queue_path, queue, QUEUE_SCHEMA)
@@ -269,19 +278,19 @@ def persist_dispatch(
             graph["revision"] = int(graph.get("revision", 0)) + 1
             _validated_write(graph_path, graph, GRAPH_SCHEMA)
 
-            next_task = dict(current_task)
-            next_task.update(
+            for field, value in {"run_id": run_id, "attempt_id": attempt_id, "dispatch_id": envelope["dispatch_id"], **binding_metadata}.items():
+                if current_task.get(field) is not None and current_task.get(field) != value:
+                    raise ValueError(f"dispatch {field} does not match existing task identity")
+            next_task = merge_task_state(
+                current_task,
                 {
                     "status": next_status,
                     "previous_revision": current_revision,
                     "revision": next_revision,
                     "updated_at": utc_now(),
-                    "run_id": run_id,
-                    "attempt_id": attempt_id,
-                    "dispatch_id": envelope["dispatch_id"],
-                    "idempotency_key": idempotency_key,
-                }
+                },
             )
+            next_task.update({"run_id": run_id, "attempt_id": attempt_id, "dispatch_id": envelope["dispatch_id"], "idempotency_key": idempotency_key, **binding_metadata})
             write_validated(project_root, f"work/{task_id}/task-state.json", next_task, TASK_STATE_SCHEMA)
 
             lease = {
@@ -291,14 +300,17 @@ def persist_dispatch(
                 "owner_identity": str(dispatch["selected_owner"]),
                 "run_id": run_id,
                 "attempt_id": attempt_id,
+                "dispatch_id": envelope["dispatch_id"],
                 "task_revision": next_revision,
                 "acquired_at": utc_now(),
                 "last_heartbeat": utc_now(),
                 "lease_seconds": 300,
                 "expires_at": lease_expiry(300),
                 "idempotency_key": idempotency_key,
+                **binding_metadata,
             }
             write_validated(project_root, f"work/{task_id}/lease.json", lease, LEASE_SCHEMA)
+            validate_execution_identity(next_task, lease, queue)
 
             append_event_for_root(
                 root,

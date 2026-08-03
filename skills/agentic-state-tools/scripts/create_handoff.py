@@ -60,6 +60,8 @@ def main() -> int:
                 for field in ("run_id", "attempt_id"):
                     if task_state.get(field) is not None and payload[field] != task_state.get(field):
                         raise ValueError(f"handoff.{field} does not match the current task state")
+                if task_state.get("dispatch_id") is not None and payload.get("dispatch_id") != task_state.get("dispatch_id"):
+                    raise ValueError("handoff.dispatch_id does not match the current task state")
             existing = root / "work" / args.task_id / "handoff.json"
             existing_revision = int(read_object(existing).get("revision", 0)) if existing.is_file() else 0
             if existing.is_file():

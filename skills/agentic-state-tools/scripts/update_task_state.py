@@ -9,6 +9,7 @@ from pathlib import Path
 from append_event import append_event, append_event_for_root
 from render_checklist import render_checklist
 from review_contract import validate_contract
+from task_state_contract import merge_task_state, validate_execution_identity
 from runtime_utils import (
     RuntimeLockedError,
     RuntimeNotInitializedError,
@@ -83,25 +84,26 @@ def main() -> int:
             if requested_status in TERMINAL_STATUSES:
                 assert_terminal_cleanup_safe(root, task_id)
 
-            existing_contract = current.get("review_contract") if isinstance(current, dict) else None
             submitted_contract = payload.get("review_contract")
-            if existing_contract is not None:
-                if submitted_contract is not None and submitted_contract != existing_contract:
-                    raise ValueError("review_contract is immutable across task revisions")
-                payload["review_contract"] = existing_contract
-            elif submitted_contract is not None:
+            if current is None and submitted_contract is not None:
                 validate_contract(submitted_contract, review_type="task")
 
-            payload["status"] = requested_status
+            next_state = merge_task_state(current, payload)
+            next_state["status"] = requested_status
             if requested_status in TERMINAL_STATUSES:
-                payload["next_action"] = "none"
-            payload["previous_revision"] = current_revision if current else None
-            payload["revision"] = current_revision + 1
-            payload["updated_at"] = utc_now()
+                next_state["next_action"] = "none"
+            next_state["previous_revision"] = current_revision if current else None
+            next_state["revision"] = current_revision + 1
+            next_state["updated_at"] = utc_now()
+            lease_path = root / "work" / task_id / "lease.json"
+            queue_path = root / "runtime" / "queue.json"
+            lease = read_object(lease_path) if lease_path.is_file() else None
+            queue = read_object(queue_path) if queue_path.is_file() else None
+            validate_execution_identity(next_state, lease, queue)
             target = write_validated(
                 args.project_root,
                 f"work/{task_id}/task-state.json",
-                payload,
+                next_state,
                 Path(__file__).resolve().parents[1] / "schemas/task-state.schema.json",
             )
             cleanup = cleanup_task_runtime(root, task_id) if requested_status in TERMINAL_STATUSES else {"leases": [], "locks": []}
@@ -109,13 +111,16 @@ def main() -> int:
                 post_cleanup = inspect_terminal_cleanup(root, task_id)
                 if not post_cleanup["valid"]:
                     raise ValueError("terminal cleanup could not be verified: " + "; ".join(post_cleanup["reasons"]))
+            post_lease = read_object(lease_path) if lease_path.is_file() else None
+            post_queue = read_object(queue_path) if queue_path.is_file() else None
+            validate_execution_identity(next_state, post_lease, post_queue)
             append_event(
                 args.project_root,
                 {
                     "type": STATUS_TO_EVENT_TYPE[requested_status],
                     "actor": args.actor,
                     "task_id": task_id,
-                    "data": {"task_revision": payload["revision"]},
+                    "data": {"task_revision": next_state["revision"]},
                 },
                 acquire_lock=False,
                 refresh_checklist=False,

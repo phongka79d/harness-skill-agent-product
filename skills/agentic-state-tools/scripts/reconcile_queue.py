@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from runtime_utils import read_object, task_dependencies, task_write_scopes
+from task_state_contract import EXECUTION_IDENTITY_FIELDS
 from dispatch_contract import validate_dispatch_schema
 
 CONFIG_SKILL = Path(__file__).resolve().parents[2] / "agentic-configuration"
@@ -102,6 +103,11 @@ def reconcile_queue(
         state = task_states.get(task_id)
         if state is not None and state.get("revision") != task.get("revision"):
             contradictions.add(f"TASK_STATE_MISMATCH:{task_id}")
+        dispatch = dispatches.get(task_id)
+        for field in EXECUTION_IDENTITY_FIELDS:
+            values = [record.get(field) for record in (task, state, dispatch) if record is not None]
+            if values and any(value != values[0] for value in values[1:]):
+                contradictions.add(f"IDENTITY_MISMATCH:{task_id}:{field}")
         queue_state = str(task.get("queue_state", task.get("status", ""))).upper()
         if queue_state in {"DISPATCHED", "RUNNING"} and task_id not in dispatches:
             contradictions.add(f"MISSING_DISPATCH:{task_id}")
