@@ -258,16 +258,63 @@ class ContractHardeningTests(unittest.TestCase):
             self.assertEqual({field: updated[field] for field in old_identity}, {"run_id": "RUN-2", "attempt_id": "ATTEMPT-2", "dispatch_id": "DISPATCH-2"})
             updated_queue = json.loads((project / ".agent/runtime/queue.json").read_text(encoding="utf-8"))
             for collection in ("tasks", "task_states", "dispatches"):
-                record = next(item for item in updated_queue[collection] if item.get("task_id") == "T-ID-1")
+                record = next(item for item in updated_queue[collection] if item.get("task_id") == "T-ID-1" and item.get("dispatch_id") == "DISPATCH-2")
                 self.assertEqual({field: record[field] for field in old_identity}, {"run_id": "RUN-2", "attempt_id": "ATTEMPT-2", "dispatch_id": "DISPATCH-2"})
-                self.assertEqual(record["revision"], updated["revision"])
                 if collection == "dispatches":
                     self.assertEqual(record["task_revision"], updated["revision"])
+                else:
+                    self.assertEqual(record["revision"], updated["revision"])
             updated_lease = json.loads((project / ".agent/work/T-ID-1/lease.json").read_text(encoding="utf-8"))
             self.assertEqual({field: updated_lease[field] for field in old_identity}, {"run_id": "RUN-2", "attempt_id": "ATTEMPT-2", "dispatch_id": "DISPATCH-2"})
             self.assertEqual(updated_lease["task_revision"], updated["revision"])
             operations = (project / ".agent/work/T-ID-1/operations.jsonl").read_text(encoding="utf-8")
             self.assertIn("REISSUE_TASK_ATTEMPT", operations)
+
+    def test_reissue_preserves_historical_dispatches_and_appends_current_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self._prepare_reissue_project(project)
+            queue_path = project / ".agent/runtime/queue.json"
+            queue = json.loads(queue_path.read_text(encoding="utf-8"))
+            current_dispatch = queue["dispatches"][0]
+            current_dispatch.update(
+                {"idempotency_key": "T-ID-1:current", "operation_id": "OP-T-ID-1-CURRENT"}
+            )
+            historical_dispatch = {
+                "task_id": "T-ID-1",
+                "dispatch_id": "DISPATCH-HISTORICAL",
+                "run_id": "RUN-HISTORICAL",
+                "attempt_id": "ATTEMPT-HISTORICAL",
+                "task_revision": 0,
+                "idempotency_key": "T-ID-1:historical",
+                "operation_id": "OP-T-ID-1-HISTORICAL",
+                "plan_revision": 4,
+                "worktree_path": "C:/work/T-ID-1",
+                "branch_name": "agent/T-ID-1-r4",
+            }
+            queue["dispatches"] = [historical_dispatch, current_dispatch]
+            queue_path.write_text(json.dumps(queue), encoding="utf-8")
+            original_dispatches = json.loads(json.dumps(queue["dispatches"]))
+            reissue = self.write_json(
+                project / "reissue-with-history.json",
+                {"task_id": "T-ID-1", "reason": "stale executor", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2", "expected_revision": 1},
+            )
+
+            result = run_script("reissue_task_attempt.py", "--project-root", str(project), "--input", str(reissue))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            updated = json.loads((project / ".agent/work/T-ID-1/task-state.json").read_text(encoding="utf-8"))
+            updated_queue = json.loads(queue_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(updated_queue["dispatches"][:2], original_dispatches)
+            self.assertEqual(len(updated_queue["dispatches"]), 3)
+            appended = updated_queue["dispatches"][2]
+            self.assertEqual(
+                {field: appended[field] for field in ("run_id", "attempt_id", "dispatch_id")},
+                {"run_id": "RUN-2", "attempt_id": "ATTEMPT-2", "dispatch_id": "DISPATCH-2"},
+            )
+            self.assertEqual(appended["task_revision"], updated["revision"])
+            self.assertNotEqual(appended["idempotency_key"], current_dispatch["idempotency_key"])
+            self.assertNotEqual(appended["operation_id"], current_dispatch["operation_id"])
 
 
 if __name__ == "__main__":

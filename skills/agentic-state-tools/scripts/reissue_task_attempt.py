@@ -94,11 +94,16 @@ def main() -> int:
             dispatch_records = [record for record in queue.get("dispatches", []) if isinstance(record, dict) and record.get("task_id") == task_id]
             if not task_records or not state_records or not dispatch_records:
                 raise ValueError("reissue requires task, task-state, and dispatch queue bindings")
+            current_dispatch_records = [record for record in dispatch_records if record.get("dispatch_id") == current["dispatch_id"]]
+            if len(current_dispatch_records) != 1:
+                raise ValueError("reissue requires exactly one current dispatch queue binding")
+            current_dispatch = current_dispatch_records[0]
 
             old_queue = json.loads(json.dumps(queue))
             old_task = json.loads(json.dumps(current))
             old_lease = read_object(lease_path) if lease_path.is_file() else None
             operation_id = f"OP-{task_id}-REISSUE-{uuid.uuid4().hex[:12].upper()}"
+            idempotency_key = f"{task_id}:reissue:r{current_revision + 1}"
             operation = {
                 "operation_id": operation_id,
                 "task_id": task_id,
@@ -113,8 +118,10 @@ def main() -> int:
             try:
                 next_task = dict(current)
                 next_task.update({"status": "QUEUED_SYNC", "previous_revision": current_revision, "revision": current_revision + 1, "updated_at": utc_now(), **identity})
+                next_dispatch = json.loads(json.dumps(current_dispatch))
+                next_dispatch.update({**identity, "task_revision": next_task["revision"], "idempotency_key": idempotency_key, "operation_id": operation_id})
                 write_validated(str(args.project_root), f"work/{task_id}/task-state.json", next_task, TASK_SCHEMA)
-                for collection in (queue["tasks"], queue["task_states"], queue["dispatches"]):
+                for collection in (queue["tasks"], queue["task_states"]):
                     for record in collection:
                         if isinstance(record, dict) and record.get("task_id") == task_id:
                             _replace_identity(record, task_id, identity)
@@ -123,8 +130,7 @@ def main() -> int:
                                 record["queue_state"] = "DISPATCHED"
                             if record in queue["task_states"]:
                                 record["status"] = "QUEUED_SYNC"
-                            if record in queue["dispatches"]:
-                                record["task_revision"] = next_task["revision"]
+                queue["dispatches"].append(next_dispatch)
                 queue["revision"] = int(queue.get("revision", 0)) + 1
                 write_json_atomic(queue_path, queue)
 
@@ -132,7 +138,9 @@ def main() -> int:
                 lease_seconds = int(lease.get("lease_seconds", 300))
                 lease.update({"task_id": task_id, "owner": lease.get("owner", "executor"), "run_id": identity["run_id"], "attempt_id": identity["attempt_id"], "dispatch_id": identity["dispatch_id"], "task_revision": next_task["revision"], "acquired_at": utc_now(), "last_heartbeat": utc_now(), "lease_seconds": lease_seconds, "expires_at": lease_expiry(lease_seconds)})
                 write_validated(str(args.project_root), f"work/{task_id}/lease.json", lease, LEASE_SCHEMA)
-                validate_execution_identity(next_task, lease, queue)
+                current_queue = dict(queue)
+                current_queue["dispatches"] = [next_dispatch]
+                validate_execution_identity(next_task, lease, current_queue)
                 append_event_for_root(root, {"type": "OPERATION_RECORDED", "actor": args.actor, "task_id": task_id, "run_id": identity["run_id"], "data": {"operation": "REISSUE_TASK_ATTEMPT", "operation_id": operation_id, "attempt_id": identity["attempt_id"], "dispatch_id": identity["dispatch_id"]}})
                 append_event_for_root(root, {"type": "TASK_QUEUED_SYNC", "actor": args.actor, "task_id": task_id, "run_id": identity["run_id"], "data": {"operation": "REISSUE_TASK_ATTEMPT", "attempt_id": identity["attempt_id"], "dispatch_id": identity["dispatch_id"], "reason": payload["reason"]}})
                 _append_operation(root, task_id, {**operation, "status": "COMPLETED", "phase": "COMMIT", "commit_marker": operation_id, "result_summary": "task attempt reissued"})
