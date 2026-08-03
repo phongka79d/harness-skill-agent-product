@@ -32,8 +32,9 @@ def merge_task_state(current: dict[str, object] | None, update: dict[str, object
 
     next_state = deepcopy(current)
     for field in IMMUTABLE_FIELDS:
-        if field in current and field in update and current[field] != update[field]:
-            raise ValueError(f"immutable task-state field changed: {field}")
+        if field in update:
+            if field not in current or current[field] != update[field]:
+                raise ValueError(f"immutable task-state field changed or newly introduced: {field}")
     for field in MUTABLE_FIELDS:
         if field in update:
             next_state[field] = deepcopy(update[field])

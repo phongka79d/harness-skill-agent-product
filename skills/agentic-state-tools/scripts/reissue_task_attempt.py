@@ -119,6 +119,8 @@ def main() -> int:
                                 record["queue_state"] = "DISPATCHED"
                             if record in queue["task_states"]:
                                 record["status"] = "QUEUED_SYNC"
+                            if record in queue["dispatches"]:
+                                record["task_revision"] = next_task["revision"]
                 queue["revision"] = int(queue.get("revision", 0)) + 1
                 write_json_atomic(queue_path, queue)
 
