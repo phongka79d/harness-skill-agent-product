@@ -46,4 +46,3 @@
 - Mapping survives restart and stale metadata is recoverable.
 - Merge conflicts stop the batch and cleanup never discards unaccepted changes.
 - Async cannot be enabled by config alone without implementation support.
-

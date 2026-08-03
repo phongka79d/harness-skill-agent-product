@@ -48,4 +48,3 @@
 - No direct event or review write can bypass transition prerequisites.
 - Every documented state has explicit recovery behavior or a fail-closed unsupported result.
 - Partial multi-file operations are discoverable and reconcilable after restart.
-

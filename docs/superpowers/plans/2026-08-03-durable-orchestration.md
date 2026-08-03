@@ -47,4 +47,3 @@
 - Dispatch is observable in queue, graph, journal, lease, ledger, and task state.
 - Duplicate dispatch is idempotent or rejected, never duplicated.
 - Capacity, dependency, revision, and lease ownership are enforced under one lock.
-

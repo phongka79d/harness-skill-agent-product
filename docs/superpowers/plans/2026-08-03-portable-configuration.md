@@ -60,4 +60,3 @@
 - A deployment overlay cannot remove immutable policy or enable an unsupported execution mode.
 - A portable skill package contains no provider-specific model IDs in role prompts, schemas, examples, or tests.
 - Invalid overlays fail before any dispatch or runtime mutation.
-

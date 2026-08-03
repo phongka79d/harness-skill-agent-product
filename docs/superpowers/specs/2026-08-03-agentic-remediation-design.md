@@ -75,4 +75,3 @@ Implementation follows RED-GREEN-REFACTOR. Every enforcement change starts with 
 3. Durable orchestration and recovery must be green before enabling restart/resume automation.
 4. Worktree isolation must be green before setting async execution to enabled.
 5. Context security and packaging checks must be green before distributing the skill package.
-

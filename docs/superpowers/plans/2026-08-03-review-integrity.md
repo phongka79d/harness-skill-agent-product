@@ -62,4 +62,3 @@
 - Duplicate, missing, unknown, over-scored, under-minimum, hard-fail, and severe-finding cases cannot pass.
 - Batch `expected_task_ids == submitted_task_ids` is enforced from the canonical batch contract.
 - Changed rubric or contract hash invalidates the review.
-

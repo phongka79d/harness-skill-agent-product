@@ -47,4 +47,3 @@
 - A caller cannot self-assert user or primary identity.
 - Approval is bound to exact target type/id, revision/hash, action, policy version, and expiry.
 - Plan/batch/commit/rollback/next-batch operations reject stale or insufficient approvals.
-

@@ -54,4 +54,3 @@
 - Test output has independent group counts, timing, and explicit incomplete groups.
 - Examples are runtime-validated and negative paths are covered.
 - Package output excludes caches, secrets, logs, temporary files, and generated runtime state.
-

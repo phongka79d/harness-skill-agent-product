@@ -44,4 +44,3 @@
 - Context builder itself enforces secret policy; dashboard filtering is not the security boundary.
 - Denied paths and binary files cannot be read into context.
 - Serialized context, event, ledger, and dashboard output contain no detected secret.
-

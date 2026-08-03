@@ -48,4 +48,3 @@
 - Dependencies are existing and acyclic.
 - Sequential scope overlap is permitted only with dependency order; parallel conflicts are rejected.
 - Invalid risk flag keys/values are rejected and valid high-risk flags affect rubric/approval policy.
-
