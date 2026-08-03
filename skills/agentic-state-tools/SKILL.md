@@ -30,6 +30,7 @@ python scripts/update_task_state.py --project-root <project> --input <task-state
 python scripts/create_checkpoint.py --project-root <project> --input <checkpoint.json>
 python scripts/create_handoff.py --project-root <project> --task-id <id> --input <handoff.json>
 python scripts/create_review.py --project-root <project> --input <review.json>
+python scripts/create_batch_contract.py --project-root <project> --plan <approved-plan.json> --plan-id <id> --plan-revision <n> --batch-id <id> --expected-revision <n> --actor primary-agent
 python scripts/create_batch_review.py --project-root <project> --input <batch-review.json>
 python scripts/create_context.py --project-root <project> --input <context.json>
 python scripts/acquire_lock.py --project-root <project> --input <lock.json>
@@ -99,6 +100,7 @@ python scripts/execute_rollback.py --project-root <project> --plan-id <id> --app
 - Keep async task-to-branch-to-worktree mappings isolated, lease-bound, merge-fenced, and recoverable after conflict.
 - Require exact typed approval identity, target revision, target hash, policy version, and persisted approval evidence before protected side effects.
 - Require canonical batch task-set equality and matching task-review contracts before an integrated batch can pass.
+- Create `.agent/work/<batch-id>/batch-contract.json` only through `create_batch_contract.py`; direct writes are rejected for non-legacy reviews.
 - Persist approval records through the same validated artifact and event path.
 - Require approved Primary-owned records for architecture, plan, profile, and rubric overrides.
 - Apply plan changes only as new versioned artifacts with immutable supersede links.

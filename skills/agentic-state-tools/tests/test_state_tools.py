@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -15,8 +16,9 @@ SCHEMAS = SKILL_ROOT / "schemas"
 sys.path.insert(0, str(SCRIPTS))
 
 from create_context import normalize  # noqa: E402
-from create_batch_review import derive_verdict  # noqa: E402
+from create_batch_review import derive_verdict, index_task_reviews, load_batch_contract  # noqa: E402
 from secret_scanner import context_security_errors  # noqa: E402
+from write_artifact import write_validated  # noqa: E402
 
 
 def run_script(name: str, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -39,6 +41,121 @@ class StateToolsTests(unittest.TestCase):
     def write_json(self, path: Path, value: dict) -> Path:
         path.write_text(json.dumps(value), encoding="utf-8")
         return path
+
+    def test_task_review_index_requires_canonical_directory_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / ".agent"
+            review_path = root / "work" / "T-OTHER" / "review.json"
+            review_path.parent.mkdir(parents=True)
+            review_path.write_text(json.dumps({
+                "review_id": "REV-T-EXPECTED",
+                "task_id": "T-EXPECTED",
+                "criteria": [],
+                "findings": [],
+                "verdict": "PASS",
+            }), encoding="utf-8")
+
+            legacy_index = index_task_reviews(root, "B-1", strict=False)
+            strict_index = index_task_reviews(root, "B-1", strict=True)
+
+            self.assertNotIn("REV-T-EXPECTED", legacy_index)
+            self.assertNotIn("REV-T-EXPECTED", strict_index)
+
+    def create_batch_contract_fixture(self, project: Path, batch_id: str, task_id: str, task_contract: dict) -> Path:
+        plan = {
+            "master_plan": {
+                "plan_id": f"MP-{batch_id}", "revision": 1, "version": "1.0", "title": "Batch plan",
+                "objective": "Test batch contract", "requirements": [{"requirement_id": "REQ-1", "description": "Test"}],
+                "in_scope": ["src"], "out_of_scope": [], "architecture": "test", "workstreams": ["runtime"],
+                "milestones": ["test"], "dependencies": [], "constraints": [], "success_criteria": ["REQ-1"],
+                "risks": [], "completion_conditions": ["tests pass"],
+            },
+            "sub_plans": [{
+                "sub_plan_id": f"SP-{batch_id}", "master_plan_id": f"MP-{batch_id}", "version": "1.0",
+                "title": "Batch sub-plan", "objective": "Test", "dependencies": [], "outputs": ["review"],
+                "batches": [batch_id], "risks": [],
+            }],
+            "batches": [{
+                "batch_id": batch_id, "sub_plan_id": f"SP-{batch_id}", "version": "1.0", "objective": "Test",
+                "depends_on": [], "tasks": [task_id], "integration_criteria": ["tests"],
+                "definition_of_done": ["review"], "review_profile": "personal", "commit_conditions": ["pass"],
+            }],
+            "tasks": [{
+                "task_id": task_id, "batch_id": batch_id, "version": "1.0", "title": "Batch task",
+                "objective": "Test", "context": "Test", "depends_on": [], "execution_mode": "sync",
+                "task_type": task_contract["task_type"], "review_contract": task_contract, "requirement_ids": ["REQ-1"],
+                "read_scope": ["src"], "write_scope": ["src/app.py"], "inputs": [], "required_outputs": ["review"],
+                "acceptance_criteria": ["tests"], "verification": ["tests"], "out_of_scope": [], "risk_flags": {},
+                "blocker_policy": {"hard_blockers": []},
+                "execution_budget": {"max_files_changed": 1, "max_new_dependencies": 0, "allow_schema_change": False, "allow_architecture_change": False},
+                "architecture_decisions": [],
+            }],
+            "decisions": [], "assumptions": [], "risks": [], "change_requests": [],
+        }
+        plan_path = self.write_json(project / f"{batch_id}-plan.json", plan)
+        plan_hash = hashlib.sha256(json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        approval = self.write_json(project / f"{batch_id}-plan-approval.json", {
+            "target_type": "MASTER_PLAN", "target_id": f"MP-{batch_id}", "decision": "APPROVED",
+            "approver": "primary-agent", "actor_type": "primary_agent", "actor_id": "primary-agent",
+            "action": "MASTER_PLAN", "target_revision": 1, "target_hash": plan_hash, "policy_version": "1",
+            "expires_at": "2099-01-01T00:00:00Z", "evidence": "approved test plan",
+        })
+        self.assertEqual(run_script("record_approval.py", "--project-root", str(project), "--input", str(approval)).returncode, 0)
+        task_state = {
+            "task_id": task_id, "batch_id": batch_id, "status": "ACCEPTED", "revision": 1,
+            "previous_revision": 0, "updated_at": "2026-08-03T00:00:00Z", "review_contract": task_contract,
+        }
+        write_validated(str(project), f"work/{task_id}/task-state.json", task_state, SCHEMAS / "task-state.schema.json")
+        result = run_script(
+            "create_batch_contract.py", "--project-root", str(project), "--plan", str(plan_path),
+            "--plan-id", f"MP-{batch_id}", "--plan-revision", "1", "--batch-id", batch_id,
+            "--expected-revision", "0", "--actor", "primary-agent",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return project / ".agent/work" / batch_id / "batch-contract.json"
+
+    def test_strict_batch_contract_loading_rejects_invalid_or_mismatched_task_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+            rubric_path = project / "task-rubric.json"
+            rubric_result = run_script(
+                "resolve_rubric.py", "--profile", "personal", "--task-type", "backend",
+                "--risk-flags", "{}", "--output", str(rubric_path),
+            )
+            self.assertEqual(rubric_result.returncode, 0, rubric_result.stderr)
+            rubric = json.loads(rubric_path.read_text(encoding="utf-8"))
+            task_contract = {
+                "project_profile": rubric["profile_id"], "profile_hash": rubric["profile_hash"],
+                "task_type": rubric["task_type"], "risk_flags": rubric["risk_flags"],
+                "review_type": rubric["review_type"], "rubric_id": rubric["rubric_id"],
+                "rubric_version": rubric["rubric_version"], "rubric_hash": rubric["rubric_hash"],
+                "review_policy_version": rubric["review_policy_version"],
+            }
+            contract_path = self.create_batch_contract_fixture(project, "B-STRICT", "T-STRICT", task_contract)
+            state_path = project / ".agent/work/T-STRICT/task-state.json"
+            original = json.loads(state_path.read_text(encoding="utf-8"))
+
+            invalid_state = dict(original)
+            invalid_state.pop("status")
+            state_path.write_text(json.dumps(invalid_state), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "task state is invalid"):
+                load_batch_contract(project / ".agent", "B-STRICT")
+
+            for field, value in (("task_id", "T-OTHER"), ("batch_id", "B-OTHER")):
+                mismatched = dict(original)
+                mismatched[field] = value
+                state_path.write_text(json.dumps(mismatched), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "identity"):
+                    load_batch_contract(project / ".agent", "B-STRICT")
+
+            mismatched_plan = dict(original)
+            mismatched_plan["plan_revision"] = 2
+            state_path.write_text(json.dumps(mismatched_plan), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "plan_revision"):
+                load_batch_contract(project / ".agent", "B-STRICT")
+            state_path.write_text(json.dumps(original), encoding="utf-8")
+            self.assertEqual(load_batch_contract(project / ".agent", "B-STRICT")["contract_hash"], json.loads(contract_path.read_text(encoding="utf-8"))["contract_hash"])
 
     def test_init_append_rebuild_and_validate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -555,20 +672,31 @@ class StateToolsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)
             self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
-            batch_dir = project / ".agent/work/B-SCORED"
-            batch_dir.mkdir(parents=True)
-            (batch_dir / "batch-contract.json").write_text(
-                json.dumps({"batch_id": "B-SCORED", "tasks": ["T-1"]}),
-                encoding="utf-8",
+            task_rubric_result = run_script(
+                "resolve_rubric.py", "--profile", "personal", "--task-type", "backend",
+                "--risk-flags", "{}", "--output", str(project / "task-rubric.json"),
             )
+            self.assertEqual(task_rubric_result.returncode, 0, task_rubric_result.stderr)
+            task_rubric = json.loads((project / "task-rubric.json").read_text(encoding="utf-8"))
+            task_contract = {
+                "project_profile": task_rubric["profile_id"],
+                "profile_hash": task_rubric["profile_hash"],
+                "task_type": task_rubric["task_type"],
+                "risk_flags": task_rubric["risk_flags"],
+                "review_type": task_rubric["review_type"],
+                "rubric_id": task_rubric["rubric_id"],
+                "rubric_version": task_rubric["rubric_version"],
+                "rubric_hash": task_rubric["rubric_hash"],
+                "review_policy_version": task_rubric["review_policy_version"],
+            }
+            batch_contract_path = self.create_batch_contract_fixture(project, "B-SCORED", "T-1", task_contract)
+            batch_dir = batch_contract_path.parent
             task_dir = project / ".agent/work/T-1"
-            task_dir.mkdir(parents=True)
             (task_dir / "review.json").write_text(
-                json.dumps({"review_id": "REV-T-1", "task_id": "T-1", "verdict": "PASS"}),
-                encoding="utf-8",
-            )
-            (task_dir / "task-state.json").write_text(
-                json.dumps({"task_id": "T-1", "status": "ACCEPTED"}),
+                json.dumps({
+                    "review_id": "REV-T-1", "task_id": "T-1", "criteria": [], "findings": [],
+                    "verdict": "PASS", "review_contract": task_contract, "resolved_rubric": task_rubric,
+                }),
                 encoding="utf-8",
             )
             rubric_result = run_script(
@@ -580,24 +708,6 @@ class StateToolsTests(unittest.TestCase):
             )
             self.assertEqual(rubric_result.returncode, 0, rubric_result.stderr)
             rubric = json.loads(rubric_result.stdout)
-            (batch_dir / "batch-contract.json").write_text(
-                json.dumps({
-                    "batch_id": "B-SCORED",
-                    "tasks": ["T-1"],
-                    "review_contract": {
-                        "project_profile": rubric["profile_id"],
-                        "profile_hash": rubric["profile_hash"],
-                        "task_type": rubric["task_type"],
-                        "risk_flags": rubric["risk_flags"],
-                        "review_type": rubric["review_type"],
-                        "rubric_id": rubric["rubric_id"],
-                        "rubric_version": rubric["rubric_version"],
-                        "rubric_hash": rubric["rubric_hash"],
-                        "review_policy_version": rubric["review_policy_version"],
-                    },
-                }),
-                encoding="utf-8",
-            )
             criteria = [
                 {
                     "id": criterion_id,

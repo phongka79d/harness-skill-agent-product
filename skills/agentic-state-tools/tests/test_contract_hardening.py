@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -12,7 +13,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from write_artifact import write_validated  # noqa: E402
+import authorization  # noqa: E402
 import reissue_task_attempt  # noqa: E402
+import create_batch_contract  # noqa: E402
+import commit_batch  # noqa: E402
+from create_batch_contract import _resolve_documents  # noqa: E402
+from create_batch_review import load_batch_contract  # noqa: E402
+from commit_batch import CommitRejected, validate_batch_contract_pin, validate_batch_review_artifact  # noqa: E402
+from create_batch_review import artifact_hash as batch_review_artifact_hash  # noqa: E402
 from update_task_state import synchronize_queue  # noqa: E402
 
 
@@ -35,6 +43,119 @@ def run_script(name: str, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 class ContractHardeningTests(unittest.TestCase):
+    def test_apply_change_request_synchronizes_master_plan_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            request = self.write_json(root / "change.json", {
+                "change_request_id": "CR-1",
+                "target_type": "MASTER_PLAN",
+                "target_id": "MP-1",
+                "target_version": "1.0",
+                "reason": "Change plan objective",
+                "requested_changes": [{"op": "replace", "path": "/title", "value": "Changed"}],
+                "impact": {"risk_level": "low", "architecture_change": False},
+                "status": "APPROVED",
+                "requested_by": "primary-agent",
+                "approval_id": "APR-1",
+                "supersedes_id": "MP-1@1.0",
+                "new_version": "1.1",
+            })
+            approval = self.write_json(root / "approval.json", {
+                "approval_id": "APR-1",
+                "target_type": "CHANGE_REQUEST",
+                "target_id": "CR-1",
+                "decision": "APPROVED",
+            })
+            target = self.write_json(root / "plan.json", {
+                "plan_id": "MP-1",
+                "version": "1.0",
+                "revision": 4,
+                "title": "Original",
+                "master_plan": {"plan_id": "MP-1", "revision": 4, "title": "Original"},
+            })
+            output = root / "changed-plan.json"
+
+            result = run_script(
+                "apply_change_request.py",
+                "--request", str(request),
+                "--target", str(target),
+                "--approval", str(approval),
+                "--output", str(output),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            changed = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(changed["revision"], 5)
+            self.assertEqual(changed["master_plan"]["revision"], 5)
+
+    def test_master_plan_authorization_requires_primary_agent(self) -> None:
+        target = {
+            "target_type": "MASTER_PLAN",
+            "target_id": "MP-1",
+            "revision": 1,
+            "target_hash": "a" * 64,
+        }
+        approval = {
+            "approval_id": "APR-MP-1",
+            "target_type": "MASTER_PLAN",
+            "target_id": "MP-1",
+            "decision": "APPROVED",
+            "approver": "agent-1",
+            "actor_type": "agent",
+            "actor_id": "agent-1",
+            "action": "MASTER_PLAN",
+            "target_revision": 1,
+            "target_hash": "a" * 64,
+            "policy_version": "1",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "evidence": "forged plan approval",
+        }
+        with self.assertRaises(authorization.AuthorizationError):
+            authorization.authorize(
+                "MASTER_PLAN",
+                target,
+                approval,
+                actor={"actor_type": "agent", "actor_id": "agent-1"},
+            )
+
+    def test_batch_contract_master_plan_approval_uses_shared_authorizer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / ".agent"
+            approval = {
+                "approval_id": "APR-MP-1",
+                "target_type": "MASTER_PLAN",
+                "target_id": "MP-1",
+                "decision": "APPROVED",
+                "approver": "primary-agent",
+                "actor_type": "primary_agent",
+                "actor_id": "primary-agent",
+                "action": "MASTER_PLAN",
+                "target_revision": 1,
+                "target_hash": "a" * 64,
+                "policy_version": "1",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "evidence": "approved plan",
+            }
+            approval_path = root / "approvals" / "MASTER_PLAN-MP-1.json"
+            approval_path.parent.mkdir(parents=True)
+            approval_path.write_text(json.dumps(approval), encoding="utf-8")
+
+            with patch.object(create_batch_contract, "authorize", wraps=authorization.authorize) as authorizer:
+                result = create_batch_contract._approval(root, "MP-1", 1, "a" * 64, "primary-agent")
+
+            self.assertEqual(result, approval)
+            authorizer.assert_called_once_with(
+                "MASTER_PLAN",
+                {
+                    "target_type": "MASTER_PLAN",
+                    "target_id": "MP-1",
+                    "revision": 1,
+                    "target_hash": "a" * 64,
+                },
+                approval,
+                actor={"actor_type": "primary_agent", "actor_id": "primary-agent"},
+            )
+
     def test_queued_transition_synchronizes_queue_enum_and_revision(self) -> None:
         queue = {
             "schema_version": 1,
@@ -102,6 +223,519 @@ class ContractHardeningTests(unittest.TestCase):
             queued,
             SCHEMAS / "task-state.schema.json",
         )
+
+    def test_batch_contract_writer_cli_creates_canonical_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+            plan = self.write_json(project / "planning.json", {
+                "master_plan": {
+                    "plan_id": "MP-1", "revision": 1, "version": "1.0", "title": "Plan", "objective": "Test",
+                    "requirements": [{"requirement_id": "REQ-1", "description": "Test"}],
+                    "in_scope": ["src"], "out_of_scope": [], "architecture": "A",
+                    "workstreams": ["runtime"], "milestones": ["m1"], "dependencies": [],
+                    "constraints": [], "success_criteria": ["REQ-1"], "risks": [],
+                    "completion_conditions": ["tests pass"],
+                },
+                "sub_plans": [{
+                    "sub_plan_id": "SP-1", "master_plan_id": "MP-1", "version": "1.0",
+                    "title": "Sub", "objective": "Test", "dependencies": [], "outputs": ["x"],
+                    "batches": ["B-1"], "risks": [],
+                }],
+                "batches": [{
+                    "batch_id": "B-1", "sub_plan_id": "SP-1", "version": "1.0",
+                    "objective": "Test", "depends_on": [], "tasks": ["T-1"],
+                    "integration_criteria": ["pass"], "definition_of_done": ["done"],
+                    "review_profile": "personal", "commit_conditions": ["approved"],
+                }],
+                "tasks": [{
+                    "task_id": "T-1", "batch_id": "B-1", "version": "1.0", "title": "Task",
+                    "objective": "Test", "context": "Test", "depends_on": [], "execution_mode": "sync",
+                    "task_type": "backend", "requirement_ids": ["REQ-1"], "read_scope": ["src"],
+                    "write_scope": ["src/app.py"], "inputs": [], "required_outputs": ["result"],
+                    "acceptance_criteria": ["pass"], "verification": ["tests"], "out_of_scope": [],
+                    "risk_flags": {}, "blocker_policy": {"hard_blockers": []},
+                    "execution_budget": {"max_files_changed": 1, "max_new_dependencies": 0,
+                        "allow_schema_change": False, "allow_architecture_change": False},
+                    "architecture_decisions": [],
+                }],
+                "decisions": [], "assumptions": [], "risks": [], "change_requests": [],
+            })
+            missing_revision_plan = json.loads(plan.read_text(encoding="utf-8"))
+            missing_revision_plan["master_plan"].pop("revision")
+            missing_revision_path = self.write_json(project / "missing-revision-plan.json", missing_revision_plan)
+            missing_revision = run_script(
+                "create_batch_contract.py", "--project-root", str(project), "--plan", str(missing_revision_path),
+                "--plan-id", "MP-1", "--plan-revision", "1", "--batch-id", "B-1",
+                "--expected-revision", "0", "--actor", "primary-agent",
+            )
+            self.assertNotEqual(missing_revision.returncode, 0)
+            self.assertIn("master_plan.revision", missing_revision.stderr)
+            plan_hash = hashlib.sha256(json.dumps(json.loads(plan.read_text(encoding="utf-8")), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+            approval = self.write_json(project / "approval.json", {
+                "target_type": "MASTER_PLAN", "target_id": "MP-1", "decision": "APPROVED",
+                "approver": "primary-agent", "actor_type": "primary_agent", "actor_id": "primary-agent",
+                "action": "MASTER_PLAN", "target_revision": 1, "target_hash": plan_hash,
+                "policy_version": "1", "expires_at": "2099-01-01T00:00:00Z", "evidence": "approved",
+            })
+            self.assertEqual(run_script("record_approval.py", "--project-root", str(project), "--input", str(approval)).returncode, 0)
+            rubric_path = project / "task-rubric.json"
+            self.assertEqual(run_script("resolve_rubric.py", "--profile", "personal", "--task-type", "backend", "--risk-flags", "{}", "--output", str(rubric_path)).returncode, 0)
+            rubric = json.loads(rubric_path.read_text(encoding="utf-8"))
+            task_contract = {"project_profile": rubric["profile_id"], "profile_hash": rubric["profile_hash"], "task_type": rubric["task_type"], "risk_flags": rubric["risk_flags"], "review_type": rubric["review_type"], "rubric_id": rubric["rubric_id"], "rubric_version": rubric["rubric_version"], "rubric_hash": rubric["rubric_hash"], "review_policy_version": rubric["review_policy_version"]}
+            task_state = {"task_id": "T-1", "batch_id": "B-1", "status": "COMPLETED", "revision": 1, "previous_revision": 0, "updated_at": "2026-08-03T00:00:00Z", "review_contract": task_contract}
+            write_validated(str(project), "work/T-1/task-state.json", task_state, SCHEMAS / "task-state.schema.json")
+            result = run_script(
+                "create_batch_contract.py", "--project-root", str(project), "--plan", str(plan),
+                "--plan-id", "MP-1", "--plan-revision", "1", "--batch-id", "B-1",
+                "--expected-revision", "0", "--actor", "primary-agent",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            contract = json.loads((project / ".agent/work/B-1/batch-contract.json").read_text(encoding="utf-8"))
+            self.assertEqual(contract["plan_id"], "MP-1")
+            self.assertEqual(contract["batch_id"], "B-1")
+            self.assertEqual([item["task_id"] for item in contract["tasks"]], ["T-1"])
+            self.assertRegex(contract["contract_hash"], r"^[0-9a-f]{64}$")
+            self.assertIn("BATCH_CONTRACT_CREATED", (project / ".agent/runtime/events.jsonl").read_text(encoding="utf-8"))
+            contract_path = project / ".agent/work/B-1/batch-contract.json"
+            original_contract = contract_path.read_bytes()
+            tampered_contract = dict(contract)
+            tampered_contract["contract_hash"] = "0" * 64
+            contract_path.write_text(json.dumps(tampered_contract), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_batch_contract(project / ".agent", "B-1")
+            contract_path.write_bytes(original_contract)
+
+            duplicate_contract = dict(contract)
+            duplicate_contract["tasks"] = [
+                dict(contract["tasks"][0]),
+                {**contract["tasks"][0], "task_revision": 2},
+            ]
+            duplicate_contract["contract_hash"] = create_batch_contract.artifact_hash(duplicate_contract, "contract_hash")
+            contract_path.write_text(json.dumps(duplicate_contract), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "duplicate task IDs"):
+                load_batch_contract(project / ".agent", "B-1")
+            contract_path.write_bytes(original_contract)
+
+            stale_revision = run_script(
+                "create_batch_contract.py", "--project-root", str(project), "--plan", str(plan),
+                "--plan-id", "MP-1", "--plan-revision", "1", "--batch-id", "B-1",
+                "--expected-revision", "0", "--actor", "primary-agent",
+            )
+            self.assertNotEqual(stale_revision.returncode, 0)
+            self.assertIn("stale revision", stale_revision.stderr)
+
+            wrong_actor = run_script(
+                "create_batch_contract.py", "--project-root", str(project), "--plan", str(plan),
+                "--plan-id", "MP-1", "--plan-revision", "1", "--batch-id", "B-1",
+                "--expected-revision", "1", "--actor", "agent-executor",
+            )
+            self.assertNotEqual(wrong_actor.returncode, 0)
+            self.assertIn("primary-agent", wrong_actor.stderr)
+
+            changed_plan = json.loads(plan.read_text(encoding="utf-8"))
+            changed_plan["batches"][0]["objective"] = "changed"
+            changed_plan_path = self.write_json(project / "changed-plan.json", changed_plan)
+            stale_approval = run_script(
+                "create_batch_contract.py", "--project-root", str(project), "--plan", str(changed_plan_path),
+                "--plan-id", "MP-1", "--plan-revision", "1", "--batch-id", "B-1",
+                "--expected-revision", "1", "--actor", "primary-agent",
+            )
+            self.assertNotEqual(stale_approval.returncode, 0)
+            self.assertIn("approval", stale_approval.stderr.lower())
+
+            tracked_paths = [
+                project / ".agent/work/B-1/batch-contract.json",
+                project / ".agent/work/B-1/operations.jsonl",
+                project / ".agent/runtime/events.jsonl",
+                project / ".agent/runtime/state.json",
+            ]
+            before = {path: path.read_bytes() for path in tracked_paths}
+            original_append = create_batch_contract.append_event_for_root
+            calls = 0
+
+            def fail_operation_event(root, event):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise OSError("controlled operation event failure")
+                return original_append(root, event)
+
+            with patch.object(create_batch_contract, "append_event_for_root", side_effect=fail_operation_event):
+                with self.assertRaises(OSError):
+                    create_batch_contract.create_batch_contract(
+                        project, json.loads(plan.read_text(encoding="utf-8")), plan_id="MP-1",
+                        plan_revision=1, batch_id="B-1", actor="primary-agent", expected_revision=1,
+                    )
+            for path, content in before.items():
+                self.assertEqual(path.read_bytes(), content)
+
+    def test_commit_boundary_rejects_stale_batch_contract_pin(self) -> None:
+        current_contract = {"revision": 2, "contract_hash": "c" * 64, "review_contract": {}}
+        review = {
+            "verdict": "PASS",
+            "batch_contract_revision": 1,
+            "batch_contract_hash": "a" * 64,
+        }
+        with self.assertRaisesRegex(CommitRejected, "batch contract pin"):
+            validate_batch_contract_pin(review, current_contract)
+        matching_review = {
+            **review,
+            "batch_contract_revision": current_contract["revision"],
+            "batch_contract_hash": current_contract["contract_hash"],
+            "review_contract": current_contract["review_contract"],
+        }
+        self.assertIsNone(validate_batch_contract_pin(matching_review, current_contract))
+
+    def test_batch_contract_loader_rejects_path_traversal_batch_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "batch_id"):
+                load_batch_contract(Path(directory), "../B-1")
+
+    def test_commit_cli_commits_approved_batch_and_records_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+            source = project / "src/app.py"
+            source.parent.mkdir(parents=True)
+            source.write_text("value = 1\n", encoding="utf-8")
+
+            task_dir = project / ".agent/work/T-1"
+            task_dir.mkdir(parents=True)
+            self.write_json(task_dir / "review.json", {
+                "review_id": "REV-T-1",
+                "task_id": "T-1",
+                "verdict": "PASS",
+            })
+            self.write_json(task_dir / "task-state.json", {
+                "task_id": "T-1",
+                "status": "ACCEPTED",
+            })
+            batch_dir = project / ".agent/work/B-1"
+            batch_dir.mkdir(parents=True)
+            review = self.write_json(batch_dir / "review.json", {
+                "review_id": "BATCH-REV-B-1-1",
+                "batch_id": "B-1",
+                "revision": 1,
+                "task_reviews": ["REV-T-1"],
+                "integration_checks": [
+                    {"kind": "integration", "name": "integration", "result": "PASS", "evidence": "checked"},
+                    {"kind": "regression", "name": "regression", "result": "PASS", "evidence": "checked"},
+                    {"kind": "scope", "name": "scope", "result": "PASS", "evidence": "checked"},
+                ],
+                "findings": [],
+                "scope_valid": True,
+                "legacy_migration": True,
+                "verdict": "PASS",
+            })
+            review_value = json.loads(review.read_text(encoding="utf-8"))
+            review_value["artifact_hash"] = batch_review_artifact_hash(review_value)
+            review.write_text(json.dumps(review_value), encoding="utf-8")
+            approval = {
+                "approval_id": "APR-B-1-COMMIT",
+                "target_type": "BATCH",
+                "target_id": "B-1",
+                "decision": "APPROVED",
+                "approver": "alice",
+                "actor_type": "user",
+                "actor_id": "alice",
+                "action": "BATCH_COMMIT",
+                "target_revision": 1,
+                "target_hash": review_value["artifact_hash"],
+                "policy_version": "1",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "evidence": "batch review approved",
+            }
+            approval_path = project / ".agent/approvals/BATCH-B-1.json"
+            approval_path.parent.mkdir(parents=True)
+            approval_path.write_text(json.dumps(approval), encoding="utf-8")
+            approval_input = self.write_json(project / "approval.json", approval)
+
+            subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.name", "Codex Test"], cwd=project, check=True)
+            subprocess.run(["git", "config", "user.email", "codex-test@example.invalid"], cwd=project, check=True)
+            with patch.dict(os.environ, {
+                "GIT_AUTHOR_NAME": "Codex Test",
+                "GIT_AUTHOR_EMAIL": "codex-test@example.invalid",
+                "GIT_COMMITTER_NAME": "Codex Test",
+                "GIT_COMMITTER_EMAIL": "codex-test@example.invalid",
+            }):
+                result = run_script(
+                    "commit_batch.py",
+                    "--project-root", str(project),
+                    "--batch-id", "B-1",
+                    "--approval", str(approval_input),
+                    "--actor", "alice",
+                    "--actor-type", "user",
+                    "--message", "commit approved batch",
+                    "--path", "src/app.py",
+                )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('"status": "COMMITTED"', result.stdout)
+            commit_subject = subprocess.run(
+                ["git", "log", "-1", "--format=%s"],
+                cwd=project,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            self.assertEqual(commit_subject, "commit approved batch")
+            operations = [
+                json.loads(line)
+                for line in (batch_dir / "operations.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertTrue(any(item.get("status") == "COMPLETED" for item in operations))
+
+    def test_commit_boundary_validates_current_batch_review_artifact(self) -> None:
+        review = {
+            "review_id": "BATCH-REV-B-1-1",
+            "batch_id": "B-1",
+            "task_reviews": ["REV-T-1"],
+            "integration_checks": [
+                {"kind": "integration", "name": "integration", "result": "PASS", "evidence": "checked"},
+                {"kind": "regression", "name": "regression", "result": "PASS", "evidence": "checked"},
+                {"kind": "scope", "name": "scope", "result": "PASS", "evidence": "checked"},
+            ],
+            "findings": [],
+            "verdict": "PASS",
+        }
+        review["artifact_hash"] = batch_review_artifact_hash(review)
+        self.assertIsNone(validate_batch_review_artifact(review, "B-1"))
+
+        with self.assertRaisesRegex(CommitRejected, "batch_id"):
+            validate_batch_review_artifact({**review, "batch_id": "B-2"}, "B-1")
+        tampered_verdict = {**review, "verdict": "REPAIR_REQUIRED"}
+        with self.assertRaisesRegex(CommitRejected, "artifact_hash"):
+            validate_batch_review_artifact(tampered_verdict, "B-1")
+        tampered_legacy_flag = {**review, "legacy_migration": True}
+        with self.assertRaisesRegex(CommitRejected, "artifact_hash"):
+            validate_batch_review_artifact(tampered_legacy_flag, "B-1")
+
+    def test_commit_boundary_rejects_rehashed_pass_review_with_failing_integration_check(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+            batch_dir = project / ".agent/work/B-1"
+            batch_dir.mkdir(parents=True)
+            review = {
+                "review_id": "BATCH-REV-B-1-1",
+                "batch_id": "B-1",
+                "revision": 1,
+                "task_reviews": [],
+                "integration_checks": [
+                    {"kind": "integration", "name": "integration", "result": "FAIL", "evidence": "integration failed"},
+                    {"kind": "regression", "name": "regression", "result": "PASS", "evidence": "regression checked"},
+                    {"kind": "scope", "name": "scope", "result": "PASS", "evidence": "scope checked"},
+                ],
+                "findings": [],
+                "scope_valid": True,
+                "legacy_migration": True,
+                "verdict": "PASS",
+            }
+            review["artifact_hash"] = batch_review_artifact_hash(review)
+            (batch_dir / "review.json").write_text(json.dumps(review), encoding="utf-8")
+            approval = {
+                "approval_id": "APR-B-1-COMMIT",
+                "target_type": "BATCH",
+                "target_id": "B-1",
+                "decision": "APPROVED",
+                "approver": "alice",
+                "actor_type": "user",
+                "actor_id": "alice",
+                "action": "BATCH_COMMIT",
+                "target_revision": 1,
+                "target_hash": review["artifact_hash"],
+                "policy_version": "1",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "evidence": "batch review approved",
+            }
+            approval_path = project / ".agent/approvals/BATCH-B-1.json"
+            approval_path.parent.mkdir(parents=True)
+            approval_path.write_text(json.dumps(approval), encoding="utf-8")
+
+            with self.assertRaisesRegex(CommitRejected, "integration check failed"):
+                commit_batch.commit_batch(
+                    project,
+                    "B-1",
+                    approval,
+                    actor={"actor_type": "user", "actor_id": "alice"},
+                    paths=["src/app.py"],
+                    message="commit batch",
+                    dry_run=True,
+                )
+
+    def test_commit_boundary_rejects_rehashed_review_with_mismatched_review_contract(self) -> None:
+        review_contract = {
+            "project_profile": "personal",
+            "profile_hash": "a" * 64,
+            "task_type": "standard",
+            "risk_flags": {},
+            "review_type": "batch",
+            "rubric_id": "BATCH-1",
+            "rubric_version": "1",
+            "rubric_hash": "b" * 64,
+            "review_policy_version": "1",
+        }
+        current_contract = {
+            "revision": 2,
+            "contract_hash": "c" * 64,
+            "review_contract": review_contract,
+        }
+        review = {
+            "review_id": "BATCH-REV-B-1-1",
+            "batch_id": "B-1",
+            "task_reviews": ["REV-T-1"],
+            "integration_checks": [
+                {"kind": "integration", "name": "integration", "result": "PASS", "evidence": "checked"},
+                {"kind": "regression", "name": "regression", "result": "PASS", "evidence": "checked"},
+                {"kind": "scope", "name": "scope", "result": "PASS", "evidence": "checked"},
+            ],
+            "findings": [],
+            "verdict": "PASS",
+            "batch_contract_revision": 2,
+            "batch_contract_hash": "c" * 64,
+            "review_contract": {**review_contract, "rubric_id": "BATCH-2"},
+        }
+        review["artifact_hash"] = batch_review_artifact_hash(review)
+        self.assertIsNone(validate_batch_review_artifact(review, "B-1"))
+
+        with self.assertRaisesRegex(CommitRejected, "review_contract"):
+            validate_batch_contract_pin(review, current_contract)
+        with self.assertRaisesRegex(CommitRejected, "review_contract"):
+            validate_batch_contract_pin(review, current_contract, allow_legacy=False)
+
+    def test_batch_contract_writer_rejects_invalid_or_mismatched_task_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+            plan = self.write_json(project / "planning.json", {
+                "master_plan": {
+                    "plan_id": "MP-1", "revision": 1, "version": "1.0", "title": "Plan", "objective": "Test",
+                    "requirements": [{"requirement_id": "REQ-1", "description": "Test"}],
+                    "in_scope": ["src"], "out_of_scope": [], "architecture": "A", "workstreams": ["runtime"],
+                    "milestones": ["m1"], "dependencies": [], "constraints": [], "success_criteria": ["REQ-1"],
+                    "risks": [], "completion_conditions": ["tests pass"],
+                },
+                "sub_plans": [{
+                    "sub_plan_id": "SP-1", "master_plan_id": "MP-1", "version": "1.0", "title": "Sub",
+                    "objective": "Test", "dependencies": [], "outputs": ["x"], "batches": ["B-1"], "risks": [],
+                }],
+                "batches": [{
+                    "batch_id": "B-1", "sub_plan_id": "SP-1", "version": "1.0", "objective": "Test",
+                    "depends_on": [], "tasks": ["T-1"], "integration_criteria": ["pass"],
+                    "definition_of_done": ["done"], "review_profile": "personal", "commit_conditions": ["approved"],
+                }],
+                "tasks": [{
+                    "task_id": "T-1", "batch_id": "B-1", "version": "1.0", "title": "Task", "objective": "Test",
+                    "context": "Test", "depends_on": [], "execution_mode": "sync", "task_type": "backend",
+                    "requirement_ids": ["REQ-1"], "read_scope": ["src"], "write_scope": ["src/app.py"],
+                    "inputs": [], "required_outputs": ["result"], "acceptance_criteria": ["pass"],
+                    "verification": ["tests"], "out_of_scope": [], "risk_flags": {},
+                    "blocker_policy": {"hard_blockers": []},
+                    "execution_budget": {"max_files_changed": 1, "max_new_dependencies": 0,
+                                         "allow_schema_change": False, "allow_architecture_change": False},
+                    "architecture_decisions": [],
+                }],
+                "decisions": [], "assumptions": [], "risks": [], "change_requests": [],
+            })
+            plan_hash = hashlib.sha256(json.dumps(json.loads(plan.read_text(encoding="utf-8")), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+            approval = self.write_json(project / "approval.json", {
+                "target_type": "MASTER_PLAN", "target_id": "MP-1", "decision": "APPROVED",
+                "approver": "primary-agent", "actor_type": "primary_agent", "actor_id": "primary-agent",
+                "action": "MASTER_PLAN", "target_revision": 1, "target_hash": plan_hash,
+                "policy_version": "1", "expires_at": "2099-01-01T00:00:00Z", "evidence": "approved",
+            })
+            self.assertEqual(run_script("record_approval.py", "--project-root", str(project), "--input", str(approval)).returncode, 0)
+            rubric_path = project / "task-rubric.json"
+            self.assertEqual(run_script("resolve_rubric.py", "--profile", "personal", "--task-type", "backend", "--risk-flags", "{}", "--output", str(rubric_path)).returncode, 0)
+            rubric = json.loads(rubric_path.read_text(encoding="utf-8"))
+            task_contract = {
+                "project_profile": rubric["profile_id"], "profile_hash": rubric["profile_hash"],
+                "task_type": rubric["task_type"], "risk_flags": rubric["risk_flags"],
+                "review_type": rubric["review_type"], "rubric_id": rubric["rubric_id"],
+                "rubric_version": rubric["rubric_version"], "rubric_hash": rubric["rubric_hash"],
+                "review_policy_version": rubric["review_policy_version"],
+            }
+            state = {"task_id": "T-1", "batch_id": "B-1", "status": "COMPLETED", "revision": 1,
+                     "previous_revision": 0, "updated_at": "2026-08-03T00:00:00Z", "review_contract": task_contract}
+            state_path = project / ".agent/work/T-1/task-state.json"
+            write_validated(str(project), "work/T-1/task-state.json", state, SCHEMAS / "task-state.schema.json")
+
+            invalid_state = dict(state)
+            invalid_state.pop("status")
+            state_path.write_text(json.dumps(invalid_state), encoding="utf-8")
+            invalid = run_script(
+                "create_batch_contract.py", "--project-root", str(project), "--plan", str(plan),
+                "--plan-id", "MP-1", "--plan-revision", "1", "--batch-id", "B-1",
+                "--expected-revision", "0", "--actor", "primary-agent",
+            )
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn("task state is invalid", invalid.stderr)
+
+            for field, value in (("task_id", "T-2"), ("batch_id", "B-2")):
+                mismatched = dict(state)
+                mismatched[field] = value
+                state_path.write_text(json.dumps(mismatched), encoding="utf-8")
+                result = run_script(
+                    "create_batch_contract.py", "--project-root", str(project), "--plan", str(plan),
+                    "--plan-id", "MP-1", "--plan-revision", "1", "--batch-id", "B-1",
+                    "--expected-revision", "0", "--actor", "primary-agent",
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("identity", result.stderr)
+
+    def test_legacy_batch_review_pin_is_allowed_only_without_current_contract(self) -> None:
+        legacy_review = {"legacy_migration": True}
+        self.assertIsNone(validate_batch_contract_pin(legacy_review, None, allow_legacy=True))
+        with self.assertRaisesRegex(CommitRejected, "batch contract pin"):
+            validate_batch_contract_pin(legacy_review, {"revision": 1, "contract_hash": "a" * 64}, allow_legacy=False)
+
+    def test_batch_contract_rejects_non_bidirectional_membership(self) -> None:
+        base = {
+            "master_plan": {"plan_id": "MP-1"},
+            "sub_plans": [{"sub_plan_id": "SP-1", "master_plan_id": "MP-1", "batches": ["B-1"]}],
+            "batches": [{"batch_id": "B-1", "sub_plan_id": "SP-1", "tasks": ["T-1"]}],
+            "tasks": [{"task_id": "T-1", "batch_id": "B-1"}],
+        }
+        cases = {
+            "missing task": lambda value: value["batches"][0].update({"tasks": ["T-MISSING"]}),
+            "duplicate task": lambda value: value["batches"][0].update({"tasks": ["T-1", "T-1"]}),
+            "wrong reverse membership": lambda value: value["tasks"][0].update({"batch_id": "B-2"}),
+            "missing sub-plan membership": lambda value: value["sub_plans"][0].update({"batches": []}),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name=name):
+                value = json.loads(json.dumps(base))
+                mutate(value)
+                with self.assertRaises(ValueError):
+                    _resolve_documents(value, "B-1")
+
+    def test_batch_contract_rejects_incomplete_sub_plan_batch_membership(self) -> None:
+        base = {
+            "master_plan": {"plan_id": "MP-1"},
+            "sub_plans": [{"sub_plan_id": "SP-1", "master_plan_id": "MP-1", "batches": ["B-1", "B-2"]}],
+            "batches": [
+                {"batch_id": "B-1", "sub_plan_id": "SP-1", "tasks": ["T-1"]},
+                {"batch_id": "B-2", "sub_plan_id": "SP-1", "tasks": ["T-2"]},
+            ],
+            "tasks": [
+                {"task_id": "T-1", "batch_id": "B-1"},
+                {"task_id": "T-2", "batch_id": "B-2"},
+            ],
+        }
+        cases = {
+            "duplicate sub-plan batch ID": lambda value: value["sub_plans"][0].update({"batches": ["B-1", "B-1"]}),
+            "nonexistent sibling batch ID": lambda value: value["sub_plans"][0].update({"batches": ["B-1", "B-MISSING"]}),
+            "omitted sibling batch ID": lambda value: value["sub_plans"][0].update({"batches": ["B-1"]}),
+            "listed sibling references another sub-plan": lambda value: value["batches"][1].update({"sub_plan_id": "SP-2"}),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name=name):
+                value = json.loads(json.dumps(base))
+                mutate(value)
+                with self.assertRaises(ValueError):
+                    _resolve_documents(value, "B-1")
 
     def test_mutable_only_transitions_retain_every_identity_field(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

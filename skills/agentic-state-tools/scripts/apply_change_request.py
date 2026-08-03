@@ -109,9 +109,11 @@ def main() -> int:
             new_plan["revision"] += 1
         else:
             new_plan["revision"] = 1
+        if isinstance(new_plan.get("master_plan"), dict):
+            new_plan["master_plan"]["revision"] = new_plan["revision"]
         for stale_field in ("approval_id", "review_id", "review_verdict", "accepted", "approval_references"):
             new_plan.pop(stale_field, None)
-        new_plan["invalidated_artifacts"] = ["approvals", "reviews", "dispatches"]
+        new_plan["invalidated_artifacts"] = ["approvals", "reviews", "batch_contracts", "dispatches"]
         new_plan["artifact_hash"] = artifact_hash(new_plan)
         write_json_atomic(output_path, new_plan)
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -11,6 +12,9 @@ from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+from commit_batch import validate_batch_contract_pin  # noqa: E402
+from create_batch_review import load_batch_contract  # noqa: E402
 CONFIG_VALUE = json.loads(
     (SKILL_ROOT.parent / "agentic-configuration" / "config" / "agentic-config.yaml").read_text(encoding="utf-8")
 )
@@ -52,6 +56,7 @@ def planning_bundle() -> dict:
     return {
         "master_plan": {
             "plan_id": "MP-V1",
+            "revision": 1,
             "version": "1.0",
             "title": "V1 runtime",
             "objective": "Validate the integrated runtime",
@@ -130,7 +135,9 @@ class V1WorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)
             init_git_project(project)
-            planning = write_json(project / "planning.json", planning_bundle())
+            planning_value = planning_bundle()
+            planning_value["master_plan"]["revision"] = 1
+            planning = write_json(project / "planning.json", planning_value)
             result = run_script("validate_planning.py", "--input", str(planning))
             self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -145,6 +152,30 @@ class V1WorkflowTests(unittest.TestCase):
 
             init = run_script("init_runtime.py", "--project-root", str(project))
             self.assertEqual(init.returncode, 0, init.stderr)
+            plan_hash = hashlib.sha256(
+                json.dumps(planning_value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            plan_approval = write_json(
+                project / "plan-approval.json",
+                {
+                    "target_type": "MASTER_PLAN",
+                    "target_id": "MP-V1",
+                    "decision": "APPROVED",
+                    "approver": "primary-agent",
+                    "actor_type": "primary_agent",
+                    "actor_id": "primary-agent",
+                    "action": "MASTER_PLAN",
+                    "target_revision": 1,
+                    "target_hash": plan_hash,
+                    "policy_version": "1",
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "evidence": "approved planning bundle",
+                },
+            )
+            self.assertEqual(
+                run_script("record_approval.py", "--project-root", str(project), "--input", str(plan_approval)).returncode,
+                0,
+            )
             approval = write_json(project / "approval.json", {"target_type": "TASK", "target_id": "T-V1", "decision": "APPROVED", "approver": "primary-agent", "actor_type": "primary_agent", "actor_id": "primary-agent", "action": "TASK", "target_revision": 1, "target_hash": "0" * 64, "policy_version": "1", "expires_at": "2026-08-04T00:00:00Z", "evidence": "task contract accepted"})
             self.assertEqual(run_script("record_approval.py", "--project-root", str(project), "--input", str(approval)).returncode, 0)
             review_contract = {
@@ -203,20 +234,20 @@ class V1WorkflowTests(unittest.TestCase):
             result = run_script("resolve_rubric.py", "--profile", "personal", "--task-type", "standard", "--review-type", "batch", "--risk-flags", "{}", "--output", str(batch_rubric))
             self.assertEqual(result.returncode, 0, result.stderr)
             resolved_batch_rubric = json.loads(batch_rubric.read_text(encoding="utf-8"))
+            contract_result = run_script(
+                "create_batch_contract.py",
+                "--project-root", str(project),
+                "--plan", str(planning),
+                "--plan-id", "MP-V1",
+                "--plan-revision", "1",
+                "--batch-id", "B-V1",
+                "--expected-revision", "0",
+                "--actor", "primary-agent",
+            )
+            self.assertEqual(contract_result.returncode, 0, contract_result.stderr)
             batch_contract_dir = project / ".agent/work/B-V1"
-            batch_contract_dir.mkdir(parents=True, exist_ok=True)
-            batch_review_contract = {
-                "project_profile": resolved_batch_rubric["profile_id"],
-                "profile_hash": resolved_batch_rubric["profile_hash"],
-                "task_type": resolved_batch_rubric["task_type"],
-                "risk_flags": resolved_batch_rubric["risk_flags"],
-                "review_type": resolved_batch_rubric["review_type"],
-                "rubric_id": resolved_batch_rubric["rubric_id"],
-                "rubric_version": resolved_batch_rubric["rubric_version"],
-                "rubric_hash": resolved_batch_rubric["rubric_hash"],
-                "review_policy_version": resolved_batch_rubric["review_policy_version"],
-            }
-            (batch_contract_dir / "batch-contract.json").write_text(json.dumps({"batch_id": "B-V1", "tasks": ["T-V1"], "review_contract": batch_review_contract}), encoding="utf-8")
+            batch_contract = json.loads((batch_contract_dir / "batch-contract.json").read_text(encoding="utf-8"))
+            batch_review_contract = batch_contract["review_contract"]
             batch_criteria = [
                 {
                     "id": criterion_id,
@@ -233,6 +264,12 @@ class V1WorkflowTests(unittest.TestCase):
             batch_result = run_script("create_batch_review.py", "--project-root", str(project), "--input", str(batch))
             self.assertEqual(batch_result.returncode, 0, batch_result.stderr)
             self.assertIn("BATCH_REVIEW_WRITTEN", batch_result.stdout)
+            saved_batch_review = json.loads((batch_contract_dir / "review.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved_batch_review["batch_contract_revision"], batch_contract["revision"])
+            self.assertEqual(saved_batch_review["batch_contract_hash"], batch_contract["contract_hash"])
+            current_contract = load_batch_contract(project / ".agent", "B-V1")
+            self.assertIsNotNone(current_contract)
+            validate_batch_contract_pin(saved_batch_review, current_contract)
             self.assertEqual(run_script("validate_state.py", "--project-root", str(project)).returncode, 0)
 
     def test_v1_faults_are_conservative(self) -> None:

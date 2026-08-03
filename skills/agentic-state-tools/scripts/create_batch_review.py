@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from append_event import append_event_for_root
+from authorization import require_persisted_approval, validate_approval
 from calculate_rubric_score import calculate, validate_findings, validate_rubric_identity
 from render_checklist import render_checklist_for_root
-from review_contract import validate_rubric_against_contract
+from review_contract import validate_contract, validate_rubric_against_contract
 from runtime_utils import (
     RuntimeLockedError,
     RuntimeNotInitializedError,
@@ -24,9 +25,13 @@ from runtime_utils import (
     validate_identifier,
 )
 from write_artifact import write_validated
+from validate_payload import validate
 
 
 SCHEMA = Path(__file__).resolve().parents[1] / "schemas/batch-review.schema.json"
+CONTRACT_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/batch-contract.schema.json"
+TASK_STATE_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/task-state.schema.json"
+REVIEW_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/review.schema.json"
 VALID_CHECK_RESULTS = {"PASS", "FAIL", "BLOCKED", "NOT_RUN"}
 VALID_CHECK_KINDS = {"integration", "regression", "scope"}
 
@@ -108,7 +113,7 @@ def normalize(payload: Any) -> dict[str, Any]:
     return record
 
 
-def index_task_reviews(root: Path, batch_id: str) -> dict[str, tuple[dict[str, Any], Path]]:
+def index_task_reviews(root: Path, batch_id: str, *, strict: bool = False) -> dict[str, tuple[dict[str, Any], Path]]:
     indexed: dict[str, tuple[dict[str, Any], Path]] = {}
     for path in sorted((root / "work").glob("*/review.json")):
         if path.parent.name == batch_id:
@@ -117,13 +122,20 @@ def index_task_reviews(root: Path, batch_id: str) -> dict[str, tuple[dict[str, A
             review = read_object(path)
         except (OSError, ValueError):
             continue
+        if review.get("task_id") != path.parent.name:
+            continue
+        if strict:
+            errors = validate(review, read_object(REVIEW_SCHEMA), base_path=REVIEW_SCHEMA.parent)
+            if errors:
+                continue
         review_id = review.get("review_id")
         if isinstance(review_id, str) and review_id:
             indexed[review_id] = (review, path)
     return indexed
 
 
-def load_batch_contract(root: Path, batch_id: str) -> dict[str, Any] | None:
+def load_batch_contract(root: Path, batch_id: str, *, strict: bool = True) -> dict[str, Any] | None:
+    validate_identifier(batch_id, "batch_id")
     path = root / "work" / batch_id / "batch-contract.json"
     if not path.is_file():
         return None
@@ -131,10 +143,63 @@ def load_batch_contract(root: Path, batch_id: str) -> dict[str, Any] | None:
     if contract.get("batch_id") != batch_id:
         raise ValueError("canonical batch contract ID does not match review batch_id")
     expected = contract.get("tasks")
-    if not isinstance(expected, list) or not expected or any(not isinstance(item, str) or not item.strip() for item in expected):
-        raise ValueError("canonical batch contract tasks must be a non-empty array of IDs")
-    if len(expected) != len(set(expected)):
+    if not strict:
+        if not isinstance(expected, list) or not expected:
+            raise ValueError("legacy batch contract tasks must be a non-empty array")
+        if all(isinstance(item, str) and item.strip() for item in expected):
+            if len(expected) != len(set(expected)):
+                raise ValueError("legacy batch contract contains duplicate task IDs")
+            return contract
+        if all(isinstance(item, dict) and isinstance(item.get("task_id"), str) and item["task_id"].strip() for item in expected):
+            task_ids = [item["task_id"] for item in expected]
+            if len(task_ids) != len(set(task_ids)):
+                raise ValueError("legacy batch contract contains duplicate task IDs")
+            return contract
+        raise ValueError("legacy batch contract tasks must contain task IDs")
+    errors = validate(contract, read_object(CONTRACT_SCHEMA), base_path=CONTRACT_SCHEMA.parent)
+    if errors:
+        raise ValueError("canonical batch contract is invalid: " + "; ".join(errors))
+    task_ids = [item["task_id"] for item in expected]
+    if len(task_ids) != len(set(task_ids)):
         raise ValueError("canonical batch contract contains duplicate task IDs")
+    expected_hash = dict(contract)
+    actual_hash = expected_hash.pop("contract_hash")
+    if hashlib.sha256(json.dumps(expected_hash, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest() != actual_hash:
+        raise ValueError("canonical batch contract hash does not match content")
+    plan_id = contract["plan_id"]
+    approval_path = root / "approvals" / f"MASTER_PLAN-{plan_id}.json"
+    approval = read_object(approval_path)
+    require_persisted_approval(root, approval, target_type="MASTER_PLAN", target_id=plan_id)
+    if approval.get("approval_id") != contract["plan_approval_id"] or approval.get("action") not in {"MASTER_PLAN", "MASTER_PLAN_APPROVE", "PLAN_APPROVE"}:
+        raise ValueError("canonical batch contract plan approval is not current")
+    if approval.get("actor_type") != "primary_agent" or approval.get("actor_id") != "primary-agent":
+        raise ValueError("canonical batch contract approval is not primary-agent bound")
+    validate_approval(approval, action=approval["action"], target_type="MASTER_PLAN", target_id=plan_id, target_revision=contract["plan_revision"], target_hash=contract["plan_hash"])
+    validate_contract(contract["review_contract"], review_type="batch")
+    if any(contract[field] != contract["review_contract"][field] for field in ("rubric_id", "rubric_version", "rubric_hash")):
+        raise ValueError("canonical batch contract rubric pins do not match review_contract")
+    for pin in expected:
+        task_id = pin["task_id"]
+        task_path = root / "work" / task_id / "task-state.json"
+        if not task_path.is_file():
+            raise ValueError(f"canonical batch task state is missing: {task_id}")
+        task_state = read_object(task_path)
+        state_errors = validate(task_state, read_object(TASK_STATE_SCHEMA), base_path=TASK_STATE_SCHEMA.parent)
+        if state_errors:
+            raise ValueError(f"canonical batch task state is invalid: {task_id}: " + "; ".join(state_errors))
+        if task_state.get("task_id") != task_id or task_state.get("batch_id") != contract["batch_id"]:
+            raise ValueError(f"canonical batch task state identity does not match contract: {task_id}")
+        if task_state.get("plan_revision") is not None and task_state["plan_revision"] != contract["plan_revision"]:
+            raise ValueError(f"canonical batch task plan_revision does not match contract: {task_id}")
+        if task_state.get("revision") != pin["task_revision"]:
+            raise ValueError(f"canonical batch task revision is stale: {task_id}")
+        task_contract = task_state.get("review_contract")
+        if not isinstance(task_contract, dict):
+            raise ValueError(f"canonical batch task review_contract is missing: {task_id}")
+        validate_contract(task_contract, review_type="task")
+        task_contract_hash = hashlib.sha256(json.dumps(task_contract, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        if task_contract_hash != pin["review_contract_hash"] or any(task_contract[field] != pin[contract_field] for field, contract_field in (("rubric_id", "rubric_id"), ("rubric_version", "rubric_version"), ("rubric_hash", "rubric_hash"))):
+            raise ValueError(f"canonical batch task review pins are stale: {task_id}")
     return contract
 
 
@@ -144,9 +209,20 @@ def derive_verdict(root: Path, record: dict[str, Any]) -> tuple[str, list[str]]:
         reasons.append(f"batch rubric verdict is not passing: {record['rubric_verdict']}")
     if not record["scope_valid"]:
         reasons.append("batch scope is invalid")
-    reviews = index_task_reviews(root, record["batch_id"])
-    contract = load_batch_contract(root, record["batch_id"])
-    expected_task_ids = set(contract["tasks"]) if contract is not None else None
+    reviews = index_task_reviews(root, record["batch_id"], strict=record.get("legacy_migration") is not True)
+    try:
+        contract = load_batch_contract(root, record["batch_id"], strict=record.get("legacy_migration") is not True)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        contract = None
+        reasons.append(f"canonical batch contract is invalid: {exc}")
+    if record.get("legacy_migration") is not True and contract is None:
+        reasons.append("canonical batch contract is missing")
+    expected_task_ids = None
+    if contract is not None:
+        expected_task_ids = {
+            item if isinstance(item, str) else item["task_id"]
+            for item in contract["tasks"]
+        }
     submitted_task_ids: list[str] = []
     for review_id in record["task_reviews"]:
         item = reviews.get(review_id)
@@ -165,6 +241,10 @@ def derive_verdict(root: Path, record: dict[str, Any]) -> tuple[str, list[str]]:
             reasons.append(f"task state is missing for review: {review_id}")
             continue
         task_state = read_object(task_state_path)
+        if contract is not None and any(isinstance(item, dict) for item in contract["tasks"]):
+            pin = next((item for item in contract["tasks"] if isinstance(item, dict) and item["task_id"] == task_id), None)
+            if pin is not None and task_state.get("revision") != pin["task_revision"]:
+                reasons.append(f"task revision is stale for review: {review_id}")
         if str(task_state.get("status", "")).upper() != "ACCEPTED":
             reasons.append(f"task is not accepted for review: {review_id}")
         if record.get("legacy_migration") is not True:
@@ -244,6 +324,8 @@ def main() -> int:
                     raise ValueError("new batch reviews require resolved_rubric")
                 validate_rubric_against_contract(record["resolved_rubric"], batch_contract["review_contract"], review_type="batch")
                 record["review_contract"] = batch_contract["review_contract"]
+                record["batch_contract_revision"] = batch_contract["revision"]
+                record["batch_contract_hash"] = batch_contract["contract_hash"]
             record["verdict"], record["blocking_reasons"] = derive_verdict(root, record)
             record["artifact_hash"] = artifact_hash(record)
             target = write_validated(args.project_root, f"work/{record['batch_id']}/review.json", record, SCHEMA)

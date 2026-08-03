@@ -26,6 +26,8 @@
     "created_at": {"type": "string", "minLength": 1},
     "revision": {"type": "integer", "minimum": 1},
     "reviewer": {"type": "string", "minLength": 1},
+    "batch_contract_revision": {"type": "integer", "minimum": 1},
+    "batch_contract_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "resolved_rubric": {"type": "object"},
     "review_contract": {"$ref": "review-contract.schema.json"},
     "legacy_migration": {"type": "boolean"},

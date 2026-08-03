@@ -23,6 +23,7 @@ ACTOR_TYPES = {"user", "primary_agent", "agent", "service"}
 # These actions are deliberately stricter than ordinary task execution. The
 # caller must supply a typed identity and an approval bound to the same target.
 REQUIRED_ACTOR_TYPES = {
+    "MASTER_PLAN": "primary_agent",
     "PLAN_APPROVE": "primary_agent",
     "MASTER_PLAN_APPROVE": "primary_agent",
     "SUB_PLAN_APPROVE": "primary_agent",
@@ -36,6 +37,7 @@ REQUIRED_ACTOR_TYPES = {
     "ROLLBACK": "primary_agent",
 }
 ACTION_POLICY_KEYS = {
+    "MASTER_PLAN": "plan_approval",
     "PLAN_APPROVE": "plan_approval",
     "MASTER_PLAN_APPROVE": "plan_approval",
     "SUB_PLAN_APPROVE": "plan_approval",

@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from authorization import AuthorizationError, authorize, require_persisted_approval
+from create_batch_review import artifact_hash as batch_review_artifact_hash
+from create_batch_review import derive_verdict, load_batch_contract
 from runtime_utils import (
     RuntimeLockedError,
     RuntimeNotInitializedError,
@@ -21,10 +23,14 @@ from runtime_utils import (
     utc_now,
     validate_identifier,
 )
+from validate_payload import validate
 
 
 class CommitRejected(AuthorizationError):
     """Raised when a batch is not eligible for an authorized commit."""
+
+
+BATCH_REVIEW_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/batch-review.schema.json"
 
 
 def _target(review: dict[str, Any]) -> dict[str, Any]:
@@ -60,6 +66,57 @@ def validate_commit_authorization(
         return authorize("BATCH_COMMIT", _target(batch_review), approval, actor=actor, now=now)
     except AuthorizationError as exc:
         raise CommitRejected(str(exc)) from exc
+
+
+def validate_batch_review_artifact(batch_review: Any, batch_id: str) -> None:
+    """Validate the persisted review schema, identity, and canonical content hash."""
+
+    if not isinstance(batch_review, dict):
+        raise CommitRejected("current batch review must be an object")
+    if batch_review.get("batch_id") != batch_id:
+        raise CommitRejected("current batch review batch_id does not match requested batch_id")
+    errors = validate(batch_review, read_object(BATCH_REVIEW_SCHEMA), base_path=BATCH_REVIEW_SCHEMA.parent)
+    if errors:
+        raise CommitRejected("current batch review is invalid: " + "; ".join(errors))
+    if batch_review.get("artifact_hash") != batch_review_artifact_hash(batch_review):
+        raise CommitRejected("current batch review artifact_hash does not match content")
+
+
+def validate_batch_contract_pin(batch_review: Any, current_contract: Any, *, allow_legacy: bool = True) -> None:
+    """Require a non-legacy review to pin the currently canonical contract."""
+
+    if allow_legacy and current_contract is None and isinstance(batch_review, dict) and batch_review.get("legacy_migration") is True:
+        return
+    if not isinstance(current_contract, dict):
+        raise CommitRejected("current batch contract is missing")
+    revision = batch_review.get("batch_contract_revision") if isinstance(batch_review, dict) else None
+    contract_hash = batch_review.get("batch_contract_hash") if isinstance(batch_review, dict) else None
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise CommitRejected("batch review requires a batch contract pin revision")
+    if not isinstance(contract_hash, str) or len(contract_hash) != 64:
+        raise CommitRejected("batch review requires a batch contract pin hash")
+    if revision != current_contract.get("revision") or contract_hash != current_contract.get("contract_hash"):
+        raise CommitRejected("batch review batch contract pin does not match the current contract")
+    if not isinstance(current_contract.get("review_contract"), dict):
+        raise CommitRejected("current batch contract review_contract is missing")
+    if not isinstance(batch_review.get("review_contract"), dict) or batch_review["review_contract"] != current_contract["review_contract"]:
+        raise CommitRejected("batch review review_contract does not match the current contract")
+
+
+def validate_batch_review_semantics(batch_review: Any, root: Path, current_contract: Any) -> None:
+    """Recompute the current runtime evidence before authorizing a batch commit."""
+
+    if not isinstance(batch_review, dict):
+        raise CommitRejected("current batch review must be an object")
+    if current_contract is not None and batch_review.get("legacy_migration") is True:
+        raise CommitRejected("legacy_migration=true is not allowed when a current batch contract exists")
+    try:
+        derived_verdict, reasons = derive_verdict(root, batch_review)
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise CommitRejected(f"current batch review evidence is malformed or missing: {exc}") from exc
+    if derived_verdict != "PASS":
+        detail = "; ".join(reasons) if reasons else f"derived verdict is {derived_verdict}"
+        raise CommitRejected(f"current batch review evidence does not derive PASS: {detail}")
 
 
 def _safe_paths(project_root: Path, paths: list[str]) -> list[str]:
@@ -128,6 +185,13 @@ def commit_batch(
     selected_paths = _safe_paths(root_path, paths)
     with runtime_lock(root_path) as root:
         review = read_object(root / "work" / batch_id / "review.json")
+        validate_batch_review_artifact(review, batch_id)
+        try:
+            current_contract = load_batch_contract(root, batch_id)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise CommitRejected(f"current batch contract is invalid: {exc}") from exc
+        validate_batch_contract_pin(review, current_contract, allow_legacy=current_contract is None)
+        validate_batch_review_semantics(review, root, current_contract)
         require_persisted_approval(root, approval, target_type="BATCH", target_id=batch_id)
         approval_id = validate_commit_authorization(review, approval, actor=actor)
         operation_path = _operation_path(root, batch_id)

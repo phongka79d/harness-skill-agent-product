@@ -29,6 +29,7 @@
     "SUPERSEDED": {"event": "TASK_SUPERSEDED", "executor": [], "reviewer": []}
   },
   "non_state_events": [
+    "BATCH_CONTRACT_CREATED",
     "BATCH_REVIEW_CREATED",
     "CHECKPOINT_CREATED",
     "CONTEXT_CREATED",
