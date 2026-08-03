@@ -18,11 +18,11 @@
 - Create: `skills/agentic-state-tools/scripts/authorization.py`
 - Test: `skills/agentic-state-tools/tests/test_rollback.py`
 
-- [ ] **Step 1: Add failing tests** for actor mismatch, missing target hash, expired approval, and approval reused for another revision.
-- [ ] **Step 2: Run the focused tests and confirm forged string actors are accepted.**
-- [ ] **Step 3: Require `actor_type`, `actor_id`, `action`, `target_revision`, `target_hash`, `policy_version`, and `expires_at`; validate them in `record_approval.py`.**
-- [ ] **Step 4: Implement `authorize(action, target, approval, actor)` and make target/hash/revision/expiry checks mandatory.**
-- [ ] **Step 5: Run rollback and approval tests.**
+- [x] **Step 1: Add failing tests** for actor mismatch, missing target hash, expired approval, and approval reused for another revision.
+- [x] **Step 2: Run the focused tests and confirm forged string actors are accepted.**
+- [x] **Step 3: Require `actor_type`, `actor_id`, `action`, `target_revision`, `target_hash`, `policy_version`, and `expires_at`; validate them in `record_approval.py`.**
+- [x] **Step 4: Implement `authorize(action, target, approval, actor)` and make target/hash/revision/expiry checks mandatory.**
+- [x] **Step 5: Run rollback and approval tests.**
 
 ### Task 2: Enforce action gates
 
@@ -34,11 +34,11 @@
 - Test: `skills/agentic-state-tools/tests/test_orchestration.py`
 - Test: `skills/agentic-state-tools/tests/test_rollback.py`
 
-- [ ] **Step 1: Add failing tests** for user-only destructive/commit actions, primary-only plan actions, and approval invalidation after artifact revision.
-- [ ] **Step 2: Run the tests and confirm actor strings or absent gates are sufficient.**
-- [ ] **Step 3: Call `authorize()` before every protected side effect and record the consumed approval ID in the operation ledger.**
-- [ ] **Step 4: Reject direct approval-like events that do not pass the same gate.**
-- [ ] **Step 5: Run focused tests and full suite.**
+- [x] **Step 1: Add failing tests** for user-only destructive/commit actions, primary-only plan actions, and approval invalidation after artifact revision.
+- [x] **Step 2: Run the tests and confirm actor strings or absent gates are sufficient.**
+- [x] **Step 3: Call `authorize()` before every protected side effect and record the consumed approval ID in the operation ledger.**
+- [x] **Step 4: Reject direct approval-like events that do not pass the same gate.**
+- [x] **Step 5: Run focused tests and full suite.**
 
 ---
 

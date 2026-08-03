@@ -17,11 +17,11 @@
 - Create: `skills/agentic-state-tools/tests/test_release_runner.py`
 - Modify: `.gitignore`
 
-- [ ] **Step 1: Add failing tests** for group discovery, timeout handling, separate pass/fail/skip counts, and cache exclusion.
-- [ ] **Step 2: Run them and verify the current runner reports only one aggregate result.**
-- [ ] **Step 3: Implement explicit groups for unit/schema/CLI/integration/end-to-end/recovery/concurrency/rollback/review/examples/package.**
-- [ ] **Step 4: Add per-process timeout and deterministic discovery that excludes `__pycache__`, `.pytest_cache`, and generated runtime roots.**
-- [ ] **Step 5: Run the runner tests and full suite.**
+- [x] **Step 1: Add failing tests** for group discovery, timeout handling, separate pass/fail/skip counts, and cache exclusion.
+- [x] **Step 2: Run them and verify the current runner reports only one aggregate result.**
+- [x] **Step 3: Implement explicit groups for unit/schema/CLI/integration/end-to-end/recovery/concurrency/rollback/review/examples/package.**
+- [x] **Step 4: Add per-process timeout and deterministic discovery that excludes `__pycache__`, `.pytest_cache`, and generated runtime roots.**
+- [x] **Step 5: Run the runner tests and full suite.**
 
 ### Task 2: Runtime example and negative coverage
 
@@ -30,10 +30,10 @@
 - Create: `skills/agentic-state-tools/tests/test_example_runtime.py`
 - Create: `skills/agentic-state-tools/scripts/validate_examples.py`
 
-- [ ] **Step 1: Add failing tests** for every documented bypass scenario and for schema-pass/runtime-fail examples.
-- [ ] **Step 2: Implement the example validator using the corresponding CLI script without mutating fixtures.**
-- [ ] **Step 3: Add crash-point and concurrency fixtures using temporary project roots.**
-- [ ] **Step 4: Run each named group separately and record pass/fail/skip counts and elapsed time.**
+- [x] **Step 1: Add failing tests** for every documented bypass scenario and for schema-pass/runtime-fail examples.
+- [x] **Step 2: Implement the example validator using the corresponding CLI script without mutating fixtures.**
+- [x] **Step 3: Add crash-point and concurrency fixtures using temporary project roots.**
+- [x] **Step 4: Run each named group separately and record pass/fail/skip counts and elapsed time.**
 
 ### Task 3: Allowlisted packaging
 
@@ -42,10 +42,10 @@
 - Create: `skills/agentic-state-tools/tests/test_packaging.py`
 - Modify: `skills/agentic-engineering-system-complete-specification.md`
 
-- [ ] **Step 1: Add a failing packaging test** that finds `.pyc`, `__pycache__`, logs, runtime state, temporary files, and secrets in a package candidate.
-- [ ] **Step 2: Implement an allowlist rooted at `skills/` and `docs/` with explicit file extensions and exclusions.**
-- [ ] **Step 3: Create a reproducible ZIP with sorted paths and fixed metadata, then verify it in the test.**
-- [ ] **Step 4: Run packaging and full test groups.**
+- [x] **Step 1: Add a failing packaging test** that finds `.pyc`, `__pycache__`, logs, runtime state, temporary files, and secrets in a package candidate.
+- [x] **Step 2: Implement an allowlist rooted at `skills/` and `docs/` with explicit file extensions and exclusions.**
+- [x] **Step 3: Create a reproducible ZIP with sorted paths and fixed metadata, then verify it in the test.**
+- [x] **Step 4: Run packaging and full test groups.**
 
 ---
 

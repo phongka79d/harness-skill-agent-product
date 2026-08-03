@@ -19,11 +19,11 @@
 - Modify: `skills/agentic-runtime-recovery/scripts/inspect_recovery.py`
 - Test: `skills/agentic-state-tools/tests/test_recovery_hardening.py`
 
-- [ ] **Step 1: Add failing tests** for direct `TASK_ACCEPTED` without review, undocumented transitions, terminal-state mutation, and `REVIEWING` recovery.
-- [ ] **Step 2: Run the tests and confirm direct event replay can create accepted state.**
-- [ ] **Step 3: Route event application and task updates through one registry with actor/action guards and review/approval prerequisites.**
-- [ ] **Step 4: Add explicit handling for every documented state and reject unsupported states.**
-- [ ] **Step 5: Run state/recovery tests and validate the state machine schema.**
+- [x] **Step 1: Add failing tests** for direct `TASK_ACCEPTED` without review, undocumented transitions, terminal-state mutation, and `REVIEWING` recovery.
+- [x] **Step 2: Run the tests and confirm direct event replay can create accepted state.**
+- [x] **Step 3: Route event application and task updates through one registry with actor/action guards and review/approval prerequisites.**
+- [x] **Step 4: Add explicit handling for every documented state and reject unsupported states.**
+- [x] **Step 5: Run state/recovery tests and validate the state machine schema.**
 
 ### Task 2: Operation ledger and reconciliation
 
@@ -35,11 +35,11 @@
 - Test: `skills/agentic-state-tools/tests/test_distributed_state.py`
 - Test: `skills/agentic-state-tools/tests/test_recovery_hardening.py`
 
-- [ ] **Step 1: Add failing crash-point tests** between each write in dispatch, review, approval, and commit operations.
-- [ ] **Step 2: Implement prepare/commit/rollback markers, input/output hashes, and idempotency detection.**
-- [ ] **Step 3: Reconcile complete writes, roll back safe partial writes, and return `RECOVERY_PENDING` for ambiguous external side effects.**
-- [ ] **Step 4: Validate checkpoints against task revision, attempt ID, and input artifact hashes before resume.**
-- [ ] **Step 5: Run crash/restart/recovery tests and full suite.**
+- [x] **Step 1: Add failing crash-point tests** between each write in dispatch, review, approval, and commit operations.
+- [x] **Step 2: Implement prepare/commit/rollback markers, input/output hashes, and idempotency detection.**
+- [x] **Step 3: Reconcile complete writes, roll back safe partial writes, and return `RECOVERY_PENDING` for ambiguous external side effects.**
+- [x] **Step 4: Validate checkpoints against task revision, attempt ID, and input artifact hashes before resume.**
+- [x] **Step 5: Run crash/restart/recovery tests and full suite.**
 
 ---
 

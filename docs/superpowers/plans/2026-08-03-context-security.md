@@ -19,11 +19,11 @@
 - Modify: `skills/agentic-configuration/config/agentic-config.yaml`
 - Test: `skills/agentic-state-tools/tests/test_report_gaps.py`
 
-- [ ] **Step 1: Add failing tests** with `.env`, bearer token, authorization header, password, database URL, private key, cloud credential, and binary bytes.
-- [ ] **Step 2: Run them and confirm context persists sensitive values.**
-- [ ] **Step 3: Implement deny-path matching, recursive string scanning, redaction markers, binary detection, and byte budgets.**
-- [ ] **Step 4: Invoke the scanner before writing context and reject when `forbid_secret_storage_in_context` is true.**
-- [ ] **Step 5: Run focused context/security tests.**
+- [x] **Step 1: Add failing tests** with `.env`, bearer token, authorization header, password, database URL, private key, cloud credential, and binary bytes.
+- [x] **Step 2: Run them and confirm context persists sensitive values.**
+- [x] **Step 3: Implement deny-path matching, recursive string scanning, redaction markers, binary detection, and byte budgets.**
+- [x] **Step 4: Invoke the scanner before writing context and reject when `forbid_secret_storage_in_context` is true.**
+- [x] **Step 5: Run focused context/security tests.**
 
 ### Task 2: Log and artifact leak regression coverage
 
@@ -33,9 +33,9 @@
 - Modify: `skills/agentic-dashboard/scripts/project_dashboard.py`
 - Test: `skills/agentic-state-tools/tests/test_report_gaps.py`
 
-- [ ] **Step 1: Add failing tests** that inspect event journal, operation ledger, and dashboard output after a secret-bearing input.
-- [ ] **Step 2: Redact or reject values before serialization and keep the original secret out of exception messages.**
-- [ ] **Step 3: Run context, dashboard, and full tests.**
+- [x] **Step 1: Add failing tests** that inspect event journal, operation ledger, and dashboard output after a secret-bearing input.
+- [x] **Step 2: Redact or reject values before serialization and keep the original secret out of exception messages.**
+- [x] **Step 3: Run context, dashboard, and full tests.**
 
 ---
 

@@ -16,10 +16,10 @@
 - Modify: `skills/agentic-state-tools/tests/test_orchestration.py`
 - Modify: `skills/agentic-state-tools/tests/test_v1_workflow.py`
 
-- [ ] Add dispatch cases proving approved portable model references resolve through a deployment overlay.
-- [ ] Add dispatch cases proving missing, placeholder, and policy-forbidden deployment mappings are rejected.
-- [ ] Update existing valid fixtures to use portable references, never provider model literals.
-- [ ] Run the focused orchestration tests and observe the new rejection assertions fail before implementation.
+- [x] Add dispatch cases proving approved portable model references resolve through a deployment overlay.
+- [x] Add dispatch cases proving missing, placeholder, and policy-forbidden deployment mappings are rejected.
+- [x] Update existing valid fixtures to use portable references, never provider model literals.
+- [x] Run the focused orchestration tests and observe the new rejection assertions fail before implementation.
 
 ### Task 2: Enforce the allowlist at the dispatch contract boundary
 
@@ -28,11 +28,11 @@
 - Modify: `skills/agentic-state-tools/schemas/dispatch.schema.json`
 - Modify: `skills/agentic-state-tools/examples/v1-dispatch.json`
 
-- [ ] Define the exact allowed model-reference set in the dispatch normalizer.
-- [ ] Reject unresolved, placeholder, or policy-forbidden deployment mappings with a structured non-zero dispatch result.
-- [ ] Add the portable references to the schema contract.
-- [ ] Update the bundled dispatch example to use a provider-neutral reference.
-- [ ] Run focused tests and confirm they pass.
+- [x] Define the exact allowed model-reference set in the dispatch normalizer.
+- [x] Reject unresolved, placeholder, or policy-forbidden deployment mappings with a structured non-zero dispatch result.
+- [x] Add the portable references to the schema contract.
+- [x] Update the bundled dispatch example to use a provider-neutral reference.
+- [x] Run focused tests and confirm they pass.
 
 ### Task 3: Align global policy and role documentation
 
@@ -45,18 +45,18 @@
 - Modify: `skills/agentic-state-tools/SKILL.md`
 - Modify: `skills/agentic_engineering_system_complete_specification.md`
 
-- [ ] State that delegated model selection is limited to the two approved Luna variants.
-- [ ] Remove the stale Luna-Normal role reference.
-- [ ] Document that Sol and Terra are never valid dispatch targets.
-- [ ] Keep Primary ownership, bounded scopes, and the no-Orchestrator decision intact.
+- [x] State that delegated model selection is resolved through portable references and a deployment overlay.
+- [x] Remove provider-specific model literals from portable role guidance.
+- [x] Document that provider-specific forbidden tiers are rejected by deployment policy.
+- [x] Keep Primary ownership, bounded scopes, and the no-Orchestrator decision intact.
 
 ### Task 4: Run the release validation gate
 
 **Files:**
 - No additional files.
 
-- [ ] Run `python skills/agentic-state-tools/tests/test_orchestration.py`.
-- [ ] Run `python run_tests.py`.
-- [ ] Run `python -m compileall -q skills run_tests.py`.
-- [ ] Run the installed skill metadata validator for every `skills/*` package.
-- [ ] Inspect the final changed-file list and confirm no unauthorized files changed.
+- [x] Run `python skills/agentic-state-tools/tests/test_orchestration.py`.
+- [x] Run `python run_tests.py`.
+- [x] Run `python -m compileall -q skills run_tests.py`.
+- [x] Run the installed skill metadata validator for every `skills/*` package.
+- [x] Inspect the final changed-file list and confirm no unauthorized files changed.

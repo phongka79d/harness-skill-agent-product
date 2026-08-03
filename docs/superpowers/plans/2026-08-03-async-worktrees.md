@@ -19,11 +19,11 @@
 - Modify: `skills/agentic-state-tools/schemas/task-state.schema.json`
 - Test: `skills/agentic-state-tools/tests/test_distributed_state.py`
 
-- [ ] **Step 1: Add failing tests** for unique task directories, unique branches, mapping persistence, shared-directory rejection, and async-disabled fallback.
-- [ ] **Step 2: Run the tests and verify no manager exists and four tasks can be marked runnable.**
-- [ ] **Step 3: Implement create/validate/reclaim functions using `git worktree add`, a stable path under configured root, and a workspace lock.**
-- [ ] **Step 4: Make async mode return blocked unless isolation is validated for the task.**
-- [ ] **Step 5: Run worktree and execution-mode tests.**
+- [x] **Step 1: Add failing tests** for unique task directories, unique branches, mapping persistence, shared-directory rejection, and async-disabled fallback.
+- [x] **Step 2: Run the tests and verify no manager exists and four tasks can be marked runnable.**
+- [x] **Step 3: Implement create/validate/reclaim functions using `git worktree add`, a stable path under configured root, and a workspace lock.**
+- [x] **Step 4: Make async mode return blocked unless isolation is validated for the task.**
+- [x] **Step 5: Run worktree and execution-mode tests.**
 
 ### Task 2: Merge, conflict, cleanup, and stale recovery
 
@@ -33,10 +33,10 @@
 - Create: `skills/agentic-state-tools/scripts/merge_worktree.py`
 - Test: `skills/agentic-state-tools/tests/test_recovery_hardening.py`
 
-- [ ] **Step 1: Add failing tests** for merge conflicts, stale worktree metadata, cleanup before acceptance, and branch reuse across revisions.
-- [ ] **Step 2: Implement conflict artifacts and `RECOVERY_PENDING` fencing; never delete a worktree with active lease or unmerged changes.**
-- [ ] **Step 3: Add stale reclaim only after lease expiry and primary authorization.**
-- [ ] **Step 4: Run recovery and worktree tests.**
+- [x] **Step 1: Add failing tests** for merge conflicts, stale worktree metadata, cleanup before acceptance, and branch reuse across revisions.
+- [x] **Step 2: Implement conflict artifacts and `RECOVERY_PENDING` fencing; never delete a worktree with active lease or unmerged changes.**
+- [x] **Step 3: Add stale reclaim only after lease expiry and primary authorization.**
+- [x] **Step 4: Run recovery and worktree tests.**
 
 ---
 

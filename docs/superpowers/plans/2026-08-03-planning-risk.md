@@ -19,11 +19,11 @@
 - Modify: `skills/agentic-state-tools/schemas/planning-task.schema.json`
 - Test: `skills/agentic-state-tools/tests/test_v1_workflow.py`
 
-- [ ] **Step 1: Add failing tests** for an orphan task, orphan batch, task assigned to two batches, missing requirement, duplicate requirement reference, and unknown dependency.
-- [ ] **Step 2: Run the tests and confirm the current forward-only validation misses at least one case.**
-- [ ] **Step 3: Build batch-to-task and requirement-to-task reverse indexes and require one owner for each task and one valid trace for each requirement.**
-- [ ] **Step 4: Preserve sequential overlap when an explicit dependency orders the tasks; reject only parallel conflicting scopes.**
-- [ ] **Step 5: Run planning and dependency suites.**
+- [x] **Step 1: Add failing tests** for an orphan task, orphan batch, task assigned to two batches, missing requirement, duplicate requirement reference, and unknown dependency.
+- [x] **Step 2: Run the tests and confirm the current forward-only validation misses at least one case.**
+- [x] **Step 3: Build batch-to-task and requirement-to-task reverse indexes and require one owner for each task and one valid trace for each requirement.**
+- [x] **Step 4: Preserve sequential overlap when an explicit dependency orders the tasks; reject only parallel conflicting scopes.**
+- [x] **Step 5: Run planning and dependency suites.**
 
 ### Task 2: Strict risk flags
 
@@ -34,11 +34,11 @@
 - Test: `skills/agentic-state-tools/tests/test_adaptive_quality.py`
 - Test: `skills/agentic-state-tools/tests/test_v1_workflow.py`
 
-- [ ] **Step 1: Add failing tests** for string values, unknown keys, wrong casing, and risk flags that fail to activate security/database/migration/destructive rubrics.
-- [ ] **Step 2: Run the tests and record the accepted malformed inputs.**
-- [ ] **Step 3: Define one whitelist and require strict booleans; normalize only key casing when the key is whitelisted.**
-- [ ] **Step 4: Resolve profile/rubric from normalized flags and pin normalized flags into the task contract hash.**
-- [ ] **Step 5: Run all risk and rubric tests.**
+- [x] **Step 1: Add failing tests** for string values, unknown keys, wrong casing, and risk flags that fail to activate security/database/migration/destructive rubrics.
+- [x] **Step 2: Run the tests and record the accepted malformed inputs.**
+- [x] **Step 3: Define one whitelist and require strict booleans; normalize only key casing when the key is whitelisted.**
+- [x] **Step 4: Resolve profile/rubric from normalized flags and pin normalized flags into the task contract hash.**
+- [x] **Step 5: Run all risk and rubric tests.**
 
 ---
 

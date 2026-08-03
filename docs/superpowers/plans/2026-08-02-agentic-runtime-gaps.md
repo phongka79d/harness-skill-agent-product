@@ -17,8 +17,8 @@
 - Modify: `skills/agentic-state-tools/tests/test_state_tools.py`
 - Modify: `run_tests.py`
 
-- [ ] Add failing tests for the specification path, terminal `next_action` cleanup, lease and lock cleanup, expired lock reclaim, workspace mismatch recovery, handoff reconciliation status, planning validation, profile/rubric resolution, and subprocess timeout behavior.
-- [ ] Run `python run_tests.py` and confirm the new tests fail for the intended missing behavior while preserving the existing baseline failures.
+- [x] Add failing tests for the specification path, terminal `next_action` cleanup, lease and lock cleanup, expired lock reclaim, workspace mismatch recovery, handoff reconciliation status, planning validation, profile/rubric resolution, and subprocess timeout behavior.
+- [x] Run `python run_tests.py` and confirm the new tests fail for the intended missing behavior while preserving the existing baseline failures.
 
 ### Task 2: Add missing planning skill entry points
 
@@ -33,9 +33,9 @@
 - Modify: `skills/agentic-engineering-core/references/architecture/architecture.md`
 - Modify: `skills/agentic_engineering_system_complete_specification.md`
 
-- [ ] Define each role as a thin entry point that loads the shared core, reads project planning documents, and submits no canonical runtime writes directly.
-- [ ] State the existing Primary-controlled routing decision explicitly and do not add a separate Orchestrator skill.
-- [ ] Extend metadata tests through the existing directory discovery.
+- [x] Define each role as a thin entry point that loads the shared core, reads project planning documents, and submits no canonical runtime writes directly.
+- [x] State the existing Primary-controlled routing decision explicitly and do not add a separate Orchestrator skill.
+- [x] Extend metadata tests through the existing directory discovery.
 
 ### Task 3: Add machine-validated planning contracts
 
@@ -52,9 +52,9 @@
 - Modify: `skills/agentic-state-tools/SKILL.md`
 - Modify: `skills/agentic-state-tools/tests/test_state_tools.py`
 
-- [ ] Validate each document against its schema.
-- [ ] Validate duplicate IDs, missing dependencies, dependency cycles, untraceable master requirements, overlapping write scopes, missing acceptance criteria, and unapproved architecture decisions.
-- [ ] Return structured validation errors and a non-zero exit code without mutating `.agent/`.
+- [x] Validate each document against its schema.
+- [x] Validate duplicate IDs, missing dependencies, dependency cycles, untraceable master requirements, overlapping write scopes, missing acceptance criteria, and unapproved architecture decisions.
+- [x] Return structured validation errors and a non-zero exit code without mutating `.agent/`.
 
 ### Task 4: Add project profile and rubric resolution
 
@@ -74,9 +74,9 @@
 - Modify: `skills/agentic-state-tools/SKILL.md`
 - Modify: `skills/agentic-state-tools/tests/test_state_tools.py`
 
-- [ ] Resolve a named project profile and task type into a deterministic profile and rubric.
-- [ ] Include rubric ID, version, hash, applicability decisions, resolved weights, and threshold in review payloads when a resolved rubric is supplied.
-- [ ] Preserve direct score calculation compatibility while making the documented review workflow use resolved rubric metadata.
+- [x] Resolve a named project profile and task type into a deterministic profile and rubric.
+- [x] Include rubric ID, version, hash, applicability decisions, resolved weights, and threshold in review payloads when a resolved rubric is supplied.
+- [x] Preserve direct score calculation compatibility while making the documented review workflow use resolved rubric metadata.
 
 ### Task 5: Unify state, handoff, and terminal cleanup
 
@@ -94,10 +94,10 @@
 - Modify: `skills/agentic-engineering-core/references/contracts/handoff-contract.md`
 - Modify: `skills/agentic-state-tools/tests/test_state_tools.py`
 
-- [ ] Make supported status values, event mappings, transition rules, and schema enums agree.
-- [ ] Clear terminal `next_action`, remove the task lease, and release owned task/file/resource locks on terminal review transitions.
-- [ ] Allow `NEEDS_RECONCILIATION` in the handoff contract and reject unsafe terminal cleanup when lock identity is ambiguous.
-- [ ] Reclaim expired task/file/resource locks only with recorded evidence and never reclaim a live, unexpired owner.
+- [x] Make supported status values, event mappings, transition rules, and schema enums agree.
+- [x] Clear terminal `next_action`, remove the task lease, and release owned task/file/resource locks on terminal review transitions.
+- [x] Allow `NEEDS_RECONCILIATION` in the handoff contract and reject unsafe terminal cleanup when lock identity is ambiguous.
+- [x] Reclaim expired task/file/resource locks only with recorded evidence and never reclaim a live, unexpired owner.
 
 ### Task 6: Make recovery reconcile the actual workspace
 
@@ -108,9 +108,9 @@
 - Modify: `skills/agentic-runtime-recovery/references/recovery-model.md`
 - Modify: `skills/agentic-state-tools/tests/test_state_tools.py`
 
-- [ ] Inspect Git status, staged and unstaged changed paths, base commit, and untracked files when the task has active checkpoint evidence.
-- [ ] Compare the workspace paths with checkpoint `files_modified` and classify mismatches as `NEEDS_RECONCILIATION`.
-- [ ] Persist reconciliation evidence in the recovery result while preserving safe behavior for non-Git completed/queued fixture projects.
+- [x] Inspect Git status, staged and unstaged changed paths, base commit, and untracked files when the task has active checkpoint evidence.
+- [x] Compare the workspace paths with checkpoint `files_modified` and classify mismatches as `NEEDS_RECONCILIATION`.
+- [x] Persist reconciliation evidence in the recovery result while preserving safe behavior for non-Git completed/queued fixture projects.
 
 ### Task 7: Repair packaging and test harness behavior
 
@@ -119,9 +119,9 @@
 - Modify: `skills/agentic-state-tools/tests/test_state_tools.py`
 - Modify: `skills/agentic_engineering_system_complete_specification.md`
 
-- [ ] Resolve the specification path relative to the actual `skills/` directory.
-- [ ] Add a bounded timeout to child test processes and convert timeout exceptions into explicit failures.
-- [ ] Run focused tests, then the full suite, then inspect the changed-file list and final behavior against every P0 item.
+- [x] Resolve the specification path relative to the actual `skills/` directory.
+- [x] Add a bounded timeout to child test processes and convert timeout exceptions into explicit failures.
+- [x] Run focused tests, then the full suite, then inspect the changed-file list and final behavior against every P0 item.
 
 ### Task 8: Add P1 dispatch and routing helpers
 
@@ -132,9 +132,9 @@
 - Create: `skills/agentic-state-tools/scripts/detect_scope_overlap.py`
 - Create: `skills/agentic-engineering-core/references/wiki.md`
 
-- [ ] Select only ready tasks whose dependencies are accepted.
-- [ ] Resolve async/sync mode and report active write-scope conflicts without mutating runtime state.
-- [ ] Route agents to the minimum relevant shared reference.
+- [x] Select only ready tasks whose dependencies are accepted.
+- [x] Resolve async/sync mode and report active write-scope conflicts without mutating runtime state.
+- [x] Route agents to the minimum relevant shared reference.
 
 ### Task 9: Add approval records
 
@@ -144,8 +144,8 @@
 - Modify: `skills/agentic-state-tools/scripts/runtime_utils.py`
 - Modify: `skills/agentic-state-tools/schemas/event.schema.json`
 
-- [ ] Validate and persist approval records under `.agent/approvals/`.
-- [ ] Append an `APPROVAL_RECORDED` event without allowing direct canonical edits.
+- [x] Validate and persist approval records under `.agent/approvals/`.
+- [x] Append an `APPROVAL_RECORDED` event without allowing direct canonical edits.
 
 ### Deferred Scope
 

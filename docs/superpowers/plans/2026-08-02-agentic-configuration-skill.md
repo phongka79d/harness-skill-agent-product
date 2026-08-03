@@ -16,9 +16,9 @@
 - Modify: `skills/agentic-state-tools/tests/test_orchestration.py`
 - Modify: `skills/agentic-engineering-core/tests/test_skill_metadata.py`
 
-- [ ] Add a test that dispatch rejects a role/model mismatch supplied through `AGENTIC_CONFIG_FILE`.
-- [ ] Add a test that requires the new config skill, config file, schema, loader, and all agent-role entries.
-- [ ] Run the focused tests and observe them fail because the central config package does not exist or is ignored.
+- [x] Add a test that dispatch rejects a role/model mismatch supplied through `AGENTIC_CONFIG_FILE`.
+- [x] Add a test that requires the new config skill, config file, schema, loader, and all agent-role entries.
+- [x] Run the focused tests and observe them fail because the central config package does not exist or is ignored.
 
 ### Task 2: Scaffold and implement the configuration skill
 
@@ -30,12 +30,12 @@
 - Create: `skills/agentic-configuration/scripts/load_config.py`
 - Create: `skills/agentic-configuration/tests/test_config.py`
 
-- [ ] Scaffold the skill with the skill creator initializer.
-- [ ] Define the agent role map, model policy, execution, approval, runtime, checkpoint, locking, recovery, version-control, documentation, context, security, and retention sections.
-- [ ] Implement package-relative config discovery plus `AGENTIC_CONFIG_FILE` override.
-- [ ] Validate required structure, model allowlist, role model references, and unknown model policy before returning config.
-- [ ] Add loader CLI output for deterministic inspection.
-- [ ] Run config tests and skill metadata validation.
+- [x] Scaffold the skill with the skill creator initializer.
+- [x] Define the agent role map, model policy, execution, approval, runtime, checkpoint, locking, recovery, version-control, documentation, context, security, and retention sections.
+- [x] Implement package-relative config discovery plus `AGENTIC_CONFIG_FILE` override.
+- [x] Validate required structure, model allowlist, role model references, and unknown model policy before returning config.
+- [x] Add loader CLI output for deterministic inspection.
+- [x] Run config tests and skill metadata validation.
 
 ### Task 3: Route dispatch and queue reconciliation through config
 
@@ -47,11 +47,11 @@
 - Modify: `skills/agentic-state-tools/tests/test_orchestration.py`
 - Modify: `skills/agentic-state-tools/tests/test_v1_workflow.py`
 
-- [ ] Remove the hard-coded model set from `dispatch_task.py`.
-- [ ] Require `agent_role` and validate the selected model against the role entry and central model policy.
-- [ ] Reuse the same config-backed dispatch validator in queue reconciliation.
-- [ ] Keep schema responsible for shape while config remains the policy source of truth.
-- [ ] Update examples/tests with explicit role IDs and run focused orchestration tests.
+- [x] Remove the hard-coded model set from `dispatch_task.py`.
+- [x] Require `agent_role` and validate the selected model against the role entry and central model policy.
+- [x] Reuse the same config-backed dispatch validator in queue reconciliation.
+- [x] Keep schema responsible for shape while config remains the policy source of truth.
+- [x] Update examples/tests with explicit role IDs and run focused orchestration tests.
 
 ### Task 4: Point role skills and release checks to the config skill
 
@@ -67,18 +67,18 @@
 - Modify: `run_tests.py`
 - Modify: `skills/agentic-engineering-core/tests/test_skill_metadata.py`
 
-- [ ] Add config-skill startup routing to every role entry point.
-- [ ] Replace duplicated model literals in policy text with config-key references where practical.
-- [ ] Validate central config before the existing release examples and tests run.
-- [ ] Preserve the Primary Agent boundary and the no-Orchestrator decision.
+- [x] Add config-skill startup routing to every role entry point.
+- [x] Replace duplicated model literals in policy text with config-key references where practical.
+- [x] Validate central config before the existing release examples and tests run.
+- [x] Preserve the Primary Agent boundary and the no-Orchestrator decision.
 
 ### Task 5: Verify the complete package
 
 **Files:**
 - No additional files.
 
-- [ ] Run config tests and orchestration tests.
-- [ ] Run `python run_tests.py`.
-- [ ] Run `python -m compileall -q skills run_tests.py`.
-- [ ] Run state-machine, dispatch-schema, Wiki-link, config, and all skill metadata validators.
-- [ ] Inspect actual changed files and report Git limitations if the workspace still has no repository metadata.
+- [x] Run config tests and orchestration tests.
+- [x] Run `python run_tests.py`.
+- [x] Run `python -m compileall -q skills run_tests.py`.
+- [x] Run state-machine, dispatch-schema, Wiki-link, config, and all skill metadata validators.
+- [x] Inspect actual changed files and report Git limitations if the workspace still has no repository metadata.
