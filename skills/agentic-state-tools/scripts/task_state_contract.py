@@ -21,7 +21,12 @@ EXECUTION_IDENTITY_FIELDS = ("run_id", "attempt_id", "dispatch_id")
 
 
 def merge_task_state(current: dict[str, object] | None, update: dict[str, object]) -> dict[str, object]:
-    """Return a full next state while rejecting identity changes."""
+    """Return a full next state while rejecting identity changes.
+
+    Legacy states may omit identity fields.  A normal executor transition does
+    not silently introduce them; dispatch and attempt reissue are the explicit
+    operations that bind or replace execution identity.
+    """
 
     if not isinstance(update, dict):
         raise ValueError("task-state update must be an object")
@@ -84,7 +89,7 @@ def validate_execution_identity(state: dict[str, object], lease: dict[str, objec
     if not isinstance(state, dict):
         raise ValueError("task state must be an object")
     if lease is not None:
-        _validate_record_identity(state, lease, "lease", require_fields=False)
+        _validate_record_identity(state, lease, "lease")
     if queue is not None:
         for record in _identity_records(queue, state):
             _validate_record_identity(state, record, "queue")

@@ -7,6 +7,7 @@
     "task_id": {"type": "string", "minLength": 1},
     "run_id": {"type": "string", "minLength": 1},
     "attempt_id": {"type": "string", "minLength": 1},
+    "dispatch_id": {"type": "string", "minLength": 1},
     "from_role": {"type": "string", "minLength": 1},
     "to_role": {"type": "string", "minLength": 1},
     "task_revision": {"type": "integer", "minimum": 1},

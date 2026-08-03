@@ -21,6 +21,7 @@ from runtime_utils import (
     runtime_lock,
     utc_now,
     write_json_atomic,
+    write_text_atomic,
 )
 from task_state_contract import validate_execution_identity
 from validate_payload import validate
@@ -105,6 +106,12 @@ def main() -> int:
             old_queue = json.loads(json.dumps(queue))
             old_task = json.loads(json.dumps(current))
             old_lease = read_object(lease_path) if lease_path.is_file() else None
+            event_path = root / "runtime/events.jsonl"
+            state_path = root / "runtime/state.json"
+            checklist_path = root / "checklist.md"
+            old_events = event_path.read_text(encoding="utf-8")
+            old_state = state_path.read_text(encoding="utf-8")
+            old_checklist = checklist_path.read_text(encoding="utf-8") if checklist_path.is_file() else None
             operation_id = f"OP-{task_id}-REISSUE-{uuid.uuid4().hex[:12].upper()}"
             idempotency_key = f"{task_id}:reissue:r{current_revision + 1}"
             operation = {
@@ -157,6 +164,10 @@ def main() -> int:
                         lease_path.unlink()
                 else:
                     write_validated(str(args.project_root), f"work/{task_id}/lease.json", old_lease, LEASE_SCHEMA)
+                write_text_atomic(event_path, old_events)
+                write_text_atomic(state_path, old_state)
+                if old_checklist is not None:
+                    write_text_atomic(checklist_path, old_checklist)
                 try:
                     _append_operation(root, task_id, {**operation, "status": "FAILED", "phase": "ROLLBACK", "rollback_marker": operation_id, "result_summary": "task attempt reissue failed"})
                 except Exception:

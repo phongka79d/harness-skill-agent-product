@@ -13,6 +13,8 @@ from render_checklist import render_checklist_for_root
 from capture_workspace import capture_workspace
 from runtime_utils import RuntimeLockedError, RuntimeNotInitializedError, next_revision, read_object, read_payload, runtime_lock, utc_now, validate_identifier
 from write_artifact import write_validated
+from inspect_recovery import validate_checkpoint_binding
+from task_state_contract import EXECUTION_IDENTITY_FIELDS, validate_execution_identity
 
 
 def main() -> int:
@@ -42,12 +44,27 @@ def main() -> int:
                     if supplied_task_revision != current_task_revision:
                         raise ValueError("checkpoint.task_revision does not match task state")
                     payload["task_revision"] = current_task_revision
-                current_attempt = task_state.get("attempt_id")
-                if isinstance(current_attempt, str) and current_attempt:
-                    supplied_attempt = payload.get("attempt_id", current_attempt)
-                    if supplied_attempt != current_attempt:
-                        raise ValueError("checkpoint.attempt_id does not match task state")
-                    payload["attempt_id"] = current_attempt
+                for field in EXECUTION_IDENTITY_FIELDS:
+                    current_identity = task_state.get(field)
+                    if isinstance(current_identity, str) and current_identity:
+                        supplied_identity = payload.get(field, current_identity)
+                        if supplied_identity != current_identity:
+                            raise ValueError(f"checkpoint.{field} does not match task state")
+                        payload[field] = current_identity
+                current_hashes = task_state.get("input_artifact_hashes")
+                if current_hashes is not None:
+                    supplied_hashes = payload.get("input_artifact_hashes", current_hashes)
+                    if supplied_hashes != current_hashes:
+                        raise ValueError("checkpoint.input_artifact_hashes do not match task state")
+                    payload["input_artifact_hashes"] = current_hashes
+                binding_errors = validate_checkpoint_binding(task_state, payload)
+                if binding_errors:
+                    raise ValueError("checkpoint binding is inconsistent: " + "; ".join(binding_errors))
+                lease_path = task_state_path.parent / "lease.json"
+                queue_path = root / "runtime" / "queue.json"
+                lease = read_object(lease_path) if lease_path.is_file() else None
+                queue = read_object(queue_path) if queue_path.is_file() else None
+                validate_execution_identity(task_state, lease, queue)
             workspace = capture_workspace(
                 root.parent,
                 expected_files=payload.get("files_modified", []),

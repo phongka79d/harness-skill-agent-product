@@ -8,6 +8,8 @@
     "owner_pid": {"type": "integer", "minimum": 1},
     "owner_identity": {"type": "string", "minLength": 1},
     "run_id": {"type": "string", "minLength": 1},
+    "attempt_id": {"type": "string", "minLength": 1},
+    "dispatch_id": {"type": "string", "minLength": 1},
     "acquired_at": {"type": "string", "minLength": 1},
     "last_heartbeat": {"type": "string", "minLength": 1},
     "lease_seconds": {"type": "integer", "minimum": 1},

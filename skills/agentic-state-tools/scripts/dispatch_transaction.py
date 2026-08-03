@@ -104,16 +104,21 @@ def _validate_idempotent_retry(
     for field in immutable_fields:
         if existing.get(field) != dispatch.get(field):
             raise ValueError(f"idempotency key conflicts with existing dispatch field: {field}")
-    for field in ("run_id", "attempt_id"):
-        if dispatch.get(field) is not None and dispatch.get(field) != existing.get(field):
+    binding_fields = (*EXECUTION_IDENTITY_FIELDS, "plan_revision", "worktree_path", "branch_name", "input_artifact_hashes")
+    for field in binding_fields:
+        submitted = dispatch.get(field)
+        effective = submitted if submitted is not None else task.get(field)
+        if effective is None:
+            effective = existing.get(field)
+        if existing.get(field) is not None and effective != existing.get(field):
             raise ValueError(f"idempotency key conflicts with existing dispatch field: {field}")
     expected_published_revision = expected_task_revision + 1
     if existing.get("task_revision") != expected_published_revision:
         raise ValueError("idempotency key conflicts with a different task revision")
     if task.get("revision") != existing.get("task_revision"):
         raise ValueError("idempotent dispatch task state revision no longer matches the published envelope")
-    for field in (*EXECUTION_IDENTITY_FIELDS, "plan_revision", "worktree_path", "branch_name", "input_artifact_hashes"):
-        if task.get(field) != existing.get(field):
+    for field in binding_fields:
+        if task.get(field) is not None and existing.get(field) != task.get(field):
             raise ValueError(f"idempotent dispatch {field} does not match task state")
 
 
@@ -169,8 +174,6 @@ def persist_dispatch(
                     "owner": str(existing.get("selected_owner", dispatch["selected_owner"])),
                     "owner_pid": os.getpid(),
                     "owner_identity": str(existing.get("selected_owner", dispatch["selected_owner"])),
-                    "run_id": str(existing.get("run_id")),
-                    "attempt_id": str(existing.get("attempt_id")),
                     "task_revision": repair_revision,
                     "acquired_at": utc_now(),
                     "last_heartbeat": utc_now(),
@@ -178,6 +181,11 @@ def persist_dispatch(
                     "expires_at": lease_expiry(300),
                     "idempotency_key": idempotency_key,
                 }
+                for field in EXECUTION_IDENTITY_FIELDS:
+                    value = existing.get(field, existing_task.get(field))
+                    if value is not None:
+                        repair_lease[field] = str(value)
+                validate_execution_identity(existing_task, repair_lease, None)
                 write_validated(project_root, f"work/{task_id}/lease.json", repair_lease, LEASE_SCHEMA)
             return existing
         if queue.get("revision") != expected_queue_revision:

@@ -6,11 +6,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from write_artifact import write_validated  # noqa: E402
+import reissue_task_attempt  # noqa: E402
+from update_task_state import synchronize_queue  # noqa: E402
 
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +35,22 @@ def run_script(name: str, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 class ContractHardeningTests(unittest.TestCase):
+    def test_queued_transition_synchronizes_queue_enum_and_revision(self) -> None:
+        queue = {
+            "schema_version": 1,
+            "queue_id": "Q-1",
+            "revision": 3,
+            "tasks": [{"task_id": "T-1", "queue_state": "READY", "execution_mode": "SYNC", "dependency_snapshot": {"depends_on": [], "accepted_task_ids": []}, "scope_snapshot": {"write_scope": []}, "owner": "executor", "revision": 1}],
+            "task_states": [{"task_id": "T-1", "status": "READY", "revision": 1}],
+            "dispatches": [],
+        }
+        result = synchronize_queue(queue, {"task_id": "T-1", "status": "QUEUED", "revision": 2})
+        self.assertEqual(result["revision"], 4)
+        self.assertEqual(result["tasks"][0]["queue_state"], "DISPATCHED")
+        self.assertEqual(result["tasks"][0]["revision"], 2)
+        self.assertEqual(result["task_states"][0]["status"], "QUEUED")
+        self.assertEqual(result["task_states"][0]["revision"], 2)
+
     def write_json(self, path: Path, value: dict[str, object]) -> Path:
         path.write_text(json.dumps(value), encoding="utf-8")
         return path
@@ -107,6 +126,37 @@ class ContractHardeningTests(unittest.TestCase):
             self.assertEqual(state["previous_revision"], 2)
             self.assertEqual(state["progress"], 100)
             self.assertEqual(state["result_summary"], "complete")
+
+    def test_rich_heartbeat_and_checkpoint_persist_all_execution_bindings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self.initialize_task(project)
+            running = self.write_json(project / "running-rich.json", {"task_id": "T-ID-1", "status": "RUNNING", "expected_revision": 1})
+            self.assertEqual(run_script("update_task_state.py", "--project-root", str(project), "--input", str(running)).returncode, 0)
+            heartbeat = self.write_json(project / "heartbeat-rich.json", {"task_id": "T-ID-1", "owner": "executor", "lease_seconds": 60})
+            self.assertEqual(run_script("record_heartbeat.py", "--project-root", str(project), "--input", str(heartbeat)).returncode, 0)
+            lease = json.loads((project / ".agent/work/T-ID-1/lease.json").read_text(encoding="utf-8"))
+            self.assertEqual({field: lease[field] for field in ("run_id", "attempt_id", "dispatch_id")}, {field: self.identity()[field] for field in ("run_id", "attempt_id", "dispatch_id")})
+            checkpoint = self.write_json(project / "checkpoint-rich.json", {"task_id": "T-ID-1", "current_step": "verify", "pending_steps": []})
+            self.assertEqual(run_script("create_checkpoint.py", "--project-root", str(project), "--input", str(checkpoint)).returncode, 0)
+            saved = json.loads((project / ".agent/work/T-ID-1/checkpoint.json").read_text(encoding="utf-8"))
+            for field in ("run_id", "attempt_id", "dispatch_id"):
+                self.assertEqual(saved[field], self.identity()[field])
+            self.assertEqual(saved["task_revision"], 2)
+            self.assertEqual(saved["input_artifact_hashes"], self.identity()["input_artifact_hashes"])
+
+            lease["dispatch_id"] = "DISPATCH-WRONG"
+            (project / ".agent/work/T-ID-1/lease.json").write_text(json.dumps(lease), encoding="utf-8")
+            rejected_checkpoint = self.write_json(
+                project / "checkpoint-wrong-lease.json",
+                {"task_id": "T-ID-1", "current_step": "verify", "pending_steps": []},
+            )
+            checkpoint_result = run_script("create_checkpoint.py", "--project-root", str(project), "--input", str(rejected_checkpoint))
+            self.assertNotEqual(checkpoint_result.returncode, 0)
+            self.assertIn("dispatch_id", checkpoint_result.stderr)
+            rejected = run_script("record_heartbeat.py", "--project-root", str(project), "--input", str(heartbeat))
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("dispatch_id", rejected.stderr)
 
     def test_immutable_identity_changes_are_rejected_without_writing(self) -> None:
         immutable_changes = {
@@ -330,6 +380,14 @@ class ContractHardeningTests(unittest.TestCase):
                 {field: current_state[field] for field in ("run_id", "attempt_id", "dispatch_id")},
                 {"run_id": "RUN-2", "attempt_id": "ATTEMPT-2", "dispatch_id": "DISPATCH-2"},
             )
+            updated_queue = json.loads(queue_path.read_text(encoding="utf-8"))
+            task_entry = next(item for item in updated_queue["tasks"] if item.get("task_id") == "T-ID-1")
+            state_entry = next(item for item in updated_queue["task_states"] if item.get("task_id") == "T-ID-1")
+            active_dispatch = next(item for item in updated_queue["dispatches"] if item.get("dispatch_id") == "DISPATCH-2")
+            self.assertEqual(task_entry["revision"], current_state["revision"])
+            self.assertEqual(state_entry["revision"], current_state["revision"])
+            self.assertEqual(active_dispatch["task_revision"], current_state["revision"])
+            self.assertEqual(json.loads((project / ".agent/work/T-ID-1/lease.json").read_text(encoding="utf-8"))["task_revision"], current_state["revision"])
 
     def test_reissue_rejects_identity_reuse_from_dispatch_history(self) -> None:
         for field, value in (("new_run_id", "RUN-1"), ("new_attempt_id", "ATTEMPT-1"), ("new_dispatch_id", "DISPATCH-1")):
@@ -367,6 +425,10 @@ class ContractHardeningTests(unittest.TestCase):
                 "input_revisions": {"task": 1, "queue": 0},
                 "approval_references": [],
                 "evidence": {"reason": "retry identity", "architecture_owner": "primary-agent"},
+                "plan_revision": 4,
+                "worktree_path": "C:/work/T-DISPATCH-RETRY",
+                "branch_name": "agent/T-DISPATCH-RETRY-r4",
+                "input_artifact_hashes": {"plan": "b" * 64},
                 "idempotency_key": "dispatch-retry-identity",
             },
         )
@@ -398,6 +460,60 @@ class ContractHardeningTests(unittest.TestCase):
             result = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(retry_path), "--deployment", str(DEPLOYMENT_PATH))
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("attempt_id", result.stderr)
+
+    def test_dispatch_retry_accepts_omitted_legacy_bindings_and_rejects_changed_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            dispatch_path = self._prepare_dispatch_retry(project)
+            first = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch_path), "--deployment", str(DEPLOYMENT_PATH))
+            self.assertEqual(first.returncode, 0, first.stderr)
+
+            retry = json.loads(dispatch_path.read_text(encoding="utf-8"))
+            retry_result = run_script(
+                "dispatch_task.py", "--project-root", str(project), "--input", str(self.write_json(project / "retry.json", retry)), "--deployment", str(DEPLOYMENT_PATH)
+            )
+            self.assertEqual(retry_result.returncode, 0, retry_result.stderr)
+
+            retry["plan_revision"] = 99
+            changed = self.write_json(project / "retry-plan-conflict.json", retry)
+            result = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(changed), "--deployment", str(DEPLOYMENT_PATH))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("plan_revision", result.stderr)
+
+    def test_reissue_failure_restores_events_snapshot_and_runtime_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self._prepare_reissue_project(project)
+            payload = self.write_json(
+                project / "reissue-failure.json",
+                {"task_id": "T-ID-1", "reason": "append failure", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2", "expected_revision": 1},
+            )
+            root = project / ".agent"
+            before = {name: (root / name).read_bytes() for name in ("runtime/events.jsonl", "runtime/state.json", "checklist.md")}
+            before_task = json.loads((root / "work/T-ID-1/task-state.json").read_text(encoding="utf-8"))
+            before_queue = json.loads((root / "runtime/queue.json").read_text(encoding="utf-8"))
+            before_lease = json.loads((root / "work/T-ID-1/lease.json").read_text(encoding="utf-8"))
+            original_append = reissue_task_attempt.append_event_for_root
+            calls = 0
+
+            def fail_second_append(runtime_root, event):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("controlled append failure")
+                return original_append(runtime_root, event)
+
+            with patch.object(reissue_task_attempt, "append_event_for_root", side_effect=fail_second_append), patch.object(
+                sys, "argv", ["reissue_task_attempt.py", "--project-root", str(project), "--input", str(payload)]
+            ):
+                self.assertEqual(reissue_task_attempt.main(), 1)
+
+            self.assertEqual(json.loads((root / "work/T-ID-1/task-state.json").read_text(encoding="utf-8")), before_task)
+            self.assertEqual(json.loads((root / "runtime/queue.json").read_text(encoding="utf-8")), before_queue)
+            self.assertEqual(json.loads((root / "work/T-ID-1/lease.json").read_text(encoding="utf-8")), before_lease)
+            for name, content in before.items():
+                self.assertEqual((root / name).read_bytes(), content)
+            self.assertIn("FAILED", (root / "work/T-ID-1/operations.jsonl").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

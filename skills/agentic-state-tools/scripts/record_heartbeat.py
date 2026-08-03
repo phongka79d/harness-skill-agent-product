@@ -21,6 +21,7 @@ from runtime_utils import (
     validate_identifier,
 )
 from write_artifact import write_validated
+from task_state_contract import EXECUTION_IDENTITY_FIELDS, validate_execution_identity
 
 
 SCHEMA = Path(__file__).resolve().parents[1] / "schemas/lease.schema.json"
@@ -29,8 +30,11 @@ SCHEMA = Path(__file__).resolve().parents[1] / "schemas/lease.schema.json"
 def normalize(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("heartbeat payload must be an object")
-    for field in ("task_id", "owner", "run_id"):
+    for field in ("task_id", "owner"):
         if not isinstance(payload.get(field), str) or not payload[field].strip():
+            raise ValueError(f"heartbeat.{field} must be a non-empty string")
+    for field in EXECUTION_IDENTITY_FIELDS:
+        if field in payload and (not isinstance(payload[field], str) or not payload[field].strip()):
             raise ValueError(f"heartbeat.{field} must be a non-empty string")
     seconds = payload.get("lease_seconds")
     if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds <= 0:
@@ -58,9 +62,24 @@ def main() -> int:
 
             lease_path = task_path.parent / "lease.json"
             existing = read_object(lease_path) if lease_path.is_file() else None
+            identity: dict[str, str] = {}
+            for field in EXECUTION_IDENTITY_FIELDS:
+                expected = task_state.get(field)
+                supplied = payload.get(field)
+                if expected is not None:
+                    if supplied is not None and supplied != expected:
+                        raise ValueError(f"heartbeat {field} does not match task state")
+                    identity[field] = str(expected)
+                elif supplied is not None:
+                    identity[field] = str(supplied)
+            if "run_id" not in identity:
+                raise ValueError("heartbeat.run_id must be supplied for a legacy task state")
             if existing:
-                for field in ("owner", "run_id"):
-                    if existing.get(field) != payload[field]:
+                if existing.get("owner") != payload["owner"]:
+                    raise ValueError("lease identity mismatch for owner")
+                validate_execution_identity(task_state, existing, None)
+                for field in EXECUTION_IDENTITY_FIELDS:
+                    if field in identity and existing.get(field) != identity[field]:
                         raise ValueError(f"lease identity mismatch for {field}")
                 acquired_at = existing.get("acquired_at")
             else:
@@ -69,13 +88,14 @@ def main() -> int:
             lease = {
                 "task_id": payload["task_id"],
                 "owner": payload["owner"],
-                "run_id": payload["run_id"],
+                **identity,
+                "task_revision": task_state.get("revision"),
                 "acquired_at": acquired_at,
                 "last_heartbeat": now,
                 "lease_seconds": payload["lease_seconds"],
                 "expires_at": lease_expiry(payload["lease_seconds"]),
                 "owner_pid": existing.get("owner_pid", os.getpid()) if existing else os.getpid(),
-                "owner_identity": existing.get("owner_identity", f"{payload['owner']}:{payload['run_id']}") if existing else f"{payload['owner']}:{payload['run_id']}",
+                "owner_identity": existing.get("owner_identity", f"{payload['owner']}:{identity['run_id']}") if existing else f"{payload['owner']}:{identity['run_id']}",
             }
             target = write_validated(
                 args.project_root,
@@ -89,7 +109,7 @@ def main() -> int:
                     "type": "HEARTBEAT_RECORDED",
                     "actor": args.actor,
                     "task_id": payload["task_id"],
-                    "run_id": payload["run_id"],
+                    "run_id": identity["run_id"],
                     "data": {"expires_at": lease["expires_at"], "owner": payload["owner"]},
                 },
             )

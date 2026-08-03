@@ -102,15 +102,14 @@ def validate_checkpoint_binding(task: dict, checkpoint: dict) -> list[str]:
     if checkpoint.get("task_id") != task.get("task_id"):
         errors.append("checkpoint task_id does not match task state")
     task_revision = checkpoint.get("task_revision")
-    if task_revision is not None and task_revision != task.get("revision"):
+    if "revision" in task and task_revision != task.get("revision"):
         errors.append("checkpoint task revision does not match task state")
-    checkpoint_attempt = checkpoint.get("attempt_id")
-    task_attempt = task.get("attempt_id")
-    if checkpoint_attempt is not None and task_attempt is not None and checkpoint_attempt != task_attempt:
-        errors.append("checkpoint attempt_id does not match task state")
+    for field in ("run_id", "attempt_id", "dispatch_id"):
+        if field in task and checkpoint.get(field) != task.get(field):
+            errors.append(f"checkpoint {field} does not match task state")
     checkpoint_hashes = checkpoint.get("input_artifact_hashes")
     task_hashes = task.get("input_artifact_hashes")
-    if checkpoint_hashes is not None:
+    if task_hashes is not None:
         if not isinstance(checkpoint_hashes, dict) or not isinstance(task_hashes, dict):
             errors.append("checkpoint input artifact hashes cannot be verified")
         elif checkpoint_hashes != task_hashes:
@@ -124,12 +123,12 @@ def validate_lease_binding(task: dict, lease: dict) -> list[str]:
     errors: list[str] = []
     if lease.get("task_id") != task.get("task_id"):
         errors.append("lease task_id does not match task state")
-    if "revision" in task and lease.get("task_revision") is not None and lease.get("task_revision") != task.get("revision"):
+    if "revision" in task and lease.get("task_revision") != task.get("revision"):
         errors.append("lease task revision does not match task state")
     for field in ("run_id", "attempt_id", "dispatch_id"):
         expected = task.get(field)
         actual = lease.get(field)
-        if expected is not None and actual is not None and actual != expected:
+        if expected is not None and actual != expected:
             errors.append(f"lease {field} does not match task state")
     if not isinstance(lease.get("owner_identity"), str) or not lease["owner_identity"].strip():
         errors.append("lease owner_identity is missing")
