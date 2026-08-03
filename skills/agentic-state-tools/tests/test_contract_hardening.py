@@ -223,6 +223,25 @@ class ContractHardeningTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertIn("TASK_REISSUE_REJECTED", result.stderr)
 
+    def test_reissue_accepts_cli_only_expected_revision_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self._prepare_reissue_project(project)
+            reissue = self.write_json(project / "reissue-cli-only.json", {"task_id": "T-ID-1", "reason": "stale executor", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2"})
+            result = run_script("reissue_task_attempt.py", "--project-root", str(project), "--input", str(reissue), "--expected-revision", "1")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            updated = json.loads((project / ".agent/work/T-ID-1/task-state.json").read_text(encoding="utf-8"))
+            self.assertEqual(updated["revision"], 2)
+
+    def test_reissue_rejects_conflicting_cli_and_payload_revisions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self._prepare_reissue_project(project)
+            reissue = self.write_json(project / "reissue-conflict.json", {"task_id": "T-ID-1", "reason": "stale executor", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2", "expected_revision": 2})
+            result = run_script("reissue_task_attempt.py", "--project-root", str(project), "--input", str(reissue), "--expected-revision", "1")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("TASK_REISSUE_REJECTED", result.stderr)
+
     def test_reissue_changes_all_durable_execution_bindings_together(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)

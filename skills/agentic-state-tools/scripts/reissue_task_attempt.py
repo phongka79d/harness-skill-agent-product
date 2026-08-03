@@ -34,13 +34,19 @@ LEASE_SCHEMA = ROOT / "schemas/lease.schema.json"
 ALLOWED_STATUSES = {"REPAIR_REQUIRED", "STALE", "RECOVERY_PENDING"}
 
 
-def _validate_payload(payload: object) -> dict[str, Any]:
+def _validate_payload(payload: object, cli_expected_revision: int | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("attempt reissue must be an object")
-    errors = validate(payload, read_object(SCHEMA))
+    normalized = dict(payload)
+    if cli_expected_revision is not None:
+        payload_expected_revision = normalized.get("expected_revision")
+        if payload_expected_revision is not None and payload_expected_revision != cli_expected_revision:
+            raise ValueError("--expected-revision does not match payload.expected_revision")
+        normalized["expected_revision"] = cli_expected_revision
+    errors = validate(normalized, read_object(SCHEMA))
     if errors:
         raise ValueError("invalid attempt reissue: " + "; ".join(errors))
-    return dict(payload)
+    return normalized
 
 
 def _replace_identity(record: dict[str, Any], task_id: str, identity: dict[str, str]) -> None:
@@ -57,11 +63,9 @@ def main() -> int:
     args = parser.parse_args()
     target = None
     try:
-        payload = _validate_payload(read_payload(args.input))
+        payload = _validate_payload(read_payload(args.input), args.expected_revision)
         task_id = payload["task_id"]
-        expected_revision = args.expected_revision if args.expected_revision is not None else payload.get("expected_revision")
-        if args.expected_revision is not None and payload.get("expected_revision") is not None and payload["expected_revision"] != args.expected_revision:
-            raise ValueError("--expected-revision does not match payload.expected_revision")
+        expected_revision = payload["expected_revision"]
         with runtime_lock(args.project_root) as root:
             task_path = root / "work" / task_id / "task-state.json"
             queue_path = root / "runtime" / "queue.json"
