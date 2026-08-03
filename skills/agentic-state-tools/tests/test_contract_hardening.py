@@ -16,6 +16,8 @@ from write_artifact import write_validated  # noqa: E402
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_ROOT / "scripts"
 SCHEMAS = SKILL_ROOT / "schemas"
+DEPLOYMENT_PATH = SKILL_ROOT.parent / "agentic-configuration" / "config" / "deployment.test.json"
+EXECUTOR_MODEL = json.loads(DEPLOYMENT_PATH.read_text(encoding="utf-8"))["model_ids"]["implementation"]
 
 
 def run_script(name: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -315,6 +317,61 @@ class ContractHardeningTests(unittest.TestCase):
             self.assertEqual(appended["task_revision"], updated["revision"])
             self.assertNotEqual(appended["idempotency_key"], current_dispatch["idempotency_key"])
             self.assertNotEqual(appended["operation_id"], current_dispatch["operation_id"])
+
+    def _prepare_dispatch_retry(self, project: Path) -> Path:
+        self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+        task = {
+            "task_id": "T-DISPATCH-RETRY",
+            "title": "dispatch retry identity",
+            "status": "QUEUED",
+            "revision": 1,
+            "previous_revision": 0,
+            "updated_at": "2026-08-03T00:00:00Z",
+        }
+        write_validated(str(project), "work/T-DISPATCH-RETRY/task-state.json", task, SCHEMAS / "task-state.schema.json")
+        return self.write_json(
+            project / "dispatch.json",
+            {
+                "dispatch_id": "DISPATCH-RETRY",
+                "task_id": "T-DISPATCH-RETRY",
+                "agent_role": "agent-executor",
+                "selected_mode": "SYNC",
+                "selected_owner": "primary-agent",
+                "selected_model": EXECUTOR_MODEL,
+                "input_revisions": {"task": 1, "queue": 0},
+                "approval_references": [],
+                "evidence": {"reason": "retry identity", "architecture_owner": "primary-agent"},
+                "idempotency_key": "dispatch-retry-identity",
+            },
+        )
+
+    def test_dispatch_retry_rejects_conflicting_supplied_run_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            dispatch_path = self._prepare_dispatch_retry(project)
+            first = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch_path), "--deployment", str(DEPLOYMENT_PATH))
+            self.assertEqual(first.returncode, 0, first.stderr)
+            retry = json.loads(dispatch_path.read_text(encoding="utf-8"))
+            retry["run_id"] = "RUN-CONFLICT"
+            retry_path = self.write_json(project / "retry-run-conflict.json", retry)
+
+            result = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(retry_path), "--deployment", str(DEPLOYMENT_PATH))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("run_id", result.stderr)
+
+    def test_dispatch_retry_rejects_conflicting_supplied_attempt_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            dispatch_path = self._prepare_dispatch_retry(project)
+            first = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch_path), "--deployment", str(DEPLOYMENT_PATH))
+            self.assertEqual(first.returncode, 0, first.stderr)
+            retry = json.loads(dispatch_path.read_text(encoding="utf-8"))
+            retry["attempt_id"] = "ATTEMPT-CONFLICT"
+            retry_path = self.write_json(project / "retry-attempt-conflict.json", retry)
+
+            result = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(retry_path), "--deployment", str(DEPLOYMENT_PATH))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("attempt_id", result.stderr)
 
 
 if __name__ == "__main__":

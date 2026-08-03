@@ -104,6 +104,9 @@ def _validate_idempotent_retry(
     for field in immutable_fields:
         if existing.get(field) != dispatch.get(field):
             raise ValueError(f"idempotency key conflicts with existing dispatch field: {field}")
+    for field in ("run_id", "attempt_id"):
+        if dispatch.get(field) is not None and dispatch.get(field) != existing.get(field):
+            raise ValueError(f"idempotency key conflicts with existing dispatch field: {field}")
     expected_published_revision = expected_task_revision + 1
     if existing.get("task_revision") != expected_published_revision:
         raise ValueError("idempotency key conflicts with a different task revision")
