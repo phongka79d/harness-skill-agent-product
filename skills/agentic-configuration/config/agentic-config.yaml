@@ -7,7 +7,7 @@
       "skill": "agentic-brainstorm-facilitator",
       "role": "brainstorm_facilitator",
       "dispatch_kind": "model",
-      "model_dispatch": "5.6-Luna-XHigh",
+      "model_ref": "analysis",
       "capabilities": ["goal_clarification", "options_analysis", "risk_identification"],
       "forbidden": ["source_code_editing", "runtime_state_mutation", "architecture_approval"]
     },
@@ -15,7 +15,7 @@
       "skill": "agentic-plan-architect",
       "role": "plan_architect",
       "dispatch_kind": "model",
-      "model_dispatch": "5.6-Luna-XHigh",
+      "model_ref": "planning",
       "capabilities": ["planning_contracts", "dependency_decomposition", "traceability"],
       "forbidden": ["source_code_editing", "plan_approval", "runtime_state_mutation"]
     },
@@ -23,7 +23,7 @@
       "skill": "agentic-plan-reviewer",
       "role": "plan_reviewer",
       "dispatch_kind": "model",
-      "model_dispatch": "5.6-Luna-XHigh",
+      "model_ref": "review",
       "capabilities": ["dependency_analysis", "scope_review", "risk_review"],
       "forbidden": ["source_code_editing", "plan_mutation", "architecture_approval"]
     },
@@ -31,7 +31,7 @@
       "skill": "agentic-explorer",
       "role": "explorer",
       "dispatch_kind": "model",
-      "model_dispatch": "5.6-Luna-XHigh",
+      "model_ref": "exploration",
       "capabilities": ["repository_reading", "code_tracing", "evidence_gathering"],
       "forbidden": ["source_code_editing", "runtime_state_mutation", "architecture_decision"]
     },
@@ -39,7 +39,7 @@
       "skill": "agentic-context-builder",
       "role": "context_builder",
       "dispatch_kind": "model",
-      "model_dispatch": "5.6-Luna-XHigh",
+      "model_ref": "context",
       "capabilities": ["bounded_context", "scope_filtering", "secret_redaction"],
       "forbidden": ["architecture_decision", "source_code_editing", "full_repository_scan"]
     },
@@ -47,7 +47,7 @@
       "skill": "agentic-implementer",
       "role": "executor",
       "dispatch_kind": "model",
-      "model_dispatch": "5.6-Luna-High",
+      "model_ref": "implementation",
       "capabilities": ["long_code_generation", "testing", "repository_editing"],
       "forbidden": ["architecture_decision", "task_review", "scope_expansion", "self_approval"]
     },
@@ -55,7 +55,7 @@
       "skill": "agentic-task-reviewer",
       "role": "task_reviewer",
       "dispatch_kind": "model",
-      "model_dispatch": "5.6-Luna-XHigh",
+      "model_ref": "review",
       "capabilities": ["evidence_review", "rubric_scoring", "scope_verification"],
       "forbidden": ["source_code_editing", "canonical_review_editing", "self_approval"]
     },
@@ -63,7 +63,7 @@
       "skill": "agentic-batch-reviewer",
       "role": "batch_reviewer",
       "dispatch_kind": "model",
-      "model_dispatch": "5.6-Luna-XHigh",
+      "model_ref": "review",
       "capabilities": ["integration_review", "regression_review", "recovery_readiness"],
       "forbidden": ["source_code_editing", "direct_repair", "architecture_approval"]
     },
@@ -71,7 +71,7 @@
       "skill": "agentic-runtime-recovery",
       "role": "runtime_recovery",
       "dispatch_kind": "model",
-      "model_dispatch": "5.6-Luna-XHigh",
+      "model_ref": "recovery",
       "capabilities": ["recovery_inspection", "side_effect_reconciliation", "lease_analysis"],
       "forbidden": ["unverified_resume", "source_code_editing", "side_effect_retry"]
     },
@@ -79,7 +79,7 @@
       "skill": "agentic-dashboard",
       "role": "dashboard",
       "dispatch_kind": "model",
-      "model_dispatch": "5.6-Luna-XHigh",
+      "model_ref": "observability",
       "capabilities": ["read_only_observability", "redaction", "runtime_projection"],
       "forbidden": ["runtime_state_mutation", "canonical_artifact_writes"]
     },
@@ -87,7 +87,6 @@
       "skill": "agentic-state-tools",
       "role": "state_tools",
       "dispatch_kind": "script",
-      "model_dispatch": null,
       "capabilities": ["schema_validation", "atomic_runtime_writes", "event_persistence"],
       "forbidden": ["subjective_architecture_decisions", "unvalidated_writes"]
     },
@@ -95,19 +94,19 @@
       "skill": "agentic-configuration",
       "role": "configuration",
       "dispatch_kind": "primary",
-      "model_dispatch": null,
       "capabilities": ["config_validation", "routing_resolution", "policy_inspection"],
       "forbidden": ["automatic_config_mutation", "runtime_state_writes"]
     }
   },
   "model_policy": {
-    "allowed_models": ["5.6-Luna-High", "5.6-Luna-XHigh"],
-    "forbidden_models": ["5.6-Luna-Normal", "5.6-Sol", "5.6-Terra"],
-    "immutable_forbidden_models": ["5.6-Luna-Normal", "5.6-Sol", "5.6-Terra"],
+    "allowed_model_refs": ["analysis", "planning", "review", "exploration", "context", "implementation", "recovery", "observability"],
+    "forbidden_model_refs": ["forbidden-legacy", "forbidden-unsafe"],
+    "immutable_forbidden_model_refs": ["forbidden-legacy", "forbidden-unsafe"],
     "selection_mode": "role_configured_only"
   },
   "execution": {
     "default_mode": "auto",
+    "async_execution_enabled": false,
     "max_parallel_tasks": 3,
     "max_execution_attempts": 2,
     "max_repair_cycles": 3,
@@ -120,7 +119,11 @@
     "destructive_operation": "user",
     "architecture_change": "user",
     "production_deployment": "user",
-    "batch_commit": "user"
+    "batch_commit": "user",
+    "plan_approval": "primary_agent",
+    "batch_approval": "primary_agent",
+    "next_batch": "user",
+    "rollback": "primary_agent"
   },
   "runtime": {
     "state_backend": "filesystem",
@@ -162,6 +165,7 @@
     "max_reference_documents": 8,
     "max_examples": 3,
     "max_review_history_items": 5,
+    "max_bytes": 262144,
     "allow_full_repository_scan": false
   },
   "security": {

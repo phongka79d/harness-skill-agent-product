@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "project_root", "worktree_root", "entries"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "project_root": {"type": "string", "minLength": 1},
+    "worktree_root": {"type": "string", "minLength": 1},
+    "entries": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/entry"}
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": ["task_id", "revision", "path", "branch", "base_commit", "status", "lease", "created_at", "updated_at"],
+      "properties": {
+        "task_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
+        "revision": {"type": "integer", "minimum": 1},
+        "path": {"type": "string", "minLength": 1},
+        "branch": {"type": "string", "minLength": 1},
+        "base_commit": {"type": "string", "pattern": "^[0-9a-fA-F]{40,64}$"},
+        "status": {"type": "string", "enum": ["ACTIVE", "STALE", "RECOVERY_PENDING", "MERGED", "ACCEPTED", "CANCELLED"]},
+        "lease": {
+          "type": ["object", "null"],
+          "properties": {"expires_at": {"type": "string", "minLength": 1}},
+          "required": ["expires_at"],
+          "additionalProperties": false
+        },
+        "created_at": {"type": "string", "minLength": 1},
+        "updated_at": {"type": "string", "minLength": 1},
+        "reclaimed_from": {"type": ["string", "null"]},
+        "stale_at": {"type": "string"},
+        "stale_reason": {"type": "string"},
+        "conflict_artifact": {"type": "string"},
+        "merged_into": {"type": "string"},
+        "cleaned_at": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

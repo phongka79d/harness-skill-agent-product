@@ -19,12 +19,15 @@ from reconcile_queue import reconcile_queue  # noqa: E402
 CONFIG_VALUE = json.loads(
     (SKILL_ROOT.parent / "agentic-configuration" / "config" / "agentic-config.yaml").read_text(encoding="utf-8")
 )
-EXECUTOR_MODEL = CONFIG_VALUE["agents"]["agent-executor"]["model_dispatch"]
-REVIEW_MODEL = CONFIG_VALUE["agents"]["agent-review"]["model_dispatch"]
+DEPLOYMENT_PATH = SKILL_ROOT.parent / "agentic-configuration" / "config" / "deployment.test.json"
+DEPLOYMENT_VALUE = json.loads(DEPLOYMENT_PATH.read_text(encoding="utf-8"))
+EXECUTOR_MODEL = DEPLOYMENT_VALUE["model_ids"][CONFIG_VALUE["agents"]["agent-executor"]["model_ref"]]
+REVIEW_MODEL = DEPLOYMENT_VALUE["model_ids"][CONFIG_VALUE["agents"]["agent-review"]["model_ref"]]
 
 
 def run_script(name: str, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     process_env = os.environ.copy()
+    process_env["AGENTIC_DEPLOYMENT_CONFIG"] = str(DEPLOYMENT_PATH)
     if env:
         process_env.update(env)
     return subprocess.run(
@@ -44,6 +47,187 @@ def write_json(directory: str, name: str, value: object) -> Path:
 
 
 class OrchestrationHarnessTests(unittest.TestCase):
+    def _dispatch_project(self, directory: str, task_id: str) -> Path:
+        project = Path(directory) / f"project-{task_id}"
+        initialized = run_script("init_runtime.py", "--project-root", str(project))
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+        task = write_json(directory, f"{task_id}-task.json", {"task_id": task_id, "title": task_id, "status": "READY", "depends_on": [], "write_scope": []})
+        updated = run_script("update_task_state.py", "--project-root", str(project), "--input", str(task))
+        self.assertEqual(updated.returncode, 0, updated.stderr)
+        return project
+
+    def test_dispatch_persists_durable_runtime_state_and_run_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+            task = write_json(directory, "durable-task.json", {"task_id": "T-DURABLE", "title": "Durable", "status": "READY", "write_scope": ["src/durable.py"], "depends_on": []})
+            self.assertEqual(run_script("update_task_state.py", "--project-root", str(project), "--input", str(task)).returncode, 0)
+            dispatch = write_json(
+                directory,
+                "durable-dispatch.json",
+                {
+                    "dispatch_id": "DSP-DURABLE",
+                    "task_id": "T-DURABLE",
+                    "agent_role": "agent-executor",
+                    "selected_mode": "SYNC",
+                    "selected_owner": "primary-agent",
+                    "selected_model": EXECUTOR_MODEL,
+                    "input_revisions": {"task": 1, "queue": 0},
+                    "approval_references": [],
+                    "evidence": {"reason": "durable test", "architecture_owner": "primary-agent"},
+                    "idempotency_key": "dispatch-T-DURABLE-r1",
+                },
+            )
+            result = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            envelope = json.loads(result.stdout)
+            self.assertTrue(envelope["run_id"])
+            self.assertTrue(envelope["attempt_id"])
+            runtime = project / ".agent"
+            self.assertTrue((runtime / "runtime/queue.json").is_file())
+            self.assertTrue((runtime / "runtime/graph.json").is_file())
+            self.assertTrue((runtime / "work/T-DURABLE/lease.json").is_file())
+            self.assertTrue((runtime / "work/T-DURABLE/operations.jsonl").is_file())
+            queue = json.loads((runtime / "runtime/queue.json").read_text(encoding="utf-8"))
+            self.assertEqual(queue["dispatches"][0]["dispatch_id"], "DSP-DURABLE")
+            task_state = json.loads((runtime / "work/T-DURABLE/task-state.json").read_text(encoding="utf-8"))
+            self.assertEqual(task_state["status"], "QUEUED_SYNC")
+            operations = [json.loads(line) for line in (runtime / "work/T-DURABLE/operations.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([operation["phase"] for operation in operations], ["PREPARE", "COMMIT"])
+            self.assertEqual(operations[-1]["commit_marker"], operations[-1]["operation_id"])
+            events = (runtime / "runtime/events.jsonl").read_text(encoding="utf-8")
+            self.assertIn("TASK_QUEUED_SYNC", events)
+
+    def test_async_dispatch_requires_manager_validated_isolation_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_value = json.loads((SKILL_ROOT.parent / "agentic-configuration/config/agentic-config.yaml").read_text(encoding="utf-8"))
+            config_value["execution"]["async_execution_enabled"] = True
+            config_value["version_control"]["isolated_worktrees"] = True
+            config = write_json(directory, "async-config.json", config_value)
+            project = self._dispatch_project(directory, "T-ASYNC-PROOF")
+            dispatch = write_json(
+                directory,
+                "async-dispatch.json",
+                {
+                    "dispatch_id": "DSP-ASYNC-PROOF",
+                    "task_id": "T-ASYNC-PROOF",
+                    "agent_role": "agent-executor",
+                    "selected_mode": "ASYNC",
+                    "selected_owner": "primary-agent",
+                    "selected_model": EXECUTOR_MODEL,
+                    "input_revisions": {"task": 1, "queue": 0},
+                    "approval_references": [],
+                    "evidence": {"reason": "async proof", "architecture_owner": "primary-agent"},
+                },
+            )
+            result = run_script(
+                "dispatch_task.py",
+                "--project-root", str(project),
+                "--input", str(dispatch),
+                env={"AGENTIC_CONFIG_FILE": str(config)},
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("isolation", result.stderr.lower())
+
+    def test_dispatch_is_idempotent_for_same_task_revision_and_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = self._dispatch_project(directory, "T-IDEMPOTENT")
+            dispatch = write_json(
+                directory,
+                "idempotent-dispatch.json",
+                {
+                    "dispatch_id": "DSP-IDEMPOTENT",
+                    "task_id": "T-IDEMPOTENT",
+                    "agent_role": "agent-executor",
+                    "selected_mode": "SYNC",
+                    "selected_owner": "primary-agent",
+                    "selected_model": EXECUTOR_MODEL,
+                    "input_revisions": {"task": 1, "queue": 0},
+                    "approval_references": [],
+                    "evidence": {"reason": "idempotency test", "architecture_owner": "primary-agent"},
+                    "idempotency_key": "same-operation",
+                },
+            )
+            first = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch))
+            second = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch))
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertEqual(json.loads(first.stdout)["run_id"], json.loads(second.stdout)["run_id"])
+            queue = json.loads((project / ".agent/runtime/queue.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(queue["dispatches"]), 1)
+
+    def test_dispatch_rejects_conflicting_payload_for_reused_idempotency_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = self._dispatch_project(directory, "T-IDEMPOTENCY-CONFLICT")
+            dispatch = write_json(
+                directory,
+                "idempotency-conflict.json",
+                {
+                    "dispatch_id": "DSP-IDEMPOTENCY-CONFLICT",
+                    "task_id": "T-IDEMPOTENCY-CONFLICT",
+                    "agent_role": "agent-executor",
+                    "selected_mode": "SYNC",
+                    "selected_owner": "primary-agent",
+                    "selected_model": EXECUTOR_MODEL,
+                    "input_revisions": {"task": 1, "queue": 0},
+                    "approval_references": [],
+                    "evidence": {"reason": "idempotency conflict", "architecture_owner": "primary-agent"},
+                    "idempotency_key": "same-idempotency-key",
+                },
+            )
+            first = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch))
+            self.assertEqual(first.returncode, 0, first.stderr)
+            conflicting = json.loads(dispatch.read_text(encoding="utf-8"))
+            conflicting["selected_owner"] = "different-owner"
+            conflicting["evidence"]["architecture_owner"] = "different-owner"
+            conflicting_path = write_json(directory, "conflicting-dispatch.json", conflicting)
+            second = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(conflicting_path))
+            self.assertNotEqual(second.returncode, 0)
+            self.assertIn("idempotency", second.stderr.lower())
+
+    def test_retry_repairs_a_missing_lease_after_partial_dispatch_persistence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = self._dispatch_project(directory, "T-REPAIR-DISPATCH")
+            dispatch = write_json(
+                directory,
+                "repair-dispatch.json",
+                {
+                    "dispatch_id": "DSP-REPAIR-DISPATCH",
+                    "task_id": "T-REPAIR-DISPATCH",
+                    "agent_role": "agent-executor",
+                    "selected_mode": "SYNC",
+                    "selected_owner": "primary-agent",
+                    "selected_model": EXECUTOR_MODEL,
+                    "input_revisions": {"task": 1, "queue": 0},
+                    "approval_references": [],
+                    "evidence": {"reason": "repair dispatch", "architecture_owner": "primary-agent"},
+                    "idempotency_key": "repair-dispatch-once",
+                },
+            )
+            first = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch))
+            self.assertEqual(first.returncode, 0, first.stderr)
+            lease_path = project / ".agent/work/T-REPAIR-DISPATCH/lease.json"
+            lease_path.unlink()
+            retry = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch))
+            self.assertEqual(retry.returncode, 0, retry.stderr)
+            self.assertTrue(lease_path.is_file())
+
+    def test_dispatch_rejects_parallel_capacity_overflow(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_value = json.loads((SKILL_ROOT.parent / "agentic-configuration/config/agentic-config.yaml").read_text(encoding="utf-8"))
+            config_value["execution"]["max_parallel_tasks"] = 1
+            config = write_json(directory, "capacity-config.json", config_value)
+            first_project = self._dispatch_project(directory, "T-CAPACITY-1")
+            second_task = write_json(directory, "T-CAPACITY-2-task.json", {"task_id": "T-CAPACITY-2", "title": "T-CAPACITY-2", "status": "READY", "depends_on": [], "write_scope": []})
+            self.assertEqual(run_script("update_task_state.py", "--project-root", str(first_project), "--input", str(second_task)).returncode, 0)
+            first_dispatch = write_json(directory, "capacity-first.json", {"dispatch_id": "DSP-CAP-1", "task_id": "T-CAPACITY-1", "agent_role": "agent-executor", "selected_mode": "SYNC", "selected_owner": "primary-agent", "selected_model": EXECUTOR_MODEL, "input_revisions": {"task": 1, "queue": 0}, "approval_references": [], "evidence": {"architecture_owner": "primary-agent"}})
+            second_dispatch = write_json(directory, "capacity-second.json", {"dispatch_id": "DSP-CAP-2", "task_id": "T-CAPACITY-2", "agent_role": "agent-executor", "selected_mode": "SYNC", "selected_owner": "primary-agent", "selected_model": EXECUTOR_MODEL, "input_revisions": {"task": 1, "queue": 1}, "approval_references": [], "evidence": {"architecture_owner": "primary-agent"}})
+            first = run_script("dispatch_task.py", "--project-root", str(first_project), "--input", str(first_dispatch), env={"AGENTIC_CONFIG_FILE": str(config)})
+            second = run_script("dispatch_task.py", "--project-root", str(first_project), "--input", str(second_dispatch), env={"AGENTIC_CONFIG_FILE": str(config)})
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertNotEqual(second.returncode, 0)
+            self.assertIn("max_parallel_tasks", second.stderr)
+
     def test_queue_graph_and_dispatch_schemas_exist(self) -> None:
         for name in ("queue.schema.json", "graph.schema.json", "dispatch.schema.json"):
             self.assertTrue((SCHEMAS / name).is_file(), name)
@@ -155,15 +339,16 @@ class OrchestrationHarnessTests(unittest.TestCase):
                     "dispatch_id": "DSP-001",
                     "task_id": "T-001",
                     "agent_role": "agent-executor",
-                    "selected_mode": "ASYNC",
+                    "selected_mode": "SYNC",
                     "selected_owner": "primary-agent",
                     "selected_model": EXECUTOR_MODEL,
-                    "input_revisions": {"task": 2, "queue": 4},
+                    "input_revisions": {"task": 1, "queue": 0},
                     "approval_references": ["APR-001"],
                     "evidence": {"reason": "independent task", "architecture_owner": "primary-agent"},
                 },
             )
-            result = run_script("dispatch_task.py", "--input", str(dispatch))
+            project = self._dispatch_project(directory, "T-001")
+            result = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch))
             self.assertEqual(result.returncode, 0, result.stderr)
             output = json.loads(result.stdout)
             self.assertEqual(output["dispatch_id"], "DSP-001")
@@ -174,7 +359,7 @@ class OrchestrationHarnessTests(unittest.TestCase):
             "dispatch_id": "DSP-MODEL",
             "task_id": "T-MODEL",
             "agent_role": "agent-executor",
-            "selected_mode": "ASYNC",
+            "selected_mode": "SYNC",
             "selected_owner": "primary-agent",
             "input_revisions": {"task": 1},
             "approval_references": ["APR-MODEL"],
@@ -182,13 +367,21 @@ class OrchestrationHarnessTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             for index, (model, role) in enumerate(((EXECUTOR_MODEL, "agent-executor"), (REVIEW_MODEL, "agent-review"))):
-                dispatch = write_json(directory, f"allowed-{index}.json", {**base, "agent_role": role, "selected_model": model})
-                result = run_script("dispatch_task.py", "--input", str(dispatch))
+                task_id = f"T-MODEL-{index}"
+                project = self._dispatch_project(directory, task_id)
+                dispatch = write_json(directory, f"allowed-{index}.json", {**base, "task_id": task_id, "agent_role": role, "selected_model": model, "input_revisions": {"task": 1, "queue": 0}})
+                result = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch))
                 self.assertEqual(result.returncode, 0, result.stderr)
 
-            for index, model in enumerate(CONFIG_VALUE["model_policy"]["forbidden_models"]):
-                dispatch = write_json(directory, f"forbidden-{index}.json", {**base, "selected_model": model})
-                result = run_script("dispatch_task.py", "--input", str(dispatch))
+            forbidden_models = [
+                DEPLOYMENT_VALUE["model_ids"][ref]
+                for ref in CONFIG_VALUE["model_policy"]["forbidden_model_refs"]
+            ]
+            for index, model in enumerate(forbidden_models):
+                task_id = f"T-FORBIDDEN-{index}"
+                project = self._dispatch_project(directory, task_id)
+                dispatch = write_json(directory, f"forbidden-{index}.json", {**base, "task_id": task_id, "selected_model": model, "input_revisions": {"task": 1, "queue": 0}})
+                result = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch))
                 self.assertNotEqual(result.returncode, 0, model)
                 self.assertIn("selected_model", result.stderr)
 
@@ -201,8 +394,9 @@ class OrchestrationHarnessTests(unittest.TestCase):
             config_value = json.loads(
                 (SKILL_ROOT.parent / "agentic-configuration" / "config" / "agentic-config.yaml").read_text(encoding="utf-8")
             )
-            config_value["agents"]["agent-executor"]["model_dispatch"] = REVIEW_MODEL
+            config_value["agents"]["agent-executor"]["model_ref"] = config_value["agents"]["agent-review"]["model_ref"]
             config = write_json(directory, "agentic-config.json", config_value)
+            project = self._dispatch_project(directory, "T-CONFIG")
             dispatch = write_json(
                 directory,
                 "dispatch.json",
@@ -210,16 +404,17 @@ class OrchestrationHarnessTests(unittest.TestCase):
                     "dispatch_id": "DSP-CONFIG",
                     "task_id": "T-CONFIG",
                     "agent_role": "agent-executor",
-                    "selected_mode": "ASYNC",
+                    "selected_mode": "SYNC",
                     "selected_owner": "primary-agent",
                     "selected_model": EXECUTOR_MODEL,
-                    "input_revisions": {"task": 1},
+                    "input_revisions": {"task": 1, "queue": 0},
                     "approval_references": ["APR-CONFIG"],
                     "evidence": {"reason": "central config", "architecture_owner": "primary-agent"},
                 },
             )
             result = run_script(
                 "dispatch_task.py",
+                "--project-root", str(project),
                 "--input",
                 str(dispatch),
                 env={"AGENTIC_CONFIG_FILE": str(config)},
@@ -236,15 +431,16 @@ class OrchestrationHarnessTests(unittest.TestCase):
                     "dispatch_id": "BAD ID",
                     "task_id": "T-BAD",
                     "agent_role": "agent-executor",
-                    "selected_mode": "ASYNC",
+                    "selected_mode": "SYNC",
                     "selected_owner": "primary-agent",
                     "selected_model": EXECUTOR_MODEL,
-                    "input_revisions": {"task": 1},
+                    "input_revisions": {"task": 1, "queue": 0},
                     "approval_references": ["APR-BAD"],
                     "evidence": {"architecture_owner": "primary-agent"},
                 },
             )
-            result = run_script("dispatch_task.py", "--input", str(dispatch))
+            project = self._dispatch_project(directory, "T-BAD")
+            result = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch))
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("schema", result.stderr.lower())
 
@@ -331,6 +527,11 @@ class OrchestrationHarnessTests(unittest.TestCase):
         self.assertIn("INVALID_QUEUE_COLLECTION:tasks", result["contradictions"])
         self.assertIn("INVALID_QUEUE_COLLECTION:dispatches", result["contradictions"])
         self.assertIn("INVALID_QUEUE_COLLECTION:locks", result["contradictions"])
+
+    def test_queue_reconciliation_rejects_missing_canonical_fields(self) -> None:
+        result = reconcile_queue({})
+        self.assertFalse(result["valid"])
+        self.assertTrue(any(item.startswith("MISSING_QUEUE_FIELD:") for item in result["contradictions"]))
 
     def test_queue_reconciliation_validates_supplied_config(self) -> None:
         config = json.loads(

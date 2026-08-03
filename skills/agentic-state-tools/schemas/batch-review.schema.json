@@ -12,6 +12,7 @@
         "type": "object",
         "required": ["name", "result", "evidence"],
         "properties": {
+          "kind": {"type": "string", "enum": ["integration", "regression", "scope"]},
           "name": {"type": "string", "minLength": 1},
           "result": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED", "NOT_RUN"]},
           "evidence": {"type": "string", "minLength": 1}
@@ -19,12 +20,14 @@
       }
     },
     "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "evidence", "required_change"], "properties": {"severity": {"type": "string", "enum": ["CRITICAL", "MAJOR", "MINOR", "SUGGESTION"]}, "evidence": {"type": "string", "minLength": 1}, "required_change": {"type": "string", "minLength": 1}, "resolved": {"type": "boolean"}}}},
+    "hard_fail_checks": {"type": "array", "items": {"type": "object", "required": ["rule", "triggered", "evidence"], "properties": {"rule": {"type": "string", "minLength": 1}, "triggered": {"type": "boolean"}, "evidence": {"type": "string", "minLength": 1}}}},
     "scope_valid": {"type": "boolean"},
     "blocking_reasons": {"type": "array", "items": {"type": "string"}},
     "created_at": {"type": "string", "minLength": 1},
     "revision": {"type": "integer", "minimum": 1},
     "reviewer": {"type": "string", "minLength": 1},
     "resolved_rubric": {"type": "object"},
+    "review_contract": {"$ref": "review-contract.schema.json"},
     "legacy_migration": {"type": "boolean"},
     "verdict": {"type": "string", "enum": ["PASS", "REPAIR_REQUIRED", "BLOCKED", "PLAN_INVALID"]}
   }

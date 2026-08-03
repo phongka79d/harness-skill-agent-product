@@ -16,6 +16,7 @@ from runtime_utils import (
     ensure_runtime_initialized,
     iter_events,
     runtime_lock,
+    validate_event_preconditions,
     write_json_atomic,
 )
 
@@ -28,6 +29,7 @@ def rebuild_state_for_root(root: Path) -> dict:
         if event_id in seen:
             raise ValueError(f"duplicate event_id: {event_id}")
         seen.add(event_id)
+        validate_event_preconditions(root, event)
         state = apply_event(state, event)
     write_json_atomic(root / "runtime" / "state.json", state)
     return state

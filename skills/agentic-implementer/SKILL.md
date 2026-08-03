@@ -7,7 +7,7 @@ description: Use when an approved task has explicit scope and accepted dependenc
 
 Read the shared `agentic-engineering-wiki` package before this role's workflow.
 
-Read [agentic-configuration](../agentic-configuration/SKILL.md) and use `agents.agent-executor.model_dispatch` for this role.
+Read [agentic-configuration](../agentic-configuration/SKILL.md) and resolve `agents.agent-executor.model_ref` through the deployment overlay for this role.
 
 Use this skill for the configured Implement role. The Primary Agent owns architecture and scope; this skill performs the assigned implementation.
 

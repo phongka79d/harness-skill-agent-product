@@ -15,6 +15,8 @@ SCHEMAS = SKILL_ROOT / "schemas"
 sys.path.insert(0, str(SCRIPTS))
 
 from create_context import normalize  # noqa: E402
+from create_batch_review import derive_verdict  # noqa: E402
+from secret_scanner import context_security_errors  # noqa: E402
 
 
 def run_script(name: str, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -181,6 +183,15 @@ class StateToolsTests(unittest.TestCase):
             payload = self.write_json(
                 project / "handoff.json",
                 {
+                    "run_id": "RUN-T-001",
+                    "attempt_id": "ATTEMPT-T-001",
+                    "from_role": "executor",
+                    "to_role": "task-reviewer",
+                    "task_revision": 1,
+                    "plan_revision": 1,
+                    "input_artifact_hashes": {"task": "a" * 64},
+                    "output_artifact_hashes": {"handoff": "b" * 64},
+                    "evidence": {"summary": "implementation verified"},
                     "status": "COMPLETE",
                     "summary": "implemented",
                     "files_read": [],
@@ -198,6 +209,13 @@ class StateToolsTests(unittest.TestCase):
             self.assertEqual(handoff["task_id"], "T-001")
             self.assertIn("handoff_id", handoff)
             self.assertEqual(handoff["revision"], 1)
+
+            incomplete_identity = self.write_json(
+                project / "incomplete-identity.json",
+                {key: value for key, value in json.loads(payload.read_text(encoding="utf-8")).items() if key != "attempt_id"},
+            )
+            result = run_script("create_handoff.py", "--project-root", str(project), "--task-id", "T-003", "--input", str(incomplete_identity))
+            self.assertNotEqual(result.returncode, 0)
 
             incomplete = self.write_json(
                 project / "incomplete-handoff.json",
@@ -431,6 +449,7 @@ class StateToolsTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             saved = json.loads((project / ".agent/work/B-001/review.json").read_text(encoding="utf-8"))
             self.assertEqual(saved["verdict"], "PASS")
+            self.assertRegex(saved.get("artifact_hash", ""), r"^[0-9a-f]{64}$")
 
     def test_batch_review_blocks_when_task_review_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -450,6 +469,164 @@ class StateToolsTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             saved = json.loads((project / ".agent/work/B-001/review.json").read_text(encoding="utf-8"))
             self.assertEqual(saved["verdict"], "BLOCKED")
+
+    def test_batch_review_requires_every_task_from_canonical_batch_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+            batch_dir = project / ".agent/work/B-COMPLETE"
+            batch_dir.mkdir(parents=True)
+            (batch_dir / "batch-contract.json").write_text(
+                json.dumps({"batch_id": "B-COMPLETE", "tasks": [f"T-{index}" for index in range(1, 6)]}),
+                encoding="utf-8",
+            )
+            review_ids = []
+            for index in range(1, 6):
+                task_dir = project / ".agent/work" / f"T-{index}"
+                task_dir.mkdir(parents=True)
+                review_id = f"REV-T-{index}"
+                review_ids.append(review_id)
+                (task_dir / "review.json").write_text(
+                    json.dumps({"review_id": review_id, "task_id": f"T-{index}", "verdict": "PASS"}),
+                    encoding="utf-8",
+                )
+                (task_dir / "task-state.json").write_text(
+                    json.dumps({"task_id": f"T-{index}", "status": "ACCEPTED"}),
+                    encoding="utf-8",
+                )
+            batch = self.write_json(
+                project / "batch-complete.json",
+                {
+                    "batch_id": "B-COMPLETE",
+                    "legacy_migration": True,
+                    "task_reviews": review_ids[:4],
+                    "integration_checks": [{"name": "tests", "result": "PASS", "evidence": "all tests passed"}],
+                    "findings": [],
+                },
+            )
+            result = run_script("create_batch_review.py", "--project-root", str(project), "--input", str(batch))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            saved = json.loads((batch_dir / "review.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(saved["verdict"], "PASS")
+            self.assertTrue(any("T-5" in reason for reason in saved["blocking_reasons"]))
+
+    def test_nonlegacy_batch_rejects_a_task_review_with_the_wrong_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / ".agent"
+            task_dir = root / "work" / "T-1"
+            batch_dir = root / "work" / "B-1"
+            task_dir.mkdir(parents=True)
+            batch_dir.mkdir(parents=True)
+            task_contract = {
+                "project_profile": "personal",
+                "profile_hash": "a" * 64,
+                "task_type": "backend",
+                "risk_flags": {},
+                "review_type": "task",
+                "rubric_id": "TASK-1",
+                "rubric_version": "1",
+                "rubric_hash": "b" * 64,
+                "review_policy_version": "1",
+            }
+            review_contract = {**task_contract, "rubric_id": "TASK-2"}
+            (batch_dir / "batch-contract.json").write_text(json.dumps({"batch_id": "B-1", "tasks": ["T-1"]}), encoding="utf-8")
+            (task_dir / "task-state.json").write_text(json.dumps({"task_id": "T-1", "status": "ACCEPTED", "review_contract": task_contract}), encoding="utf-8")
+            (task_dir / "review.json").write_text(json.dumps({"review_id": "REV-T-1", "task_id": "T-1", "verdict": "PASS", "review_contract": review_contract}), encoding="utf-8")
+            verdict, reasons = derive_verdict(
+                root,
+                {
+                    "batch_id": "B-1",
+                    "task_reviews": ["REV-T-1"],
+                    "integration_checks": [
+                        {"kind": "integration", "result": "PASS"},
+                        {"kind": "regression", "result": "PASS"},
+                        {"kind": "scope", "result": "PASS"},
+                    ],
+                    "findings": [],
+                    "scope_valid": True,
+                    "legacy_migration": False,
+                    "rubric_verdict": "PASS",
+                },
+            )
+            self.assertNotEqual(verdict, "PASS")
+            self.assertTrue(any("contract" in reason.lower() for reason in reasons), reasons)
+
+    def test_batch_review_applies_canonical_weighted_rubric_before_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+            batch_dir = project / ".agent/work/B-SCORED"
+            batch_dir.mkdir(parents=True)
+            (batch_dir / "batch-contract.json").write_text(
+                json.dumps({"batch_id": "B-SCORED", "tasks": ["T-1"]}),
+                encoding="utf-8",
+            )
+            task_dir = project / ".agent/work/T-1"
+            task_dir.mkdir(parents=True)
+            (task_dir / "review.json").write_text(
+                json.dumps({"review_id": "REV-T-1", "task_id": "T-1", "verdict": "PASS"}),
+                encoding="utf-8",
+            )
+            (task_dir / "task-state.json").write_text(
+                json.dumps({"task_id": "T-1", "status": "ACCEPTED"}),
+                encoding="utf-8",
+            )
+            rubric_result = run_script(
+                "resolve_rubric.py",
+                "--profile", "personal",
+                "--task-type", "standard",
+                "--review-type", "batch",
+                "--risk-flags", "{}",
+            )
+            self.assertEqual(rubric_result.returncode, 0, rubric_result.stderr)
+            rubric = json.loads(rubric_result.stdout)
+            (batch_dir / "batch-contract.json").write_text(
+                json.dumps({
+                    "batch_id": "B-SCORED",
+                    "tasks": ["T-1"],
+                    "review_contract": {
+                        "project_profile": rubric["profile_id"],
+                        "profile_hash": rubric["profile_hash"],
+                        "task_type": rubric["task_type"],
+                        "risk_flags": rubric["risk_flags"],
+                        "review_type": rubric["review_type"],
+                        "rubric_id": rubric["rubric_id"],
+                        "rubric_version": rubric["rubric_version"],
+                        "rubric_hash": rubric["rubric_hash"],
+                        "review_policy_version": rubric["review_policy_version"],
+                    },
+                }),
+                encoding="utf-8",
+            )
+            criteria = [
+                {
+                    "id": criterion_id,
+                    "score": 0,
+                    "weight": next(item["weight"] for item in rubric["criteria"] if item["id"] == criterion_id),
+                    "mandatory": next(item["mandatory"] for item in rubric["criteria"] if item["id"] == criterion_id),
+                    "minimum_score": next(item["minimum_score"] for item in rubric["criteria"] if item["id"] == criterion_id),
+                    "applicability": "APPLICABLE",
+                    "evidence": "verification failed",
+                }
+                for criterion_id in rubric["resolved_weights"]
+            ]
+            batch = self.write_json(
+                project / "batch-scored.json",
+                {
+                    "batch_id": "B-SCORED",
+                    "task_reviews": ["REV-T-1"],
+                    "criteria": criteria,
+                    "integration_checks": [{"kind": "integration", "name": "tests", "result": "PASS", "evidence": "tests ran"}, {"kind": "regression", "name": "regression", "result": "PASS", "evidence": "tests ran"}, {"kind": "scope", "name": "scope", "result": "PASS", "evidence": "scope checked"}],
+                    "findings": [],
+                    "hard_fail_checks": [{"rule": rule, "triggered": False, "evidence": "rule checked"} for rule in rubric["hard_fail_rules"]],
+                    "resolved_rubric": rubric,
+                },
+            )
+            result = run_script("create_batch_review.py", "--project-root", str(project), "--input", str(batch))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            saved = json.loads((batch_dir / "review.json").read_text(encoding="utf-8"))
+            self.assertNotEqual(saved["verdict"], "PASS")
+            self.assertTrue(any("rubric" in reason.lower() for reason in saved["blocking_reasons"]))
 
     def test_context_script_generates_validated_task_context(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -489,6 +666,34 @@ class StateToolsTests(unittest.TestCase):
             )
             result = run_script("create_context.py", "--project-root", str(project), "--input", str(context))
             self.assertNotEqual(result.returncode, 0, result.stderr)
+
+    def test_context_builder_rejects_secret_values_and_sensitive_paths_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+            context = self.write_json(
+                project / "secret-context.json",
+                {
+                    "task": {"task_id": "T-SECRET", "objective": "inspect repository"},
+                    "required_documents": [],
+                    "code_context": {
+                        "files_to_read": [".env", "src/app.py"],
+                        "symbols_to_inspect": [],
+                        "existing_patterns": [],
+                        "file_contents": {"src/app.py": "Authorization: Bearer token-value"},
+                    },
+                    "constraints": {"inherited": [], "task_specific": [{"password": "plain-secret"}]},
+                    "review_history": [],
+                },
+            )
+            result = run_script("create_context.py", "--project-root", str(project), "--input", str(context))
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertIn("sensitive", result.stderr.lower())
+            self.assertFalse((project / ".agent/work/T-SECRET/context.json").exists())
+
+    def test_secret_scanner_rejects_sensitive_key_containers(self) -> None:
+        errors = context_security_errors({"api_keys": ["opaque-token"]}, max_bytes=4096)
+        self.assertTrue(any("sensitive-key" in error for error in errors), errors)
 
     def test_context_script_uses_central_budget_when_payload_omits_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -663,6 +868,21 @@ class StateToolsTests(unittest.TestCase):
             result = run_script("update_task_state.py", "--project-root", str(project), "--input", str(accepted))
             self.assertNotEqual(result.returncode, 0, result.stderr)
 
+    def test_direct_acceptance_event_requires_passing_review_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+            queued = self.write_json(project / "queued.json", {"task_id": "T-001", "title": "Example", "status": "QUEUED"})
+            self.assertEqual(run_script("update_task_state.py", "--project-root", str(project), "--input", str(queued)).returncode, 0)
+            event = self.write_json(
+                project / "accepted-event.json",
+                {"type": "TASK_ACCEPTED", "actor": "task-reviewer", "task_id": "T-001", "data": {"review_id": "REV-MISSING"}},
+            )
+            result = run_script("append_event.py", "--project-root", str(project), "--input", str(event))
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertIn("accept", result.stderr.lower())
+            self.assertEqual(run_script("validate_state.py", "--project-root", str(project)).returncode, 0)
+
     def test_end_to_end_runtime_workflow_generates_consistent_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)
@@ -725,6 +945,15 @@ class StateToolsTests(unittest.TestCase):
             handoff = self.write_json(
                 project / "handoff.json",
                 {
+                    "run_id": "RUN-T-001",
+                    "attempt_id": "ATTEMPT-T-001",
+                    "from_role": "executor",
+                    "to_role": "task-reviewer",
+                    "task_revision": 3,
+                    "plan_revision": 1,
+                    "input_artifact_hashes": {"task": "a" * 64},
+                    "output_artifact_hashes": {"handoff": "b" * 64},
+                    "evidence": {"summary": "implementation verified"},
                     "status": "COMPLETE",
                     "summary": "implemented",
                     "files_read": ["src/example.py"],

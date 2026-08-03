@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from state_machine import load_state_machine, event_status_map, status_event_map
+from state_machine import load_state_machine, event_status_map, status_event_map, transition_map
 
 
 class RuntimeNotInitializedError(FileNotFoundError):
@@ -437,6 +437,72 @@ def validate_event(event: dict[str, Any]) -> None:
         raise ValueError("event.data must be an object")
 
 
+def validate_event_preconditions(root: Path, event: dict[str, Any]) -> None:
+    """Validate artifact-backed gates before an event becomes immutable history."""
+
+    event_type = event.get("type")
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    if event_type == "REVIEW_CREATED":
+        task_id = event.get("task_id")
+        review_id = data.get("review_id")
+        if not isinstance(task_id, str) or not isinstance(review_id, str) or not review_id.strip():
+            raise ValueError("REVIEW_CREATED requires task_id and review_id evidence")
+        review_path = root / "work" / task_id / "review.json"
+        if not review_path.is_file() or read_object(review_path).get("review_id") != review_id:
+            raise ValueError("REVIEW_CREATED requires a matching persisted review artifact")
+        return
+    if event_type == "BATCH_REVIEW_CREATED":
+        batch_id = data.get("batch_id")
+        review_id = data.get("review_id")
+        if not isinstance(batch_id, str) or not isinstance(review_id, str) or not review_id.strip():
+            raise ValueError("BATCH_REVIEW_CREATED requires batch_id and review_id evidence")
+        review_path = root / "work" / batch_id / "review.json"
+        if not review_path.is_file() or read_object(review_path).get("review_id") != review_id:
+            raise ValueError("BATCH_REVIEW_CREATED requires a matching persisted batch review artifact")
+        return
+    if event_type == "CHECKPOINT_CREATED":
+        task_id = event.get("task_id")
+        checkpoint_id = data.get("checkpoint_id")
+        if not isinstance(task_id, str) or not isinstance(checkpoint_id, str):
+            raise ValueError("CHECKPOINT_CREATED requires task_id and checkpoint_id evidence")
+        checkpoint_path = root / "work" / task_id / "checkpoint.json"
+        if not checkpoint_path.is_file() or read_object(checkpoint_path).get("checkpoint_id") != checkpoint_id:
+            raise ValueError("CHECKPOINT_CREATED requires a matching persisted checkpoint artifact")
+        return
+    if event_type == "APPROVAL_RECORDED":
+        approval_id = data.get("approval_id")
+        target_type = data.get("target_type")
+        target_id = data.get("target_id")
+        if not all(isinstance(item, str) and item.strip() for item in (approval_id, target_type, target_id)):
+            raise ValueError("APPROVAL_RECORDED requires approval target evidence")
+        approval_path = root / "approvals" / f"{target_type}-{target_id}.json"
+        if not approval_path.is_file() or read_object(approval_path).get("approval_id") != approval_id:
+            raise ValueError("APPROVAL_RECORDED requires a matching persisted approval artifact")
+        return
+    if event_type != "TASK_ACCEPTED":
+        return
+    task_id = event.get("task_id")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise ValueError("TASK_ACCEPTED requires task_id")
+    review_id = data.get("review_id")
+    if not isinstance(review_id, str) or not review_id.strip():
+        raise ValueError("TASK_ACCEPTED requires review_id evidence")
+    review_path = root / "work" / task_id / "review.json"
+    if not review_path.is_file():
+        raise ValueError("TASK_ACCEPTED requires a persisted review artifact")
+    review = read_object(review_path)
+    if review.get("task_id") != task_id or review.get("review_id") != review_id:
+        raise ValueError("TASK_ACCEPTED review identity does not match task")
+    if str(review.get("verdict", "")).upper() != "PASS":
+        raise ValueError("TASK_ACCEPTED requires a PASS review")
+    task_state_path = root / "work" / task_id / "task-state.json"
+    if not task_state_path.is_file():
+        raise ValueError("TASK_ACCEPTED requires persisted task state")
+    task_state = read_object(task_state_path)
+    if str(task_state.get("status", "")).upper() != "ACCEPTED" or task_state.get("review_id") != review_id:
+        raise ValueError("TASK_ACCEPTED task state is not linked to the passing review")
+
+
 def next_event_id(events: list[dict[str, Any]]) -> str:
     highest = 0
     for event in events:
@@ -447,8 +513,30 @@ def next_event_id(events: list[dict[str, Any]]) -> str:
     return f"EVT-{highest + 1:06d}"
 
 
+def validate_state_event_transition(state: dict[str, Any], event: dict[str, Any]) -> None:
+    """Reject event replay that invents an impossible task status."""
+
+    next_status = EVENT_TYPE_TO_STATUS.get(str(event.get("type", "")).upper())
+    task_id = event.get("task_id")
+    if next_status is None or not task_id:
+        return
+    statuses = state.get("task_statuses", {})
+    current_status = statuses.get(task_id)
+    if current_status is None:
+        if next_status == "ACCEPTED":
+            raise ValueError("TASK_ACCEPTED cannot be the first task state event")
+        return
+    current_status = str(current_status).upper()
+    executor_targets = transition_map("executor").get(current_status, set())
+    reviewer_targets = transition_map("reviewer").get(current_status, set())
+    if next_status not in executor_targets and next_status not in reviewer_targets:
+        raise ValueError(f"invalid replay transition: {current_status} -> {next_status}")
+
+
 def apply_event(state: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
     """Apply one valid event to the deterministic state snapshot."""
+
+    validate_state_event_transition(state, event)
 
     next_state = dict(state)
     previous_revision = int(next_state.get("revision", 0))

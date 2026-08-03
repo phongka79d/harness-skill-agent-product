@@ -34,7 +34,7 @@ def read_operation_ledger(
                 raise ValueError(f"invalid operation JSON at line {line_number}: {exc}") from exc
             if not isinstance(value, dict):
                 raise ValueError(f"operation at line {line_number} must be an object")
-            errors = validate(value, schema)
+            errors = validate(value, schema, base_path=schema_path.resolve().parent)
             if errors:
                 raise ValueError(f"invalid operation at line {line_number}: {'; '.join(errors)}")
             if value["task_id"] != task_id:

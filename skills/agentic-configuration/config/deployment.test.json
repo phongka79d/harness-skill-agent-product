@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "deployment_id": "test",
+  "version": "1",
+  "model_ids": {
+    "analysis": "test.analysis",
+    "planning": "test.planning",
+    "review": "test.review",
+    "exploration": "test.exploration",
+    "context": "test.context",
+    "implementation": "test.implementation",
+    "recovery": "test.recovery",
+    "observability": "test.observability",
+    "forbidden-legacy": "test.forbidden.legacy",
+    "forbidden-unsafe": "test.forbidden.unsafe"
+  }
+}

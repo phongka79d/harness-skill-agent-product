@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from validate_payload import validate
+from authorization import authorize
 
 
 SCHEMA_ROOT = Path(__file__).resolve().parents[1] / "schemas"
@@ -102,6 +103,7 @@ def build_rollback_plan(request: dict[str, Any], operations: list[dict[str, Any]
         "schema_version": 1,
         "plan_id": plan_id,
         "task_id": task_id,
+        "revision": 1,
         "status": "DRY_RUN",
         "classification": "ROLLBACK_PLANNED",
         "dry_run": True,
@@ -113,19 +115,34 @@ def build_rollback_plan(request: dict[str, Any], operations: list[dict[str, Any]
         "approval_id": None,
         "created_at": _timestamp(now),
     }
+    plan["plan_hash"] = hashlib.sha256(json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     _validate(plan, PLAN_SCHEMA, "rollback plan")
     return plan
 
 
-def _validate_approval(plan: dict[str, Any], approval: dict[str, Any] | None) -> str:
-    if not isinstance(approval, dict):
-        raise ApprovalRequired("rollback execution requires an approval record")
-    if approval.get("target_type") != "ROLLBACK" or approval.get("target_id") != plan.get("plan_id") or approval.get("decision") != "APPROVED":
-        raise ApprovalRequired("approval must approve this exact rollback plan")
-    approval_id = approval.get("approval_id")
-    if not isinstance(approval_id, str) or not approval_id.strip():
-        raise ApprovalRequired("approval_id is required")
-    return approval_id
+def _validate_approval(
+    plan: dict[str, Any],
+    approval: dict[str, Any] | None,
+    *,
+    now: datetime | None = None,
+    actor_id: str | None = None,
+    actor_type: str = "primary_agent",
+) -> str:
+    try:
+        return authorize(
+            "ROLLBACK",
+            {
+                "target_type": "ROLLBACK",
+                "target_id": str(plan["plan_id"]),
+                "revision": int(plan["revision"]),
+                "target_hash": str(plan["plan_hash"]),
+            },
+            approval,
+            actor={"actor_type": actor_type, "actor_id": actor_id or "primary-agent"},
+            now=now,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ApprovalRequired(str(exc)) from exc
 
 
 def execute_rollback(
@@ -135,11 +152,13 @@ def execute_rollback(
     *,
     fencing_validator: Callable[[dict[str, Any]], None] | None = None,
     now: datetime | None = None,
+    actor_id: str | None = None,
+    actor_type: str = "primary_agent",
 ) -> dict[str, Any]:
     _validate(plan, PLAN_SCHEMA, "rollback plan")
     if plan.get("status") != "DRY_RUN" or plan.get("dry_run") is not True:
         raise RollbackRequestError("executor accepts only an unexecuted DRY_RUN plan")
-    approval_id = _validate_approval(plan, approval)
+    approval_id = _validate_approval(plan, approval, now=now, actor_id=actor_id, actor_type=actor_type)
     if not isinstance(outcomes, dict):
         raise RollbackRequestError("provider outcomes must be an object keyed by action ID")
     entries: list[dict[str, Any]] = []

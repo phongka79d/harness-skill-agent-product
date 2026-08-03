@@ -9,14 +9,19 @@ from pathlib import Path
 
 from runtime_utils import read_payload, write_json_atomic
 from dispatch_contract import validate_dispatch_schema
+from dispatch_transaction import persist_dispatch
 
 CONFIG_SKILL = Path(__file__).resolve().parents[2] / "agentic-configuration"
 sys.path.insert(0, str(CONFIG_SKILL / "scripts"))
 
-from load_config import load_config, validate_dispatch_selection  # noqa: E402
+from load_config import load_config, load_deployment_config, resolve_agent, validate_dispatch_selection  # noqa: E402
 
 
-def normalize_dispatch(value: object, config: dict[str, object]) -> dict[str, object]:
+def normalize_dispatch(
+    value: object,
+    config: dict[str, object],
+    deployment: dict[str, object] | None = None,
+) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError("dispatch must be an object")
     validate_dispatch_schema(value)
@@ -24,7 +29,13 @@ def normalize_dispatch(value: object, config: dict[str, object]) -> dict[str, ob
     for field in ("dispatch_id", "task_id", "agent_role", "selected_owner", "selected_model"):
         if not isinstance(result.get(field), str) or not str(result[field]).strip():
             raise ValueError(f"dispatch.{field} must be a non-empty string")
-    validate_dispatch_selection(result, config)
+    model_reference = result.get("model_reference")
+    expected_reference = f"agents.{result['agent_role']}.model_ref"
+    template = "${deployment.model_ids[" + expected_reference + "]}"
+    if model_reference == expected_reference and result["selected_model"] == template:
+        resolved = resolve_agent(config, result["agent_role"], deployment)
+        result["selected_model"] = resolved["model_dispatch"]
+    validate_dispatch_selection(result, config, deployment)
     mode = str(result.get("selected_mode", "")).upper()
     if mode not in {"ASYNC", "SYNC"}:
         raise ValueError("dispatch.selected_mode must be ASYNC or SYNC")
@@ -44,11 +55,16 @@ def normalize_dispatch(value: object, config: dict[str, object]) -> dict[str, ob
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--project-root", required=True)
     parser.add_argument("--input", required=True)
     parser.add_argument("--output")
+    parser.add_argument("--deployment")
     args = parser.parse_args()
     try:
-        result = normalize_dispatch(read_payload(args.input), load_config())
+        config = load_config()
+        deployment = load_deployment_config(args.deployment, config)
+        result = normalize_dispatch(read_payload(args.input), config, deployment)
+        result = persist_dispatch(args.project_root, result, config, deployment)
         if args.output:
             write_json_atomic(args.output, result)
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:

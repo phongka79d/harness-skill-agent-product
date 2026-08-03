@@ -4,15 +4,32 @@
 review_id: "REV-SP-01-B01-T01"
 task_id: "SP-01-B01-T01"
 review_type: task
+review_contract:
+  project_profile: "personal"
+  profile_hash: "<sha256>"
+  task_type: "backend"
+  risk_flags: {}
+  review_type: task
+  rubric_id: "<canonical-rubric-id>"
+  rubric_version: "<version>"
+  rubric_hash: "<sha256>"
+  review_policy_version: "1"
+resolved_rubric: "the canonical resolved rubric object"
 criteria:
   - id: CORRECTNESS
     score: 4
-    weight: 25
     applicability: APPLICABLE
     evidence: "..."
+hard_fail_checks:
+  - rule: acceptance_criteria_not_met
+    triggered: false
+    evidence: "Acceptance criteria were checked against the handoff and tests."
 findings: []
-hard_fail: false
 reviewer: "task-reviewer"
 ```
 
-Scores are inputs. The deterministic scoring script calculates the weighted percentage and final verdict.
+The contract and resolved rubric are canonical. A reviewer supplies achieved scores,
+evidence, findings, and one evidence-backed `hard_fail_checks` entry for every
+canonical hard-fail rule. The deterministic scoring script calculates the weighted
+percentage and final verdict; a reviewer-provided threshold, weight, mandatory flag,
+minimum score, hard-fail policy, or verdict is not authoritative.

@@ -159,7 +159,15 @@ class ReportGapTests(unittest.TestCase):
             self.assertEqual(rubric_result.returncode, 0, rubric_result.stderr)
             rubric = json.loads(rubric_result.stdout)
             criteria = [
-                {"id": criterion_id, "score": 4, "weight": weight, "mandatory": True, "minimum_score": 3, "applicability": "APPLICABLE", "evidence": "targeted test passed"}
+                {
+                    "id": criterion_id,
+                    "score": 4,
+                    "weight": next(item["weight"] for item in rubric["criteria"] if item["id"] == criterion_id),
+                    "mandatory": next(item["mandatory"] for item in rubric["criteria"] if item["id"] == criterion_id),
+                    "minimum_score": next(item["minimum_score"] for item in rubric["criteria"] if item["id"] == criterion_id),
+                    "applicability": "APPLICABLE",
+                    "evidence": "targeted test passed",
+                }
                 for criterion_id, weight in rubric["resolved_weights"].items()
             ]
             review = {
@@ -167,6 +175,7 @@ class ReportGapTests(unittest.TestCase):
                 "task_id": "T-001",
                 "resolved_rubric": rubric,
                 "criteria": criteria,
+                "hard_fail_checks": [{"rule": rule, "triggered": False, "evidence": "rule checked"} for rule in rubric["hard_fail_rules"]],
                 "findings": [],
             }
             input_path = self.write_json(Path(directory) / "review.json", review)
@@ -178,7 +187,7 @@ class ReportGapTests(unittest.TestCase):
             invalid_path = self.write_json(Path(directory) / "invalid-review.json", review)
             result = run_script("calculate_rubric_score.py", "--input", str(invalid_path))
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("does not match resolved rubric", result.stderr)
+            self.assertIn("canonical rubric", result.stderr)
 
     def test_terminal_review_clears_action_and_owned_runtime_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -273,7 +282,7 @@ class ReportGapTests(unittest.TestCase):
             project = self.init_project(directory)
             handoff = self.write_json(
                 project / "handoff.json",
-                {"status": "NEEDS_RECONCILIATION", "summary": "workspace differs", "files_read": [], "files_changed": [], "findings": [], "implementation_details": [], "validation_results": [], "risks": ["workspace mismatch"], "next_steps": ["inspect diff"]},
+                {"run_id": "RUN-T-001", "attempt_id": "ATTEMPT-T-001", "from_role": "executor", "to_role": "runtime-recovery", "task_revision": 1, "plan_revision": 1, "input_artifact_hashes": {"task": "a" * 64}, "output_artifact_hashes": {"handoff": "b" * 64}, "evidence": {"classification": "workspace mismatch"}, "status": "NEEDS_RECONCILIATION", "summary": "workspace differs", "files_read": [], "files_changed": [], "findings": [], "implementation_details": [], "validation_results": [], "risks": ["workspace mismatch"], "next_steps": ["inspect diff"]},
             )
             result = run_script("create_handoff.py", "--project-root", str(project), "--task-id", "T-001", "--input", str(handoff))
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -294,7 +303,7 @@ class ReportGapTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             resolved = json.loads(result.stdout)
             self.assertEqual([item["task_id"] for item in resolved["runnable"]], ["T-002"])
-            self.assertEqual(resolved["runnable"][0]["execution_mode"], "ASYNC")
+            self.assertEqual(resolved["runnable"][0]["execution_mode"], "SYNC")
             self.assertIn("T-003", resolved["blocked_task_ids"])
             self.assertIn("T-004", resolved["conflicted_task_ids"])
 
@@ -302,7 +311,7 @@ class ReportGapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             approval = self.write_json(
                 Path(directory) / "approval.json",
-                {"approval_id": "APR-001", "target_type": "MASTER_PLAN", "target_id": "MP-001", "decision": "APPROVED", "approver": "primary", "evidence": "plan review passed", "created_at": "2026-08-02T00:00:00Z", "revision": 1},
+                {"approval_id": "APR-001", "target_type": "MASTER_PLAN", "target_id": "MP-001", "decision": "APPROVED", "approver": "primary-agent", "actor_type": "primary_agent", "actor_id": "primary-agent", "action": "MASTER_PLAN", "target_revision": 1, "target_hash": "0" * 64, "policy_version": "1", "expires_at": "2026-08-04T00:00:00Z", "evidence": "plan review passed", "created_at": "2026-08-02T00:00:00Z", "revision": 1},
             )
             result = run_script("validate_payload.py", "--input", str(approval), "--schema", str(SKILL_ROOT / "schemas/approval.schema.json"))
             self.assertEqual(result.returncode, 0, result.stderr)

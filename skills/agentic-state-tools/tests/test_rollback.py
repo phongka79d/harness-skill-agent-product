@@ -80,13 +80,21 @@ def request(*, destructive: bool = False, include_second: bool = False) -> dict[
     }
 
 
-def approval(plan_id: str = "RB-T-001-001") -> dict[str, object]:
+def approval(plan_id: str = "RB-T-001-001", plan: dict[str, object] | None = None) -> dict[str, object]:
+    bound_plan = plan or build_rollback_plan(request(), operations(), now=BASE_TIME)
     return {
         "approval_id": f"APR-ROLLBACK-{plan_id}-1",
         "target_type": "ROLLBACK",
         "target_id": plan_id,
         "decision": "APPROVED",
         "approver": "primary-agent",
+        "actor_type": "primary_agent",
+        "actor_id": "primary-agent",
+        "action": "ROLLBACK",
+        "target_revision": bound_plan["revision"],
+        "target_hash": bound_plan["plan_hash"],
+        "policy_version": "1",
+        "expires_at": "2026-08-03T12:00:00Z",
         "evidence": "explicit compensation approval",
     }
 
@@ -136,18 +144,40 @@ class RollbackTests(unittest.TestCase):
         with self.assertRaises(ApprovalRequired):
             execute_rollback(plan, wrong, {"COMP-001": {"status": "COMPLETED", "evidence": "provider"}}, now=BASE_TIME)
 
+    def test_rollback_approval_is_bound_to_actor_target_revision_hash_and_expiry(self) -> None:
+        plan = build_rollback_plan(request(), operations(), now=BASE_TIME)
+        forged = approval()
+        forged.update({
+            "actor_type": "user",
+            "actor_id": "different-actor",
+            "action": "ROLLBACK",
+            "target_revision": 99,
+            "target_hash": "0" * 64,
+            "policy_version": "wrong-policy",
+            "expires_at": "2000-01-01T00:00:00Z",
+        })
+        with self.assertRaises(ApprovalRequired):
+            execute_rollback(plan, forged, {"COMP-001": {"status": "COMPLETED", "evidence": "provider"}}, now=BASE_TIME)
+
+    def test_rollback_rejects_a_user_typed_approval_for_primary_only_action(self) -> None:
+        plan = build_rollback_plan(request(), operations(), now=BASE_TIME)
+        forged = approval(plan=plan)
+        forged["actor_type"] = "user"
+        with self.assertRaises(ApprovalRequired):
+            execute_rollback(plan, forged, {"COMP-001": {"status": "COMPLETED", "evidence": "provider"}}, now=BASE_TIME)
+
     def test_executor_accepts_only_a_dry_run_plan(self) -> None:
         plan = build_rollback_plan(request(), operations(), now=BASE_TIME)
         plan["status"] = "ROLLED_BACK"
         plan["dry_run"] = False
         with self.assertRaises(RollbackRequestError):
-            execute_rollback(plan, approval(), {"COMP-001": {"status": "COMPLETED", "evidence": "provider"}}, now=BASE_TIME)
+            execute_rollback(plan, approval(plan=plan), {"COMP-001": {"status": "COMPLETED", "evidence": "provider"}}, now=BASE_TIME)
 
     def test_unknown_after_completed_action_is_partial_and_escalated(self) -> None:
         plan = build_rollback_plan(request(include_second=True), operations(), now=BASE_TIME)
         ledger = execute_rollback(
             plan,
-            approval(),
+            approval(plan=plan),
             {
                 "COMP-001": {"status": "COMPLETED", "evidence": "provider reversed"},
                 "COMP-002": {"status": "UNKNOWN", "evidence": "provider timeout"},
@@ -197,7 +227,7 @@ class RollbackTests(unittest.TestCase):
 
             ledger = execute_rollback(
                 plan,
-                approval(),
+                approval(plan=plan),
                 {"COMP-001": {"status": "COMPLETED", "evidence": "provider"}},
                 fencing_validator=validate_fencing,
                 now=BASE_TIME,
@@ -209,7 +239,7 @@ class RollbackTests(unittest.TestCase):
         plan = build_rollback_plan(request(), operations(), now=BASE_TIME)
         plan_schema = json.loads((SCHEMAS / "rollback-plan.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(validate(plan, plan_schema), [])
-        ledger = execute_rollback(plan, approval(), {"COMP-001": {"status": "COMPLETED", "evidence": "provider"}}, now=BASE_TIME)
+        ledger = execute_rollback(plan, approval(plan=plan), {"COMP-001": {"status": "COMPLETED", "evidence": "provider"}}, now=BASE_TIME)
         ledger_schema = json.loads((SCHEMAS / "rollback-ledger.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(validate(ledger, ledger_schema), [])
 
@@ -231,6 +261,17 @@ class RollbackTests(unittest.TestCase):
             self.assertEqual(approved.returncode, 0, approved.stderr)
             approval_path = project / ".agent/approvals/ROLLBACK-RB-T-001-001.json"
             outcomes = write_json(project / "outcomes.json", {"COMP-001": {"status": "COMPLETED", "evidence": "provider reversed"}})
+            forged_approval = json.loads(approval_path.read_text(encoding="utf-8"))
+            forged_approval["approval_id"] = "APR-FORGED-NOT-PERSISTED"
+            forged_path = write_json(project / "forged-approval.json", forged_approval)
+            forged = run_script(
+                "execute_rollback.py",
+                "--project-root", str(project),
+                "--plan-id", "RB-T-001-001",
+                "--approval", str(forged_path),
+                "--outcomes", str(outcomes),
+            )
+            self.assertNotEqual(forged.returncode, 0)
             executed = run_script(
                 "execute_rollback.py",
                 "--project-root",

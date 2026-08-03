@@ -8,5 +8,7 @@
     {"id": "SECURITY", "score": 0, "weight": 10, "applicability": "NOT_APPLICABLE", "reason": "The task has no external input, network access, or sensitive data."}
   ],
   "findings": [],
-  "hard_fail": false
+  "hard_fail": false,
+  "legacy_migration": true,
+  "verdict": "PASS"
 }

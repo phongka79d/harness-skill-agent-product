@@ -20,7 +20,7 @@ def write_validated(
     if root.resolve() not in target.parents:
         raise ValueError("artifact path must remain inside .agent")
     schema = read_json(schema_path)
-    errors = validate(payload, schema)
+    errors = validate(payload, schema, base_path=Path(schema_path).resolve().parent)
     if errors:
         raise ValueError("; ".join(errors))
     write_json_atomic(target, payload)

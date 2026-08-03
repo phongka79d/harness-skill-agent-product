@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["project_profile", "profile_hash", "task_type", "risk_flags", "review_type", "rubric_id", "rubric_version", "rubric_hash", "review_policy_version"],
+  "properties": {
+    "project_profile": {"type": "string", "minLength": 1},
+    "profile_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "task_type": {"type": "string", "minLength": 1},
+    "risk_flags": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "architecture_change": {"type": "boolean"},
+        "authentication": {"type": "boolean"},
+        "authorization": {"type": "boolean"},
+        "database_write": {"type": "boolean"},
+        "dependency_change": {"type": "boolean"},
+        "destructive_operation": {"type": "boolean"},
+        "external_input": {"type": "boolean"},
+        "large_dataset": {"type": "boolean"},
+        "latency_sensitive": {"type": "boolean"},
+        "migration": {"type": "boolean"},
+        "network_access": {"type": "boolean"},
+        "performance_sensitive": {"type": "boolean"},
+        "public_api": {"type": "boolean"},
+        "sensitive_data": {"type": "boolean"}
+      }
+    },
+    "review_type": {"type": "string", "enum": ["task", "batch"]},
+    "rubric_id": {"type": "string", "minLength": 1},
+    "rubric_version": {"type": "string", "minLength": 1},
+    "rubric_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "review_policy_version": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false
+}

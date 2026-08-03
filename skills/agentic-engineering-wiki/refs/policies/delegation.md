@@ -5,8 +5,8 @@ The Primary Agent owns architecture, scope, delegation, conflict resolution, app
 ## Configured model routing
 
 - Read `agentic-configuration/config/agentic-config.yaml` before selecting a role or model.
-- Use `agents.agent-explorer.model_dispatch` for read-only exploration and `agents.agent-executor.model_dispatch` for bounded implementation.
-- Reject every value in `model_policy.forbidden_models` and every model outside `model_policy.allowed_models`.
+- Use `agents.agent-explorer.model_ref` for read-only exploration and `agents.agent-executor.model_ref` for bounded implementation; resolve both through the deployment overlay.
+- Reject every value in `model_policy.forbidden_model_refs` and every ref outside `model_policy.allowed_model_refs`.
 - Every dispatch record must pass the deterministic config-backed validator in `agentic-state-tools`.
 
 Explorers are read-only. Implementers do not make architecture decisions, select another task, expand scope, or approve their own work.

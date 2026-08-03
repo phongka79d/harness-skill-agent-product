@@ -29,11 +29,18 @@ def main() -> int:
     parser.add_argument("--outcomes", required=True)
     parser.add_argument("--remote-store")
     parser.add_argument("--actor", default="primary-agent")
+    parser.add_argument("--actor-type", choices=("user", "primary_agent", "agent", "service"), default="primary_agent")
     args = parser.parse_args()
     try:
         with runtime_lock(args.project_root) as root:
             plan = read_object(root / "recovery" / f"rollback-plan-{args.plan_id}.json")
             approval = read_payload(args.approval)
+            persisted_approval_path = root / "approvals" / f"ROLLBACK-{args.plan_id}.json"
+            if not persisted_approval_path.is_file():
+                raise ValueError("rollback requires a persisted approval artifact")
+            persisted_approval = read_object(persisted_approval_path)
+            if approval != persisted_approval:
+                raise ValueError("rollback approval input does not match the persisted approval artifact")
             outcomes = read_payload(args.outcomes)
             fencing_store = FileStateStore(args.remote_store) if args.remote_store else None
 
@@ -52,7 +59,7 @@ def main() -> int:
                 except (KeyError, TypeError, ValueError, OwnershipConflict) as exc:
                     raise FencingConflict(str(exc)) from exc
 
-            ledger = execute_rollback(plan, approval, outcomes, fencing_validator=fencing_validator)
+            ledger = execute_rollback(plan, approval, outcomes, fencing_validator=fencing_validator, actor_id=args.actor, actor_type=args.actor_type)
             evidence = rollback_evidence(ledger)
             ledger_relative = f"recovery/rollback-ledger-{ledger['ledger_id']}.json"
             evidence_relative = f"recovery/rollback-evidence-{evidence['evidence_id']}.json"

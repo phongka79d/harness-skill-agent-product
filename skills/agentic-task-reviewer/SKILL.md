@@ -28,8 +28,9 @@ Review evidence; do not repair implementation and do not hand-write the canonica
 4. Record every finding with severity, location, evidence, and required change.
 5. Mark a conditional criterion `NOT_APPLICABLE` only with evidence.
 6. Resolve the profile and task-type rubric with `resolve_project_profile.py` and `resolve_rubric.py`; include the returned rubric object and hash in the review payload.
-7. Submit the review payload to `agentic-state-tools`.
-8. Use the script-generated score and verdict; never override a hard fail with a high score.
+7. Provide exactly one evidence-backed `hard_fail_checks` entry for every canonical hard-fail rule; a missing or triggered check cannot pass.
+8. Submit the review payload to `agentic-state-tools`.
+9. Use the script-generated score and verdict; never override a hard fail with a high score.
 
 ## Verdict rules
 

@@ -7,7 +7,7 @@ description: Use when an assigned engineering task needs read-only repository ex
 
 Read the shared `agentic-engineering-wiki` package before this role's workflow.
 
-Read [agentic-configuration](../agentic-configuration/SKILL.md) and use `agents.agent-explorer.model_dispatch` for this role.
+Read [agentic-configuration](../agentic-configuration/SKILL.md) and resolve `agents.agent-explorer.model_ref` through the deployment overlay for this role.
 
 Use this skill for the configured Explore role. Explore only; do not implement.
 

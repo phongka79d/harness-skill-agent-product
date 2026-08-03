@@ -8,10 +8,15 @@
     "agent_role": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
     "selected_mode": {"type": "string", "enum": ["ASYNC", "SYNC"]},
     "selected_owner": {"type": "string", "minLength": 1},
-    "selected_model": {"type": "string", "minLength": 1, "description": "Must match the selected agent_role in the agentic-configuration skill config."},
+    "selected_model": {"type": "string", "minLength": 1, "description": "Must match the selected agent_role after resolving the agentic-configuration deployment overlay."},
     "input_revisions": {"type": "object"},
     "approval_references": {"type": "array", "items": {"type": "string"}},
     "evidence": {"type": "object"},
-    "status": {"type": "string", "enum": ["RECORDED"]}
+    "status": {"type": "string", "enum": ["RECORDED"]},
+    "idempotency_key": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "attempt_id": {"type": "string", "minLength": 1},
+    "task_revision": {"type": "integer", "minimum": 1},
+    "operation_id": {"type": "string", "minLength": 1}
   }
 }

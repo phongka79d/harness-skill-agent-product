@@ -11,6 +11,7 @@
     "updated_at": {"type": "string", "minLength": 1},
     "review_id": {"type": "string", "minLength": 1},
     "review_verdict": {"type": "string", "enum": ["PASS", "BLOCKED", "REPAIR_REQUIRED"]},
+    "review_contract": {"$ref": "review-contract.schema.json"},
     "next_action": {"type": "string"},
     "blockers": {"type": "array"}
   }

@@ -9,6 +9,7 @@ from pathlib import Path
 from append_event import append_event, append_event_for_root
 from calculate_rubric_score import calculate, validate_rubric_identity
 from render_checklist import render_checklist
+from review_contract import validate_rubric_against_contract
 from runtime_utils import (
     RuntimeLockedError,
     RuntimeNotInitializedError,
@@ -74,6 +75,12 @@ def main() -> int:
             existing_revision = int(read_object(existing_review_path).get("revision", 0)) if existing_review_path.is_file() else 0
 
             if isinstance(resolved_rubric, dict):
+                if payload.get("legacy_migration") is not True:
+                    task_contract = task_state.get("review_contract")
+                    if not isinstance(task_contract, dict):
+                        raise ValueError("new reviews require a pinned task review_contract")
+                    validate_rubric_against_contract(resolved_rubric, task_contract, review_type="task")
+                    payload["review_contract"] = task_contract
                 validate_rubric_identity(resolved_rubric)
                 approval_id = resolved_rubric.get("override_approval_id")
                 if approval_id:

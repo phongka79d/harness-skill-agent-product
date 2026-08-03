@@ -29,7 +29,7 @@ Read `agentic-configuration/SKILL.md` before selecting models, role capabilities
 ## Non-negotiable invariants
 
 - The Primary Agent owns architecture, scope, delegation, approval, conflict decisions, and final validation.
-- Delegated model routing is limited by `agents.*.model_dispatch` and `model_policy` in the central config; forbidden and unknown models are rejected.
+- Delegated model routing is limited by `agents.*.model_ref`, the deployment overlay, and `model_policy` in the central config; forbidden and unknown refs are rejected.
 - State changes use `agentic-state-tools`; agents do not hand-write canonical `.agent/` artifacts.
 - Unaccepted dependencies are not runnable, and uncertain side effects are not repeated automatically.
 - A score never overrides a hard fail, missing evidence, or an unresolved major finding.

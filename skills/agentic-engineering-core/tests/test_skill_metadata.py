@@ -86,6 +86,19 @@ class SkillMetadataTests(unittest.TestCase):
         self.assertIn("Inspection can return exit code `0`", behavior)
         self.assertIn("UNSAFE_TO_RESUME", behavior)
 
+    def test_review_contract_docs_describe_canonical_hard_fail_evidence(self) -> None:
+        task_contract = (SKILLS_ROOT / "agentic-task-reviewer" / "references" / "review-contract.md").read_text(encoding="utf-8")
+        batch_contract = (SKILLS_ROOT / "agentic-batch-reviewer" / "references" / "batch-contract.md").read_text(encoding="utf-8")
+        self.assertIn("hard_fail_checks", task_contract)
+        self.assertIn("hard_fail_checks", batch_contract)
+        self.assertIn("reviewer-provided verdict is not authoritative", batch_contract)
+
+    def test_state_skill_documents_authorization_worktree_and_release_gates(self) -> None:
+        body = (SKILLS_ROOT / "agentic-state-tools" / "SKILL.md").read_text(encoding="utf-8")
+        for command in ("worktree_manager.py", "merge_worktree.py", "commit_batch.py", "next_batch.py", "validate_examples.py", "package_skill.py"):
+            self.assertIn(command, body, f"agentic-state-tools: missing documented command {command}")
+        self.assertIn("hard-fail check", body.lower())
+
     def test_architecture_keeps_configuration_out_of_agent_runtime(self) -> None:
         specification = SKILLS_ROOT / "agentic_engineering_system_complete_specification.md"
         body = specification.read_text(encoding="utf-8")

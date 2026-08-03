@@ -7,7 +7,25 @@
     "target_type": {"type": "string", "enum": ["MASTER_PLAN", "SUB_PLAN", "BATCH", "TASK", "DECISION", "RISK", "RUBRIC", "PROFILE"]},
     "target_id": {"type": "string", "minLength": 1},
     "reason": {"type": "string", "minLength": 1},
-    "requested_changes": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "requested_changes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "oneOf": [
+          {"type": "string", "minLength": 1},
+          {
+            "type": "object",
+            "required": ["op", "path"],
+            "properties": {
+              "op": {"type": "string", "enum": ["add", "replace", "remove"]},
+              "path": {"type": "string", "pattern": "^($|/.*)"},
+              "value": {}
+            },
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
     "status": {"type": "string", "enum": ["PROPOSED", "APPROVED", "REJECTED", "APPLIED"]},
     "requested_by": {"type": "string", "minLength": 1},
     "target_version": {"type": "string", "minLength": 1},

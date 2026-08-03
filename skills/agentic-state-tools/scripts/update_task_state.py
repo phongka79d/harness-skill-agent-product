@@ -8,6 +8,7 @@ from pathlib import Path
 
 from append_event import append_event, append_event_for_root
 from render_checklist import render_checklist
+from review_contract import validate_contract
 from runtime_utils import (
     RuntimeLockedError,
     RuntimeNotInitializedError,
@@ -81,6 +82,15 @@ def main() -> int:
 
             if requested_status in TERMINAL_STATUSES:
                 assert_terminal_cleanup_safe(root, task_id)
+
+            existing_contract = current.get("review_contract") if isinstance(current, dict) else None
+            submitted_contract = payload.get("review_contract")
+            if existing_contract is not None:
+                if submitted_contract is not None and submitted_contract != existing_contract:
+                    raise ValueError("review_contract is immutable across task revisions")
+                payload["review_contract"] = existing_contract
+            elif submitted_contract is not None:
+                validate_contract(submitted_contract, review_type="task")
 
             payload["status"] = requested_status
             if requested_status in TERMINAL_STATUSES:

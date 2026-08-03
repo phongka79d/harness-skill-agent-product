@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Agent runtime and generated release artifacts
+.agent/
+*.tmp
+*.log

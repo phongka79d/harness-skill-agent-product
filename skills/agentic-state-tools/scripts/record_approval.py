@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from authorization import ACTOR_TYPES, POLICY_VERSION, required_actor_type
 from append_event import append_event_for_root
 from runtime_utils import RuntimeLockedError, RuntimeNotInitializedError, next_revision, read_object, read_payload, runtime_lock, utc_now, validate_identifier
 from write_artifact import write_validated
@@ -13,7 +15,7 @@ from write_artifact import write_validated
 
 SCHEMA = Path(__file__).resolve().parents[1] / "schemas/approval.schema.json"
 
-PRIMARY_ONLY_TARGETS = {"MASTER_PLAN", "SUB_PLAN", "CHANGE_REQUEST", "RUBRIC_OVERRIDE", "ARCHITECTURE_CHANGE", "PLAN_SUPERSEDE", "PROFILE", "ROLLBACK"}
+PRIMARY_ONLY_TARGETS = {"MASTER_PLAN", "SUB_PLAN", "CHANGE_REQUEST", "RUBRIC_OVERRIDE", "PLAN_SUPERSEDE", "PROFILE", "ROLLBACK"}
 
 
 def main() -> int:
@@ -21,6 +23,7 @@ def main() -> int:
     parser.add_argument("--project-root", required=True)
     parser.add_argument("--input", required=True)
     parser.add_argument("--actor", default="primary-agent")
+    parser.add_argument("--actor-type", choices=tuple(sorted(ACTOR_TYPES)))
     args = parser.parse_args()
     try:
         payload = read_payload(args.input)
@@ -35,9 +38,35 @@ def main() -> int:
             raise ValueError("approval.target_id must be a non-empty string")
         validate_identifier(target_type, "target_type")
         validate_identifier(target_id, "target_id")
-        if str(payload.get("decision", "")).upper() == "APPROVED" and target_type.upper() in PRIMARY_ONLY_TARGETS and args.actor.lower() not in {"primary", "primary-agent"}:
+        executing_actor_type = args.actor_type or ("primary_agent" if args.actor.lower() in {"primary", "primary-agent"} else "agent")
+        payload_actor_type = payload.get("actor_type")
+        if payload_actor_type is not None and payload_actor_type != executing_actor_type:
+            raise ValueError("approval.actor_type must match the executing actor type")
+        if str(payload.get("decision", "")).upper() == "APPROVED" and target_type.upper() in PRIMARY_ONLY_TARGETS and executing_actor_type != "primary_agent":
             raise ValueError(f"{target_type} approvals require the Primary Agent")
+        actor_id = payload.get("actor_id", args.actor)
+        if actor_id != args.actor:
+            raise ValueError("approval.actor_id must match the executing actor")
+        if payload.get("approver", args.actor) != actor_id:
+            raise ValueError("approval.approver must match actor identity")
+        payload["actor_id"] = actor_id
+        payload["actor_type"] = executing_actor_type
+        payload["action"] = payload.get("action", target_type.upper())
+        required_type = required_actor_type(payload["action"])
+        if required_type is not None and executing_actor_type != required_type:
+            raise ValueError(f"{payload['action']} requires actor_type={required_type}")
+        payload["policy_version"] = payload.get("policy_version", POLICY_VERSION)
+        payload["expires_at"] = payload.get("expires_at", (datetime.now(timezone.utc) + timedelta(days=1)).isoformat().replace("+00:00", "Z"))
         with runtime_lock(args.project_root) as root:
+            if target_type.upper() == "ROLLBACK":
+                plan_path = root / "recovery" / f"rollback-plan-{target_id}.json"
+                plan = read_object(plan_path)
+                payload.setdefault("target_revision", plan.get("revision"))
+                payload.setdefault("target_hash", plan.get("plan_hash"))
+                if payload.get("target_revision") != plan.get("revision") or payload.get("target_hash") != plan.get("plan_hash"):
+                    raise ValueError("rollback approval must bind to the current rollback plan")
+            if payload.get("target_revision") is None or payload.get("target_hash") is None:
+                raise ValueError("approval requires target_revision and target_hash")
             relative = f"approvals/{target_type}-{target_id}.json"
             target = root / relative
             existing_revision = int(read_object(target).get("revision", 0)) if target.is_file() else 0

@@ -33,6 +33,21 @@ def main() -> int:
             previous_revision = 0
             if existing.is_file():
                 previous_revision = int(read_object(existing).get("revision", 0))
+            task_state_path = root / "work" / task_id / "task-state.json"
+            if task_state_path.is_file():
+                task_state = read_object(task_state_path)
+                current_task_revision = task_state.get("revision")
+                if isinstance(current_task_revision, int) and not isinstance(current_task_revision, bool):
+                    supplied_task_revision = payload.get("task_revision", current_task_revision)
+                    if supplied_task_revision != current_task_revision:
+                        raise ValueError("checkpoint.task_revision does not match task state")
+                    payload["task_revision"] = current_task_revision
+                current_attempt = task_state.get("attempt_id")
+                if isinstance(current_attempt, str) and current_attempt:
+                    supplied_attempt = payload.get("attempt_id", current_attempt)
+                    if supplied_attempt != current_attempt:
+                        raise ValueError("checkpoint.attempt_id does not match task state")
+                    payload["attempt_id"] = current_attempt
             workspace = capture_workspace(
                 root.parent,
                 expected_files=payload.get("files_modified", []),

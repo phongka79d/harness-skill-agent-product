@@ -9,6 +9,7 @@
     "revision": {"type": "integer", "minimum": 1},
     "criteria": {"type": "array"},
     "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "evidence", "required_change"], "properties": {"severity": {"type": "string", "enum": ["CRITICAL", "MAJOR", "MINOR", "SUGGESTION"]}, "evidence": {"type": "string", "minLength": 1}, "required_change": {"type": "string", "minLength": 1}, "resolved": {"type": "boolean"}}}},
+    "hard_fail_checks": {"type": "array", "items": {"type": "object", "required": ["rule", "triggered", "evidence"], "properties": {"rule": {"type": "string", "minLength": 1}, "triggered": {"type": "boolean"}, "evidence": {"type": "string", "minLength": 1}}}},
     "hard_fail": {"type": "boolean"},
     "pass_threshold_percent": {"type": "number", "minimum": 0, "maximum": 100},
     "rubric_id": {"type": "string", "minLength": 1},
@@ -17,6 +18,7 @@
     "resolved_weights": {"type": "object"},
     "applicability": {"type": "object"},
     "resolved_rubric": {"type": "object"},
+    "review_contract": {"$ref": "review-contract.schema.json"},
     "legacy_migration": {"type": "boolean"},
     "verdict": {"type": "string", "enum": ["PASS", "BLOCKED", "REPAIR_REQUIRED"]}
   }

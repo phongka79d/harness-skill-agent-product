@@ -89,6 +89,10 @@ def main() -> int:
                     raise ValueError("operation identity mismatch for run_id")
                 if latest["status"] in TERMINAL_STATUSES:
                     if latest["status"] == payload["status"]:
+                        evidence_fields = ("result_checksum", "result_summary", "output_hash", "commit_marker", "rollback_marker")
+                        if any(latest.get(field) is not None for field in evidence_fields):
+                            if any(payload.get(field) != latest.get(field) for field in evidence_fields):
+                                raise ValueError("terminal operation evidence conflicts; reconcile before retry")
                         print(f"OPERATION_IDEMPOTENT: {operation_id} status={latest['status']}")
                         return 0
                     raise ValueError("operation is terminal; inspect external state before retry")
@@ -103,6 +107,9 @@ def main() -> int:
             record["recorded_at"] = utc_now()
             record["revision"] = (latest["revision"] + 1) if latest else 1
             record["actor"] = args.actor
+            record.setdefault("phase", "PREPARE" if record["status"] == "STARTED" else "COMMIT" if record["status"] == "COMPLETED" else "ROLLBACK")
+            record.setdefault("transaction_id", operation_id)
+            record.setdefault("idempotency_key", operation_id)
             errors = validate(record, read_json(SCHEMA))
             if errors:
                 raise ValueError("; ".join(errors))

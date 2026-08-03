@@ -12,6 +12,10 @@ from pathlib import Path
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_ROOT / "scripts"
 SCHEMAS = SKILL_ROOT / "schemas"
+sys.path.insert(0, str(SCRIPTS))
+
+from worktree_manager import CleanupBlocked, WorktreeError, WorktreeManager  # noqa: E402
+from merge_worktree import merge_worktree  # noqa: E402
 
 
 def run_script(name: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -35,7 +39,126 @@ def init_project(path: Path) -> None:
         raise AssertionError(result.stderr)
 
 
+def init_git_project(path: Path) -> None:
+    subprocess.run(["git", "init", "--initial-branch", "main"], cwd=path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
+    (path / "value.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "value.txt"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=path, check=True, capture_output=True, text=True)
+
+
 class RecoveryHardeningTests(unittest.TestCase):
+    def test_stale_metadata_requires_expired_lease_and_authorized_reclaim(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            init_git_project(project)
+            manager = WorktreeManager(project, Path(directory) / "worktrees", lease_seconds=1)
+            original = manager.create("TASK-1", 1)
+            state_path = Path(manager.metadata_path)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            key = "TASK-1@1"
+            state["entries"][key]["path"] = str(Path(directory) / "missing-worktree")
+            state["entries"][key]["lease"]["expires_at"] = "2000-01-01T00:00:00Z"
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            with self.assertRaises(PermissionError):
+                manager.reclaim("TASK-1", 1)
+            reclaimed = manager.reclaim("TASK-1", 1, authorized=True)
+            self.assertEqual(reclaimed["status"], "STALE")
+            replacement = manager.create("TASK-1", 1)
+            self.assertNotEqual(replacement["branch"], original["branch"])
+
+    def test_cleanup_is_blocked_before_acceptance_and_conflicts_fence_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            init_git_project(project)
+            root = Path(directory) / "worktrees"
+            manager = WorktreeManager(project, root)
+            entry = manager.create("TASK-1", 1)
+            with self.assertRaises(CleanupBlocked):
+                manager.cleanup("TASK-1", 1)
+            source = Path(entry["path"])
+            (source / "value.txt").write_text("from-task\n", encoding="utf-8")
+            subprocess.run(["git", "add", "value.txt"], cwd=source, check=True)
+            subprocess.run(["git", "commit", "-m", "task-change"], cwd=source, check=True, capture_output=True, text=True)
+            (project / "value.txt").write_text("from-target\n", encoding="utf-8")
+            subprocess.run(["git", "add", "value.txt"], cwd=project, check=True)
+            subprocess.run(["git", "commit", "-m", "target-change"], cwd=project, check=True, capture_output=True, text=True)
+            result = merge_worktree(project, root, "TASK-1", 1, "main", authorized=True)
+            self.assertEqual(result["status"], "RECOVERY_PENDING")
+            self.assertTrue(Path(result["conflict_artifact"]).is_file())
+            self.assertEqual(manager.get("TASK-1", 1)["status"], "RECOVERY_PENDING")
+
+    def test_worktree_branches_are_not_reused_across_revisions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            init_git_project(project)
+            manager = WorktreeManager(project, Path(directory) / "worktrees")
+            first = manager.create("TASK-1", 1)
+            second = manager.create("TASK-1", 2)
+            self.assertNotEqual(first["branch"], second["branch"])
+            self.assertEqual(manager.create("TASK-1", 1)["branch"], first["branch"])
+
+    def test_workspace_lock_reclaims_a_lock_owned_by_a_dead_process(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            init_git_project(project)
+            root = Path(directory) / "worktrees"
+            manager = WorktreeManager(project, root)
+            manager.lock_path.write_text(
+                json.dumps({"pid": 99999999, "acquired_at": "2000-01-01T00:00:00Z", "expires_at": "2000-01-01T00:01:00Z"}),
+                encoding="utf-8",
+            )
+            entry = manager.create("TASK-DEAD-LOCK", 1)
+            self.assertEqual(entry["status"], "ACTIVE")
+            self.assertFalse(manager.lock_path.exists())
+
+    def test_worktree_registry_writes_are_schema_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            init_git_project(project)
+            manager = WorktreeManager(project, Path(directory) / "worktrees")
+            invalid = manager._empty_state()
+            invalid["schema_version"] = 2
+            with self.assertRaises(WorktreeError):
+                manager._save_state(invalid)
+
+    def test_worktree_cleanup_rejects_metadata_path_outside_configured_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            init_git_project(project)
+            manager = WorktreeManager(project, Path(directory) / "worktrees")
+            manager.create("TASK-OUTSIDE", 1)
+            state = json.loads(manager.metadata_path.read_text(encoding="utf-8"))
+            entry = state["entries"]["TASK-OUTSIDE@1"]
+            entry["path"] = str(project)
+            entry["status"] = "ACCEPTED"
+            entry["lease"] = None
+            manager.metadata_path.write_text(json.dumps(state), encoding="utf-8")
+            with self.assertRaisesRegex(CleanupBlocked, "outside configured worktree root"):
+                manager.cleanup("TASK-OUTSIDE", 1)
+
+    def test_worktree_cleanup_rejects_metadata_path_outside_configured_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            init_git_project(project)
+            manager = WorktreeManager(project, Path(directory) / "worktrees")
+            manager.create("TASK-OUTSIDE", 1)
+            state = json.loads(manager.metadata_path.read_text(encoding="utf-8"))
+            entry = state["entries"]["TASK-OUTSIDE@1"]
+            entry["path"] = str(project)
+            entry["status"] = "ACCEPTED"
+            entry["lease"] = None
+            manager.metadata_path.write_text(json.dumps(state), encoding="utf-8")
+            with self.assertRaisesRegex(CleanupBlocked, "outside configured worktree root"):
+                manager.cleanup("TASK-OUTSIDE", 1)
     def test_reconciliation_and_lock_reclaim_schemas_exist(self) -> None:
         self.assertTrue((SCHEMAS / "reconciliation.schema.json").is_file())
         self.assertTrue((SCHEMAS / "lock-reclaim.schema.json").is_file())

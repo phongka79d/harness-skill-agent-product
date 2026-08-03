@@ -51,7 +51,7 @@ def documents(value: Any, key: str) -> list[dict[str, Any]]:
 def add_schema_errors(errors: list[str], key: str, values: list[dict[str, Any]]) -> None:
     schema = read_json(SCHEMAS[key])
     for index, value in enumerate(values):
-        for error in validate(value, schema, f"$.{key}[{index}]" if key != "master_plan" else "$.master_plan"):
+        for error in validate(value, schema, f"$.{key}[{index}]" if key != "master_plan" else "$.master_plan", base_path=SCHEMAS[key].resolve().parent):
             errors.append(error)
 
 

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "deployment_id": "replace-me",
+  "version": "1",
+  "model_ids": {
+    "analysis": "<provider-analysis-model>",
+    "planning": "<provider-planning-model>",
+    "review": "<provider-review-model>",
+    "exploration": "<provider-exploration-model>",
+    "context": "<provider-context-model>",
+    "implementation": "<provider-implementation-model>",
+    "recovery": "<provider-recovery-model>",
+    "observability": "<provider-observability-model>",
+    "forbidden-legacy": "<provider-forbidden-legacy-model>",
+    "forbidden-unsafe": "<provider-forbidden-unsafe-model>"
+  }
+}

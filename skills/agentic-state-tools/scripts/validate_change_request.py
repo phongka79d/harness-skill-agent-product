@@ -11,6 +11,32 @@ from runtime_utils import read_object, read_payload
 
 
 PLAN_TARGETS = {"MASTER_PLAN", "SUB_PLAN", "BATCH", "TASK", "DECISION", "RISK", "RUBRIC", "PROFILE"}
+CHANGE_OPERATIONS = {"add", "replace", "remove"}
+
+
+def validate_operations(value: Any, *, applying: bool) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("change_request.requested_changes must be a non-empty array")
+    if any(isinstance(item, str) for item in value):
+        if applying:
+            raise ValueError("applying a change request requires structured JSON operations")
+        if any(not isinstance(item, str) or not item.strip() for item in value):
+            raise ValueError("change request descriptions must be non-empty strings")
+        return []
+    operations: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f"requested_changes[{index}] must be a JSON operation object")
+        operation = dict(item)
+        if operation.get("op") not in CHANGE_OPERATIONS:
+            raise ValueError(f"requested_changes[{index}].op must be add, replace, or remove")
+        path = operation.get("path")
+        if not isinstance(path, str) or (path and not path.startswith("/")):
+            raise ValueError(f"requested_changes[{index}].path must be a JSON Pointer")
+        if operation["op"] in {"add", "replace"} and "value" not in operation:
+            raise ValueError(f"requested_changes[{index}] requires value for {operation['op']}")
+        operations.append(operation)
+    return operations
 
 
 def validate_change_request(value: object, approval: dict[str, Any] | None = None, *, applying: bool = False) -> dict[str, Any]:
@@ -24,8 +50,7 @@ def validate_change_request(value: object, approval: dict[str, Any] | None = Non
         if not isinstance(record.get(field), str) or not str(record[field]).strip():
             raise ValueError(f"change_request.{field} is required")
     requested_changes = record.get("requested_changes")
-    if not isinstance(requested_changes, list) or not requested_changes or any(not isinstance(item, str) or not item.strip() for item in requested_changes):
-        raise ValueError("change_request.requested_changes must be a non-empty array of strings")
+    validate_operations(requested_changes, applying=applying)
     if not isinstance(record.get("impact"), dict):
         raise ValueError("change_request.impact must be an object")
     if record["target_version"] == record["new_version"]:

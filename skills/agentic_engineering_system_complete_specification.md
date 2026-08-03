@@ -2323,10 +2323,10 @@ The canonical registry is `agentic-configuration/config/agentic-config.yaml`. Th
 
 | Model | Allowed role |
 |---|---|
-| `agents.agent-explorer.model_dispatch` | Read-only exploration |
-| `agents.agent-executor.model_dispatch` | Bounded implementation |
+| `agents.agent-explorer.model_ref` | Read-only exploration, resolved by deployment overlay |
+| `agents.agent-executor.model_ref` | Bounded implementation, resolved by deployment overlay |
 
-`model_policy.forbidden_models` and every value outside `model_policy.allowed_models` are forbidden dispatch targets. The config-backed dispatch validator must reject them before any agent work is started.
+`model_policy.forbidden_model_refs` and every value outside `model_policy.allowed_model_refs` are forbidden dispatch targets. The deployment-aware config-backed dispatch validator must reject them before any agent work is started.
 
 Example registry:
 
@@ -2358,16 +2358,16 @@ Example routing:
 ```yaml
 model_routing:
   planning:
-    model: agents.agent-plan-architect.model_dispatch
+    model_ref: agents.agent-plan-architect.model_ref
 
   repository_reading:
-    model: agents.agent-explorer.model_dispatch
+    model_ref: agents.agent-explorer.model_ref
 
   code_execution:
-    model: agents.agent-executor.model_dispatch
+    model_ref: agents.agent-executor.model_ref
 
   review:
-    model: agents.agent-review.model_dispatch
+    model_ref: agents.agent-review.model_ref
 
   deterministic_validation:
     handler: script

@@ -16,7 +16,7 @@ Evaluate the integrated increment; do not fix implementation and do not hand-wri
 2. Confirm every required task has a valid task review.
 3. Inspect the integrated diff, changed-file overlap, contracts, migrations, and relevant tests.
 4. Verify requirement coverage, architecture consistency, and rollback/recovery readiness where applicable.
-5. Record evidence-based findings and classify the batch as `PASS`, `REPAIR_REQUIRED`, `BLOCKED`, or `PLAN_INVALID`.
+5. Record evidence-based findings and one `hard_fail_checks` entry per canonical hard-fail rule; classify the batch as `PASS`, `REPAIR_REQUIRED`, `BLOCKED`, or `PLAN_INVALID`.
 6. Submit the batch review payload through `agentic-state-tools`.
 7. Read the generated review and checklist projection before reporting.
 

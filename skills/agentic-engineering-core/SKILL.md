@@ -25,7 +25,7 @@ Use `agentic-state-tools` for every canonical write under `.agent/`. Agents may 
 
 The Primary Agent owns architecture, scope, delegation, conflict decisions, and final validation.
 
-Delegated model routing is defined by `agents.agent-explorer.model_dispatch`, `agents.agent-executor.model_dispatch`, and `model_policy` in the central config. Never bypass that config or dispatch a model listed in `model_policy.forbidden_models`; the state-tools dispatch boundary enforces it.
+Delegated model routing is defined by `agents.agent-explorer.model_ref`, `agents.agent-executor.model_ref`, the deployment overlay, and `model_policy` in the central config. Never bypass that config or dispatch a model resolved from `model_policy.forbidden_model_refs`; the state-tools dispatch boundary enforces it.
 
 - Explorer: read and trace only; never modify files.
 - Brainstorm Facilitator: clarify goals, constraints, assumptions, and options; do not implement or approve architecture.

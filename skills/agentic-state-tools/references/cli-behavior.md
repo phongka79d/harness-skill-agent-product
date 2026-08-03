@@ -30,3 +30,13 @@ Rollback commands are explicit: a task failure does not imply compensation.
 The planner creates only a dry-run plan tied to known operation IDs. Execution
 requires an exact `ROLLBACK` approval and provider evidence; `UNKNOWN`, failed,
 or stale-fencing outcomes are recorded and escalated with retry disabled.
+
+Canonical task and batch reviews require a pinned contract, resolved rubric, and
+one evidence-backed `hard_fail_checks` record per rubric hard-fail rule. Batch
+review task IDs are compared with the persisted batch contract; a reviewer cannot
+submit only the tasks that passed.
+
+Async worktree commands require an external worktree root, a live lease, and a
+manager-issued isolation proof. Merge conflicts create `RECOVERY_PENDING` evidence
+and block cleanup until the worktree is reconciled. Packaging is allowlisted and
+rejects generated runtime state, caches, logs, temporary files, and detected secrets.

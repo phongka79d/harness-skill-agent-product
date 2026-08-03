@@ -11,5 +11,6 @@
   ],
   "findings": [],
   "scope_valid": true,
+  "legacy_migration": true,
   "verdict": "PASS"
 }

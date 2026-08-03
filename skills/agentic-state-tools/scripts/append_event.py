@@ -18,6 +18,9 @@ from runtime_utils import (
     read_payload,
     runtime_lock,
     utc_now,
+    apply_event,
+    empty_state,
+    validate_event_preconditions,
     validate_event,
 )
 
@@ -29,8 +32,13 @@ def append_event_for_root(root, event: dict[str, Any]) -> tuple[dict[str, Any], 
     record.setdefault("event_id", next_event_id(events))
     record.setdefault("timestamp", utc_now())
     validate_event(record)
+    validate_event_preconditions(root, record)
     if any(item["event_id"] == record["event_id"] for item in events):
         raise ValueError(f"event_id already exists: {record['event_id']}")
+    replayed = empty_state()
+    for existing in events:
+        replayed = apply_event(replayed, existing)
+    apply_event(replayed, record)
     append_jsonl(events_path, record)
     return record, rebuild_state_for_root(root)
 

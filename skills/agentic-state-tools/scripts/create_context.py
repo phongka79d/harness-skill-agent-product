@@ -20,6 +20,7 @@ from runtime_utils import (
     validate_identifier,
 )
 from write_artifact import write_validated
+from secret_scanner import context_security_errors
 
 
 SCHEMA = Path(__file__).resolve().parents[1] / "schemas/context.schema.json"
@@ -29,7 +30,7 @@ sys.path.insert(0, str(CONFIG_SKILL / "scripts"))
 from load_config import load_config, validate_config  # noqa: E402
 
 
-BUDGET_FIELDS = ("max_files", "max_reference_documents", "max_examples", "max_review_history_items")
+BUDGET_FIELDS = ("max_files", "max_reference_documents", "max_examples", "max_review_history_items", "max_bytes")
 MISSING = object()
 
 
@@ -73,6 +74,10 @@ def normalize(payload: Any, config: dict[str, Any] | None = None) -> dict[str, A
     if not isinstance(files_to_read, list):
         raise ValueError("context.code_context.files_to_read must be an array")
     budget = canonical_budget(payload.get("budget", MISSING), config)
+    if config["security"].get("forbid_secret_storage_in_context", True):
+        security_errors = context_security_errors(payload, max_bytes=budget["max_bytes"])
+        if security_errors:
+            raise ValueError("context contains sensitive or unsafe content: " + "; ".join(security_errors))
     limits = budget
     if len(files_to_read) > limits["max_files"]:
         raise ValueError("context exceeds budget.max_files")

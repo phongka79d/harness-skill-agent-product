@@ -61,7 +61,13 @@ python scripts/validate_dependency_graph.py --input <planning-bundle.json>
 python scripts/detect_scope_overlap.py --input <tasks.json>
 python scripts/compute_critical_path.py --input <graph.json>
 python scripts/reconcile_queue.py --input <queue.json>
-python scripts/dispatch_task.py --input <dispatch.json>
+python scripts/dispatch_task.py --project-root <project> --input <dispatch.json>
+python scripts/worktree_manager.py --project-root <git-project> --worktree-root <external-root> --task-id <id> --revision <n>
+python scripts/merge_worktree.py --project-root <git-project> --worktree-root <external-root> --task-id <id> --revision <n> --target-branch <branch> --authorized
+python scripts/commit_batch.py --project-root <project> --batch-id <id> --approval <approval.json> --actor <id> --actor-type user --message <message> --path <path>
+python scripts/next_batch.py --project-root <project> --current-batch-id <id> --next-batch-id <id> --approval <approval.json> --actor <id> --actor-type user
+python scripts/validate_examples.py --examples-root examples --deployment <deployment.json>
+python scripts/package_skill.py --root <package-root> --output <release.zip>
 python ../agentic-configuration/scripts/load_config.py --check
 python scripts/capture_workspace.py --project-root <project>
 python scripts/verify_terminal_cleanup.py --project-root <project> --task-id <id>
@@ -80,14 +86,19 @@ python scripts/execute_rollback.py --project-root <project> --plan-id <id> --app
 - Append immutable events.
 - Rebuild snapshots from the event journal.
 - Derive task and batch review outcomes from accepted evidence.
+- Require a canonical review contract and complete evidence-backed hard-fail checks for every non-legacy rubric review.
 - Validate planning schemas and cross-document dependencies before execution.
 - Resolve immutable project profiles and task rubrics with IDs, versions, hashes, applicability, weights, and thresholds.
 - Reconcile active recovery with the actual Git workspace when checkpoint evidence is present.
 - Remove terminal task leases and owned locks with journal evidence.
 - Resolve runnable tasks, execution mode, dependencies, and scope conflicts without mutating runtime state.
 - Validate queue and dependency graph contracts, compute a deterministic critical path, and reconcile queue/task/dispatch evidence.
-- Accept dispatch models only when `selected_model` matches the configured `agent_role` and `model_policy`; do not duplicate model literals in state-tools.
-- Record a dispatch decision without spawning agents or changing architecture ownership.
+- Accept dispatch models only when `selected_model` matches the configured `agent_role` and deployment overlay; do not duplicate model literals in state-tools.
+- Persist each dispatch to queue, graph, lease, task state, operation ledger, and event journal with a run ID, attempt ID, revision, idempotency key, and configured capacity check.
+- Reject async dispatch while isolated worktree support is disabled.
+- Keep async task-to-branch-to-worktree mappings isolated, lease-bound, merge-fenced, and recoverable after conflict.
+- Require exact typed approval identity, target revision, target hash, policy version, and persisted approval evidence before protected side effects.
+- Require canonical batch task-set equality and matching task-review contracts before an integrated batch can pass.
 - Persist approval records through the same validated artifact and event path.
 - Require approved Primary-owned records for architecture, plan, profile, and rubric overrides.
 - Apply plan changes only as new versioned artifacts with immutable supersede links.

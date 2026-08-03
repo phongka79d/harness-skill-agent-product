@@ -13,6 +13,7 @@ from resolve_project_profile import load_data, resolve_profile
 
 
 RUBRIC_ROOT = Path(__file__).resolve().parents[1] / "profiles" / "rubrics"
+REVIEW_POLICY_VERSION = "1"
 
 
 CRITERION = {
@@ -98,6 +99,28 @@ SECURITY_FLAGS = {
     "dependency_change",
 }
 
+# Keep this vocabulary aligned with review-contract.schema.json. Risk flags are
+# part of the rubric identity, so accepting an unrecognized key would create a
+# contract that downstream validators cannot interpret consistently.
+RISK_FLAG_KEYS = frozenset(
+    {
+        "architecture_change",
+        "authentication",
+        "authorization",
+        "database_write",
+        "dependency_change",
+        "destructive_operation",
+        "external_input",
+        "large_dataset",
+        "latency_sensitive",
+        "migration",
+        "network_access",
+        "performance_sensitive",
+        "public_api",
+        "sensitive_data",
+    }
+)
+
 TASK_TYPE_ALIASES = {"quick_change": "general", "quick-change": "general"}
 
 
@@ -137,6 +160,25 @@ def parse_object(value: str, field: str) -> dict[str, Any]:
     return parsed
 
 
+def normalize_risk_flags(risk_flags: dict[str, Any]) -> dict[str, bool]:
+    """Validate and canonicalize risk flags used to derive a rubric identity."""
+    if not isinstance(risk_flags, dict):
+        raise ValueError("risk_flags must be an object")
+    normalized: dict[str, bool] = {}
+    for raw_key, value in risk_flags.items():
+        if not isinstance(raw_key, str):
+            raise ValueError("risk_flags keys must be strings")
+        key = raw_key.lower()
+        if key not in RISK_FLAG_KEYS:
+            raise ValueError(f"unknown risk flag: {raw_key}")
+        if not isinstance(value, bool):
+            raise ValueError(f"risk_flags.{raw_key} must be boolean")
+        if key in normalized:
+            raise ValueError(f"duplicate risk flag after key normalization: {raw_key}")
+        normalized[key] = value
+    return dict(sorted(normalized.items()))
+
+
 def resolve_rubric(
     profile_id: str,
     task_type: str,
@@ -145,6 +187,7 @@ def resolve_rubric(
     *,
     review_type: str = "task",
 ) -> dict[str, Any]:
+    risk_flags = normalize_risk_flags(risk_flags)
     profile = resolve_profile(profile_id)
     quality_level = profile["quality_level"]
     if quality_level not in QUALITY_CRITERIA:
@@ -236,6 +279,8 @@ def resolve_rubric(
         "profile_id": profile["profile_id"],
         "profile_version": profile["profile_version"],
         "profile_hash": profile["profile_hash"],
+        "risk_flags": risk_flags,
+        "review_policy_version": REVIEW_POLICY_VERSION,
         "pass_threshold_percent": threshold,
         "hard_fail_rules": ["acceptance_criteria_not_met", "required_verification_failed", "changes_outside_write_scope", "unresolved_major_correctness_issue"],
         "criteria": criteria,

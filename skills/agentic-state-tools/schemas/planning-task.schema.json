@@ -12,6 +12,7 @@
     "depends_on": {"type": "array", "items": {"type": "string"}},
     "execution_mode": {"type": "string", "enum": ["auto", "async", "sync"]},
     "task_type": {"type": "string", "minLength": 1},
+    "review_contract": {"$ref": "review-contract.schema.json"},
     "requirement_ids": {"type": "array", "items": {"type": "string"}},
     "read_scope": {"type": "array", "items": {"type": "string", "minLength": 1}},
     "write_scope": {"type": "array", "items": {"type": "string", "minLength": 1}},

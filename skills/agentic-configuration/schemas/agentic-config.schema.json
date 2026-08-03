@@ -6,29 +6,62 @@
     "schema_version": {"type": "integer", "enum": [1]},
     "config_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
     "version": {"type": "string", "minLength": 1},
-    "agents": {"type": "object"},
+    "agents": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["skill", "role", "dispatch_kind", "capabilities", "forbidden"],
+        "properties": {
+          "skill": {"type": "string", "minLength": 1},
+          "role": {"type": "string", "minLength": 1},
+          "dispatch_kind": {"type": "string", "enum": ["model", "script", "primary"]},
+          "model_ref": {"type": ["string", "null"], "minLength": 1},
+          "capabilities": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "forbidden": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        },
+        "additionalProperties": false
+      }
+    },
     "model_policy": {
       "type": "object",
-      "required": ["allowed_models", "forbidden_models", "immutable_forbidden_models", "selection_mode"],
+      "required": ["allowed_model_refs", "forbidden_model_refs", "immutable_forbidden_model_refs", "selection_mode"],
       "properties": {
-        "allowed_models": {"type": "array", "items": {"type": "string", "minLength": 1}},
-        "forbidden_models": {"type": "array", "items": {"type": "string", "minLength": 1}},
-        "immutable_forbidden_models": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "allowed_model_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "forbidden_model_refs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "immutable_forbidden_model_refs": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "selection_mode": {"type": "string", "enum": ["role_configured_only"]}
       }
     },
     "execution": {
       "type": "object",
-      "required": ["default_mode", "max_parallel_tasks", "max_execution_attempts", "max_repair_cycles", "async_requires_isolated_worktree"],
+      "required": ["default_mode", "async_execution_enabled", "max_parallel_tasks", "max_execution_attempts", "max_repair_cycles", "async_requires_isolated_worktree"],
       "properties": {
         "default_mode": {"type": "string", "enum": ["auto", "async", "sync"]},
+        "async_execution_enabled": {"type": "boolean"},
         "max_parallel_tasks": {"type": "integer", "minimum": 1},
         "max_execution_attempts": {"type": "integer", "minimum": 1},
         "max_repair_cycles": {"type": "integer", "minimum": 1},
         "async_requires_isolated_worktree": {"type": "boolean"}
       }
     },
-    "approval_matrix": {"type": "object"},
+    "approval_matrix": {
+      "type": "object",
+      "required": ["normal_code_change", "new_dependency", "schema_migration", "destructive_operation", "architecture_change", "production_deployment", "batch_commit", "plan_approval", "batch_approval", "next_batch", "rollback"],
+      "properties": {
+        "normal_code_change": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
+        "new_dependency": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
+        "schema_migration": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
+        "destructive_operation": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
+        "architecture_change": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
+        "production_deployment": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
+        "batch_commit": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
+        "plan_approval": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
+        "batch_approval": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
+        "next_batch": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
+        "rollback": {"type": "string", "enum": ["automatic", "primary_agent", "user"]}
+      },
+      "additionalProperties": false
+    },
     "runtime": {
       "type": "object",
       "required": ["state_backend", "state_write_mode", "agent_state_access", "atomic_writes", "optimistic_concurrency"],
@@ -90,12 +123,13 @@
     },
     "context_budget": {
       "type": "object",
-      "required": ["max_files", "max_reference_documents", "max_examples", "max_review_history_items", "allow_full_repository_scan"],
+      "required": ["max_files", "max_reference_documents", "max_examples", "max_review_history_items", "max_bytes", "allow_full_repository_scan"],
       "properties": {
         "max_files": {"type": "integer", "minimum": 1},
         "max_reference_documents": {"type": "integer", "minimum": 0},
         "max_examples": {"type": "integer", "minimum": 0},
         "max_review_history_items": {"type": "integer", "minimum": 0},
+        "max_bytes": {"type": "integer", "minimum": 1},
         "allow_full_repository_scan": {"type": "boolean"}
       }
     },

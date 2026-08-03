@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
@@ -24,10 +25,22 @@ from distributed_store import (  # noqa: E402
     RevisionConflict,
 )
 from runtime_utils import apply_event, empty_state  # noqa: E402
+from resolve_execution_mode import resolve_execution_mode  # noqa: E402
 from validate_payload import validate  # noqa: E402
+from worktree_manager import WorktreeError, WorkspaceBusy, WorktreeManager  # noqa: E402
 
 
 BASE_TIME = datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc)
+
+
+def init_git_project(path: Path) -> str:
+    subprocess.run(["git", "init", "--initial-branch", "main"], cwd=path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
+    (path / "README.md").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=path, check=True, capture_output=True, text=True)
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=path, check=True, capture_output=True, text=True).stdout.strip()
 
 
 def event(event_id: str, task_id: str = "T-001") -> dict[str, object]:
@@ -55,6 +68,57 @@ class ErrorTransport:
 
 
 class DistributedStateTests(unittest.TestCase):
+    def test_worktree_mapping_is_unique_persistent_and_rejects_shared_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            init_git_project(project)
+            root = Path(directory) / "worktrees"
+            manager = WorktreeManager(project, root)
+            first = manager.create("TASK-1", 1)
+            second = manager.create("TASK-2", 1)
+            revision = manager.create("TASK-1", 2)
+            self.assertEqual(len({first["path"], second["path"], revision["path"]}), 3)
+            self.assertEqual(len({first["branch"], second["branch"], revision["branch"]}), 3)
+            self.assertEqual(WorktreeManager(project, root).get("TASK-1", 1), first)
+            with self.assertRaises(WorktreeError):
+                WorktreeManager(project, project / "inside")
+
+    def test_workspace_lock_and_async_resolution_fail_closed_without_manager_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            init_git_project(project)
+            root = Path(directory) / "worktrees"
+            manager = WorktreeManager(project, root)
+            manager.create("TASK-1", 1)
+            config = {
+                "execution": {
+                    "default_mode": "auto",
+                    "async_execution_enabled": True,
+                    "async_requires_isolated_worktree": True,
+                },
+                "version_control": {"isolated_worktrees": True},
+            }
+            with patch("resolve_execution_mode.load_config", return_value=config):
+                self.assertEqual(
+                    resolve_execution_mode(
+                        {"task_id": "TASK-1", "revision": 1, "execution_mode": "async"}
+                    ),
+                    "BLOCKED",
+                )
+                proof = manager.validate_isolation("TASK-1", 1)
+                self.assertEqual(
+                    resolve_execution_mode(
+                        {"task_id": "TASK-1", "revision": 1, "execution_mode": "async"},
+                        isolation_proof=proof,
+                    ),
+                    "ASYNC",
+                )
+            other = WorktreeManager(project, root)
+            with manager.workspace_lock():
+                with self.assertRaises(WorkspaceBusy):
+                    other.create("TASK-2", 1)
     def test_remote_contract_schemas_exist_and_validate_initial_snapshot(self) -> None:
         for name in (
             "remote-event.schema.json",

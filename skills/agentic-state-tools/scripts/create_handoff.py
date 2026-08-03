@@ -3,13 +3,25 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
 from append_event import append_event
 from render_checklist import render_checklist
-from runtime_utils import RuntimeLockedError, RuntimeNotInitializedError, next_revision, read_object, read_payload, runtime_lock, utc_now, validate_identifier
+from runtime_utils import RuntimeLockedError, RuntimeNotInitializedError, next_revision, parse_timestamp, read_object, read_payload, runtime_lock, utc_now, validate_identifier
 from write_artifact import write_validated
+
+
+HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+def validate_hash_map(value: object, field: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"handoff.{field} must be an object")
+    for key, digest in value.items():
+        if not isinstance(key, str) or not key.strip() or not isinstance(digest, str) or not HASH_PATTERN.fullmatch(digest):
+            raise ValueError(f"handoff.{field} must map non-empty names to SHA-256 hashes")
 
 
 def main() -> int:
@@ -28,9 +40,34 @@ def main() -> int:
         payload["task_id"] = args.task_id
         payload.setdefault("handoff_id", f"HANDOFF-{args.task_id}-{utc_now().replace(':', '').replace('-', '')}")
         payload.setdefault("created_at", utc_now())
+        for field in ("run_id", "attempt_id", "from_role", "to_role"):
+            if not isinstance(payload.get(field), str) or not payload[field].strip():
+                raise ValueError(f"handoff.{field} must be a non-empty string")
+        for field in ("task_revision", "plan_revision"):
+            if isinstance(payload.get(field), bool) or not isinstance(payload.get(field), int) or payload[field] < 1:
+                raise ValueError(f"handoff.{field} must be a positive integer")
+        validate_hash_map(payload.get("input_artifact_hashes"), "input_artifact_hashes")
+        validate_hash_map(payload.get("output_artifact_hashes"), "output_artifact_hashes")
+        if not isinstance(payload.get("evidence"), dict):
+            raise ValueError("handoff.evidence must be an object")
+        parse_timestamp(payload["created_at"])
         with runtime_lock(args.project_root) as root:
+            task_state_path = root / "work" / args.task_id / "task-state.json"
+            if task_state_path.is_file():
+                task_state = read_object(task_state_path)
+                if task_state.get("revision") is not None and payload["task_revision"] != task_state.get("revision"):
+                    raise ValueError("handoff.task_revision does not match the current task state")
+                for field in ("run_id", "attempt_id"):
+                    if task_state.get(field) is not None and payload[field] != task_state.get(field):
+                        raise ValueError(f"handoff.{field} does not match the current task state")
             existing = root / "work" / args.task_id / "handoff.json"
             existing_revision = int(read_object(existing).get("revision", 0)) if existing.is_file() else 0
+            if existing.is_file():
+                previous = read_object(existing)
+                if payload["handoff_id"] == previous.get("handoff_id"):
+                    for field in ("run_id", "attempt_id", "task_revision", "plan_revision", "from_role", "to_role"):
+                        if payload[field] != previous.get(field):
+                            raise ValueError("handoff identity cannot be reused for another attempt or revision")
             payload["revision"] = next_revision(payload, existing_revision)
             target = write_validated(
                 args.project_root,
