@@ -318,6 +318,32 @@ class ContractHardeningTests(unittest.TestCase):
             self.assertNotEqual(appended["idempotency_key"], current_dispatch["idempotency_key"])
             self.assertNotEqual(appended["operation_id"], current_dispatch["operation_id"])
 
+            running = self.write_json(
+                project / "running.json",
+                {"task_id": "T-ID-1", "status": "RUNNING", "expected_revision": updated["revision"], "progress": 40},
+            )
+            transition = run_script("update_task_state.py", "--project-root", str(project), "--input", str(running))
+            self.assertEqual(transition.returncode, 0, transition.stderr)
+            current_state = json.loads((project / ".agent/work/T-ID-1/task-state.json").read_text(encoding="utf-8"))
+            self.assertEqual(current_state["status"], "RUNNING")
+            self.assertEqual(
+                {field: current_state[field] for field in ("run_id", "attempt_id", "dispatch_id")},
+                {"run_id": "RUN-2", "attempt_id": "ATTEMPT-2", "dispatch_id": "DISPATCH-2"},
+            )
+
+    def test_reissue_rejects_identity_reuse_from_dispatch_history(self) -> None:
+        for field, value in (("new_run_id", "RUN-1"), ("new_attempt_id", "ATTEMPT-1"), ("new_dispatch_id", "DISPATCH-1")):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                project = Path(directory)
+                self._prepare_reissue_project(project)
+                reissue = self.write_json(
+                    project / f"reissue-reused-{field}.json",
+                    {"task_id": "T-ID-1", "reason": "identity reuse", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2", "expected_revision": 1, field: value},
+                )
+                result = run_script("reissue_task_attempt.py", "--project-root", str(project), "--input", str(reissue))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(field.removeprefix("new_"), result.stderr)
+
     def _prepare_dispatch_retry(self, project: Path) -> Path:
         self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
         task = {

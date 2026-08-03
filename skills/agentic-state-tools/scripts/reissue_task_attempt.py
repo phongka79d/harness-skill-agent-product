@@ -98,6 +98,9 @@ def main() -> int:
             if len(current_dispatch_records) != 1:
                 raise ValueError("reissue requires exactly one current dispatch queue binding")
             current_dispatch = current_dispatch_records[0]
+            for field, value in identity.items():
+                if any(record.get(field) == value for record in dispatch_records):
+                    raise ValueError(f"reissue {field} already exists in task dispatch history")
 
             old_queue = json.loads(json.dumps(queue))
             old_task = json.loads(json.dumps(current))

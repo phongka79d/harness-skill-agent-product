@@ -41,19 +41,32 @@ def merge_task_state(current: dict[str, object] | None, update: dict[str, object
     return next_state
 
 
-def _identity_records(queue: dict[str, object], task_id: object) -> list[dict[str, Any]]:
+def _identity_records(queue: dict[str, object], state: dict[str, object]) -> list[dict[str, Any]]:
     if not isinstance(queue, dict):
         return []
     if any(field in queue for field in EXECUTION_IDENTITY_FIELDS):
         return [queue]
+    task_id = state.get("task_id")
     records: list[dict[str, Any]] = []
-    for collection_name in ("tasks", "task_states", "dispatches"):
+    for collection_name in ("tasks", "task_states"):
         collection = queue.get(collection_name)
         if not isinstance(collection, list):
             continue
         for record in collection:
             if isinstance(record, dict) and record.get("task_id") == task_id:
                 records.append(record)
+    dispatches = queue.get("dispatches")
+    if isinstance(dispatches, list) and state.get("dispatch_id") is not None:
+        active_dispatches = [
+            record
+            for record in dispatches
+            if isinstance(record, dict)
+            and record.get("task_id") == task_id
+            and record.get("dispatch_id") == state["dispatch_id"]
+        ]
+        if dispatches and not active_dispatches:
+            raise ValueError("queue dispatch binding missing for active task state")
+        records.extend(active_dispatches)
     return records
 
 
@@ -73,5 +86,5 @@ def validate_execution_identity(state: dict[str, object], lease: dict[str, objec
     if lease is not None:
         _validate_record_identity(state, lease, "lease", require_fields=False)
     if queue is not None:
-        for record in _identity_records(queue, state.get("task_id")):
+        for record in _identity_records(queue, state):
             _validate_record_identity(state, record, "queue")
