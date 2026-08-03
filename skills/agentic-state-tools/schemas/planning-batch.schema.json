@@ -8,10 +8,13 @@
     "version": {"type": "string", "minLength": 1},
     "objective": {"type": "string", "minLength": 1},
     "depends_on": {"type": "array", "items": {"type": "string"}},
-    "tasks": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "tasks": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
     "integration_criteria": {"type": "array", "items": {"type": "string", "minLength": 1}},
     "definition_of_done": {"type": "array", "items": {"type": "string", "minLength": 1}},
     "review_profile": {"type": "string", "minLength": 1},
-    "commit_conditions": {"type": "array", "items": {"type": "string", "minLength": 1}}
+    "commit_conditions": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "review_contract": {"$ref": "review-contract.schema.json"},
+    "risk_flags": {"$ref": "risk-flags.schema.json"},
+    "review_task_type": {"type": "string", "minLength": 1}
   }
 }

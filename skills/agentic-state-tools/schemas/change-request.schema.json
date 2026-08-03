@@ -30,7 +30,7 @@
     "requested_by": {"type": "string", "minLength": 1},
     "target_version": {"type": "string", "minLength": 1},
     "new_version": {"type": "string", "minLength": 1},
-    "impact": {"type": "object"},
+    "impact": {"type": "object", "properties": {"risk_flags": {"$ref": "risk-flags.schema.json"}}},
     "approval_id": {"type": "string", "minLength": 1},
     "supersedes_id": {"type": "string", "minLength": 1},
     "applied_at": {"type": "string", "minLength": 1}

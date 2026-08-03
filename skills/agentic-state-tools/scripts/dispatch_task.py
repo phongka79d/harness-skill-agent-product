@@ -10,6 +10,7 @@ from pathlib import Path
 from runtime_utils import read_payload, write_json_atomic
 from dispatch_contract import validate_dispatch_schema
 from dispatch_transaction import persist_dispatch
+from review_contract import validate_contract
 
 CONFIG_SKILL = Path(__file__).resolve().parents[2] / "agentic-configuration"
 sys.path.insert(0, str(CONFIG_SKILL / "scripts"))
@@ -26,6 +27,25 @@ def normalize_dispatch(
         raise ValueError("dispatch must be an object")
     validate_dispatch_schema(value)
     result = dict(value)
+    planned_task = result.get("planning_task", result.get("task"))
+    if planned_task is not None and not isinstance(planned_task, dict):
+        raise ValueError("dispatch.planning_task must be an object")
+    approved = bool(result.get("approved")) or str(
+        result.get("task_status", result.get("planning_status", result.get("approval_status", "")))
+    ).upper() in {"APPROVED", "ACCEPTED"}
+    if planned_task is not None:
+        owner = planned_task.get("owner")
+        if not isinstance(owner, str) or not owner.strip():
+            raise ValueError("dispatch planning task requires an owner")
+        if approved:
+            validate_contract(planned_task.get("review_contract"), review_type="task")
+    if approved:
+        owner = result.get("task_owner", result.get("owner"))
+        if planned_task is None and (not isinstance(owner, str) or not owner.strip()):
+            raise ValueError("approved dispatch requires a task owner")
+        validate_contract(result.get("review_contract"), review_type="task")
+    elif "review_contract" in result:
+        validate_contract(result["review_contract"], review_type="task")
     for field in ("dispatch_id", "task_id", "agent_role", "selected_owner", "selected_model"):
         if not isinstance(result.get(field), str) or not str(result[field]).strip():
             raise ValueError(f"dispatch.{field} must be a non-empty string")

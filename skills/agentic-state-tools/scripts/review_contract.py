@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from risk_flags import normalize_risk_flags
 from resolve_rubric import resolve_rubric
 
 
@@ -60,13 +61,15 @@ def validate_contract(contract: Any, *, review_type: str | None = None) -> dict[
         raise ValueError(f"review_contract.review_type must be {review_type}")
     if not isinstance(contract.get("project_profile"), str) or not contract["project_profile"].strip():
         raise ValueError("review_contract.project_profile must be a non-empty string")
-    if not isinstance(contract.get("risk_flags"), dict):
-        raise ValueError("review_contract.risk_flags must be an object")
+    try:
+        normalized_risk_flags = normalize_risk_flags(contract.get("risk_flags"))
+    except ValueError as exc:
+        raise ValueError(f"review_contract.risk_flags is invalid: {exc}") from exc
     try:
         canonical = resolve_rubric(
             contract["project_profile"],
             contract["task_type"],
-            contract["risk_flags"],
+            normalized_risk_flags,
             review_type=contract["review_type"],
         )
     except (KeyError, TypeError, ValueError) as exc:

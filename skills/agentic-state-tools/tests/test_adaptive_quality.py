@@ -39,16 +39,16 @@ class AdaptiveQualityTests(unittest.TestCase):
         self.assertEqual(rubric["risk_flags"], {})
         self.assertEqual(rubric["review_policy_version"], "1")
 
-    def test_risk_flags_normalize_whitelisted_key_casing(self) -> None:
-        rubric = resolve_rubric("personal", "backend", {"AUTHENTICATION": True, "Database_Write": False})
-        self.assertEqual(rubric["risk_flags"], {"authentication": True, "database_write": False})
+    def test_risk_flags_use_the_canonical_vocabulary(self) -> None:
+        rubric = resolve_rubric("personal", "backend", {"authentication": True, "database": False})
+        self.assertEqual(rubric["risk_flags"], {"authentication": True, "database": False})
         self.assertEqual(rubric["applicability"]["SECURITY"]["status"], "APPLICABLE")
 
     def test_risk_flags_reject_non_boolean_values_and_unknown_keys(self) -> None:
         with self.assertRaisesRegex(ValueError, "boolean"):
             resolve_rubric("personal", "backend", {"authentication": "yes"})
         with self.assertRaisesRegex(ValueError, "unknown"):
-            resolve_rubric("personal", "backend", {"not_a_risk_flag": True})
+            resolve_rubric("personal", "backend", {"database_write": True})
 
     def _resolved_review(self, directory: str, *, score: int = 4) -> tuple[dict, Path]:
         result = run_script("resolve_rubric.py", "--profile", "personal", "--task-type", "backend", "--risk-flags", "{}")

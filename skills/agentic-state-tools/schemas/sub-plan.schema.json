@@ -10,7 +10,7 @@
     "objective": {"type": "string", "minLength": 1},
     "dependencies": {"type": "array", "items": {"type": "string"}},
     "outputs": {"type": "array", "items": {"type": "string", "minLength": 1}},
-    "batches": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "batches": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
     "risks": {"type": "array", "items": {"type": "string"}}
   }
 }

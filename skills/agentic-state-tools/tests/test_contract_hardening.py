@@ -22,6 +22,10 @@ from create_batch_review import load_batch_contract  # noqa: E402
 from commit_batch import CommitRejected, validate_batch_contract_pin, validate_batch_review_artifact  # noqa: E402
 from create_batch_review import artifact_hash as batch_review_artifact_hash  # noqa: E402
 from update_task_state import synchronize_queue  # noqa: E402
+from risk_flags import normalize_risk_flags  # noqa: E402
+from resolve_rubric import resolve_rubric  # noqa: E402
+from review_contract import contract_from_rubric  # noqa: E402
+from validate_planning import validate_manifest, requirement_report  # noqa: E402
 
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
@@ -1148,6 +1152,162 @@ class ContractHardeningTests(unittest.TestCase):
             for name, content in before.items():
                 self.assertEqual((root / name).read_bytes(), content)
             self.assertIn("FAILED", (root / "work/T-ID-1/operations.jsonl").read_text(encoding="utf-8"))
+
+
+class PlanningIntegrityTests(unittest.TestCase):
+    def planning_bundle(self, *, task_type: str = "backend_change") -> dict:
+        contract = contract_from_rubric(resolve_rubric("personal", "backend", {}))
+        return {
+            "master_plan": {
+                "plan_id": "MP-1", "version": "1.0", "title": "Plan", "objective": "Test",
+                "requirements": [
+                    {"requirement_id": "REQ-1", "description": "First"},
+                    {"requirement_id": "REQ-2", "description": "Second"},
+                ],
+                "in_scope": ["src"], "out_of_scope": [], "architecture": "A",
+                "workstreams": ["runtime"], "milestones": ["m1"], "dependencies": [],
+                "constraints": [], "success_criteria": ["REQ-1"], "risks": [],
+                "completion_conditions": ["tests pass"],
+            },
+            "sub_plans": [{
+                "sub_plan_id": "SP-1", "master_plan_id": "MP-1", "version": "1.0",
+                "title": "Sub", "objective": "Test", "dependencies": [], "outputs": ["x"],
+                "batches": ["B-1"], "risks": [],
+            }],
+            "batches": [{
+                "batch_id": "B-1", "sub_plan_id": "SP-1", "version": "1.0",
+                "objective": "Test", "depends_on": [], "tasks": ["T-1"],
+                "integration_criteria": ["pass"], "definition_of_done": ["done"],
+                "review_profile": "personal", "commit_conditions": ["approved"],
+            }],
+            "tasks": [{
+                "task_id": "T-1", "batch_id": "B-1", "version": "1.0", "title": "Task",
+                "objective": "Test", "context": "Test", "owner": "agent-executor",
+                "depends_on": [], "execution_mode": "sync", "task_type": task_type,
+                "requirement_ids": ["REQ-1"], "read_scope": ["src"],
+                "write_scope": ["src/app.py"], "inputs": [], "required_outputs": ["result"],
+                "acceptance_criteria": [{"criterion": "pass", "requirement_ids": ["REQ-1"]}],
+                "verification": ["tests"], "out_of_scope": [], "risk_flags": {},
+                "review_contract": contract, "blocker_policy": {"hard_blockers": []},
+                "execution_budget": {"max_files_changed": 1, "max_new_dependencies": 0,
+                    "allow_schema_change": False, "allow_architecture_change": False},
+                "architecture_decisions": [],
+            }],
+            "decisions": [], "assumptions": [], "risks": [], "change_requests": [],
+        }
+
+    def assert_planning_invalid(self, bundle: dict, text: str) -> None:
+        errors = validate_manifest(bundle)
+        self.assertTrue(errors, bundle)
+        self.assertTrue(any(text.lower() in error.lower() for error in errors), errors)
+
+    def test_task_owner_is_required_known_and_capable(self) -> None:
+        missing = self.planning_bundle()
+        missing["tasks"][0].pop("owner")
+        self.assert_planning_invalid(missing, "owner")
+
+        unknown = self.planning_bundle()
+        unknown["tasks"][0]["owner"] = "agent-missing"
+        self.assert_planning_invalid(unknown, "owner")
+
+        under_capable = self.planning_bundle()
+        under_capable["tasks"][0]["owner"] = "agent-review"
+        self.assert_planning_invalid(under_capable, "capab")
+
+    def test_approved_task_requires_a_fully_pinned_review_contract(self) -> None:
+        bundle = self.planning_bundle()
+        bundle["status"] = "APPROVED"
+        bundle["tasks"][0].pop("review_contract")
+        self.assert_planning_invalid(bundle, "review_contract")
+
+    def test_reverse_batch_and_sub_plan_membership_is_exact_and_unique(self) -> None:
+        cases = []
+        batch_missing_task = self.planning_bundle()
+        batch_missing_task["batches"][0]["tasks"] = []
+        cases.append(batch_missing_task)
+        task_missing_batch = self.planning_bundle()
+        task_missing_batch["tasks"][0]["batch_id"] = "B-2"
+        cases.append(task_missing_batch)
+        duplicate_batch_task = self.planning_bundle()
+        duplicate_batch_task["batches"][0]["tasks"] = ["T-1", "T-1"]
+        cases.append(duplicate_batch_task)
+        duplicate_sub_plan_batch = self.planning_bundle()
+        duplicate_sub_plan_batch["sub_plans"][0]["batches"] = ["B-1", "B-1"]
+        cases.append(duplicate_sub_plan_batch)
+        for bundle in cases:
+            with self.subTest(bundle=bundle):
+                self.assertTrue(any("membership" in error.lower() or "duplicate" in error.lower() for error in validate_manifest(bundle)))
+
+    def test_requirement_ids_are_unique_known_not_deprecated_and_traced(self) -> None:
+        duplicate = self.planning_bundle()
+        duplicate["master_plan"]["requirements"].append({"requirement_id": "REQ-1", "description": "Duplicate"})
+        self.assert_planning_invalid(duplicate, "duplicate")
+
+        unknown = self.planning_bundle()
+        unknown["tasks"][0]["requirement_ids"] = ["REQ-UNKNOWN"]
+        self.assert_planning_invalid(unknown, "unknown requirement")
+
+        deprecated = self.planning_bundle()
+        deprecated["master_plan"]["requirements"][0]["deprecated"] = True
+        self.assert_planning_invalid(deprecated, "deprecated")
+
+        untraced = self.planning_bundle()
+        untraced["tasks"][0]["requirement_ids"] = ["REQ-1"]
+        untraced["tasks"][0]["acceptance_criteria"] = [{"criterion": "only first", "requirement_ids": ["REQ-1"]}]
+        self.assert_planning_invalid(untraced, "untraceable")
+
+    def test_structured_acceptance_criteria_cannot_reference_untraced_requirements(self) -> None:
+        bundle = self.planning_bundle()
+        bundle["tasks"][0]["acceptance_criteria"] = [{"criterion": "wrong", "requirement_ids": ["REQ-2"]}]
+        self.assert_planning_invalid(bundle, "acceptance")
+
+    def test_dependency_ordered_overlaps_are_sequential_and_unordered_are_conflicts(self) -> None:
+        sequential = self.planning_bundle()
+        sequential["tasks"].append(dict(sequential["tasks"][0], task_id="T-2", depends_on=["T-1"]))
+        sequential["batches"][0]["tasks"].append("T-2")
+        self.assertFalse(any("overlap" in error.lower() or "conflict" in error.lower() for error in validate_manifest(sequential)), validate_manifest(sequential))
+
+        conflict = self.planning_bundle()
+        conflict["tasks"].append(dict(conflict["tasks"][0], task_id="T-2"))
+        conflict["batches"][0]["tasks"].append("T-2")
+        self.assert_planning_invalid(conflict, "conflict")
+
+    def test_shared_write_requires_sync_group_and_persisted_approval(self) -> None:
+        bundle = self.planning_bundle()
+        second = dict(bundle["tasks"][0], task_id="T-2")
+        for task in (bundle["tasks"][0], second):
+            task["shared_write_group"] = "GROUP-1"
+            task["shared_write_approval_id"] = "APR-SHARED"
+            task["execution_mode"] = "sync"
+        bundle["tasks"].append(second)
+        bundle["batches"][0]["tasks"].append("T-2")
+        bundle["approvals"] = [{"approval_id": "APR-SHARED", "target_type": "SHARED_WRITE", "target_id": "GROUP-1", "decision": "APPROVED"}]
+        self.assertFalse(any("shared" in error.lower() or "conflict" in error.lower() for error in validate_manifest(bundle)), validate_manifest(bundle))
+
+        bundle["approvals"] = []
+        self.assert_planning_invalid(bundle, "approval")
+
+    def test_read_only_intersections_are_not_scope_conflicts(self) -> None:
+        bundle = self.planning_bundle()
+        second = dict(bundle["tasks"][0], task_id="T-2", write_scope=["src/other.py"], read_scope=["src/app.py"])
+        bundle["tasks"].append(second)
+        bundle["batches"][0]["tasks"].append("T-2")
+        self.assertFalse(any("conflict" in error.lower() or "overlap" in error.lower() for error in validate_manifest(bundle)), validate_manifest(bundle))
+
+    def test_requirement_report_is_deterministic_and_has_required_columns(self) -> None:
+        bundle = self.planning_bundle()
+        report = requirement_report(bundle)
+        self.assertEqual([row["requirement"] for row in report], ["REQ-1", "REQ-2"])
+        self.assertEqual(set(report[0]), {"requirement", "tasks", "acceptance_criteria", "status"})
+        self.assertEqual(report[0]["tasks"], ["T-1"])
+        self.assertEqual(report[0]["status"], "TRACED")
+
+    def test_canonical_risk_flags_reject_legacy_vocabulary(self) -> None:
+        self.assertEqual(normalize_risk_flags({"database": False, "authentication": True}), {"authentication": True, "database": False})
+        with self.assertRaisesRegex(ValueError, "unknown"):
+            normalize_risk_flags({"database_write": True})
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            normalize_risk_flags({"database": 1})
 
 
 if __name__ == "__main__":

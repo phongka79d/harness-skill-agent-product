@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from resolve_project_profile import load_data, resolve_profile
+from risk_flags import normalize_risk_flags
 
 
 RUBRIC_ROOT = Path(__file__).resolve().parents[1] / "profiles" / "rubrics"
@@ -87,39 +88,15 @@ QUALITY_CRITERIA = {
 }
 
 SECURITY_FLAGS = {
-    "external_input",
     "authentication",
     "authorization",
-    "sensitive_data",
-    "database_write",
+    "security_sensitive",
+    "personal_data",
+    "database",
     "destructive_operation",
-    "migration",
-    "public_api",
-    "network_access",
-    "dependency_change",
+    "external_api",
+    "payments",
 }
-
-# Keep this vocabulary aligned with review-contract.schema.json. Risk flags are
-# part of the rubric identity, so accepting an unrecognized key would create a
-# contract that downstream validators cannot interpret consistently.
-RISK_FLAG_KEYS = frozenset(
-    {
-        "architecture_change",
-        "authentication",
-        "authorization",
-        "database_write",
-        "dependency_change",
-        "destructive_operation",
-        "external_input",
-        "large_dataset",
-        "latency_sensitive",
-        "migration",
-        "network_access",
-        "performance_sensitive",
-        "public_api",
-        "sensitive_data",
-    }
-)
 
 TASK_TYPE_ALIASES = {"quick_change": "general", "quick-change": "general"}
 
@@ -158,25 +135,6 @@ def parse_object(value: str, field: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ValueError(f"{field} must be a JSON object")
     return parsed
-
-
-def normalize_risk_flags(risk_flags: dict[str, Any]) -> dict[str, bool]:
-    """Validate and canonicalize risk flags used to derive a rubric identity."""
-    if not isinstance(risk_flags, dict):
-        raise ValueError("risk_flags must be an object")
-    normalized: dict[str, bool] = {}
-    for raw_key, value in risk_flags.items():
-        if not isinstance(raw_key, str):
-            raise ValueError("risk_flags keys must be strings")
-        key = raw_key.lower()
-        if key not in RISK_FLAG_KEYS:
-            raise ValueError(f"unknown risk flag: {raw_key}")
-        if not isinstance(value, bool):
-            raise ValueError(f"risk_flags.{raw_key} must be boolean")
-        if key in normalized:
-            raise ValueError(f"duplicate risk flag after key normalization: {raw_key}")
-        normalized[key] = value
-    return dict(sorted(normalized.items()))
 
 
 def resolve_rubric(
