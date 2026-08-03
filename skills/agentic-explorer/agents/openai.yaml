@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentic Explorer"
+  short_description: "Read-only repository exploration"
+  default_prompt: "Use $agentic-explorer to inspect and trace a repository without modifying files."

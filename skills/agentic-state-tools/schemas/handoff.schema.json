@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["handoff_id", "task_id", "created_at", "revision", "status", "summary", "files_read", "files_changed", "findings", "implementation_details", "validation_results", "risks", "next_steps"],
+  "properties": {
+    "handoff_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1},
+    "revision": {"type": "integer", "minimum": 1},
+    "status": {"type": "string", "enum": ["COMPLETE", "BLOCKED", "ESCALATED", "NEEDS_RECONCILIATION"]},
+    "summary": {"type": "string"},
+    "files_read": {"type": "array"},
+    "files_changed": {"type": "array"},
+    "findings": {"type": "array"},
+    "implementation_details": {"type": "array"},
+    "validation_results": {"type": "array"},
+    "risks": {"type": "array"},
+    "next_steps": {"type": "array"}
+  }
+}

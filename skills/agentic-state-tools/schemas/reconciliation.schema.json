@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "reconciliation_id", "task_id", "classification", "reasons", "created_at", "evidence_hash"],
+  "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
+    "reconciliation_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "classification": {"type": "string", "enum": ["SAFE_TO_RESUME", "NEEDS_RECONCILIATION", "UNSAFE_TO_RESUME"]},
+    "reasons": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "workspace": {"type": "object"},
+    "status": {"type": "string"},
+    "next_action": {"type": ["string", "null"]},
+    "created_at": {"type": "string", "minLength": 1},
+    "evidence_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

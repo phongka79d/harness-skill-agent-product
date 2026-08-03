@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentic Engineering Core"
+  short_description: "Shared rules for agentic delivery"
+  default_prompt: "Use $agentic-engineering-core to load the shared agentic delivery rules."

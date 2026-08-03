@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentic Implementer"
+  short_description: "Scoped implementation with validation"
+  default_prompt: "Use $agentic-implementer to implement one approved task within its write scope."

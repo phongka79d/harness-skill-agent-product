@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["context_id", "created_at", "revision", "task", "required_documents", "code_context", "constraints", "review_history", "budget"],
+  "properties": {
+    "context_id": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1},
+    "revision": {"type": "integer", "minimum": 1},
+    "task": {
+      "type": "object",
+      "required": ["task_id", "objective"],
+      "properties": {
+        "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+        "objective": {"type": "string", "minLength": 1}
+      }
+    },
+    "required_documents": {"type": "array", "items": {"type": "string"}},
+    "code_context": {
+      "type": "object",
+      "required": ["files_to_read", "symbols_to_inspect", "existing_patterns"],
+      "properties": {
+        "files_to_read": {"type": "array", "items": {"type": "string"}},
+        "symbols_to_inspect": {"type": "array", "items": {"type": "string"}},
+        "existing_patterns": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "required": ["inherited", "task_specific"],
+      "properties": {
+        "inherited": {"type": "array"},
+        "task_specific": {"type": "array"}
+      }
+    },
+    "examples": {"type": "array"},
+    "review_history": {"type": "array"},
+    "budget": {
+      "type": "object",
+      "required": ["max_files", "max_reference_documents", "max_examples"],
+      "properties": {
+        "max_files": {"type": "integer", "minimum": 1},
+        "max_reference_documents": {"type": "integer", "minimum": 0},
+        "max_examples": {"type": "integer", "minimum": 0},
+        "max_review_history_items": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

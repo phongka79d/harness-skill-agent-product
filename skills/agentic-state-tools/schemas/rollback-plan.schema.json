@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "plan_id", "task_id", "status", "classification", "dry_run", "requested_by", "reason", "operation_ids", "actions", "requires_approval", "approval_id", "created_at"],
+  "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
+    "plan_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "enum": ["DRY_RUN", "APPROVED", "EXECUTING", "ROLLED_BACK", "ESCALATED"]},
+    "classification": {"type": "string", "enum": ["ROLLBACK_PLANNED", "ROLLED_BACK", "PARTIAL_ROLLBACK", "ESCALATED"]},
+    "dry_run": {"type": "boolean"},
+    "requested_by": {"type": "string", "minLength": 1},
+    "reason": {"type": "string", "minLength": 1},
+    "operation_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "actions": {"type": "array", "items": {"type": "object"}},
+    "requires_approval": {"type": "boolean"},
+    "approval_id": {"type": ["string", "null"]},
+    "created_at": {"type": "string", "minLength": 1}
+  }
+}

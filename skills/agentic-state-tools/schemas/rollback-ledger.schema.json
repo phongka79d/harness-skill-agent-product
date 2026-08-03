@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "ledger_id", "plan_id", "task_id", "approval_id", "status", "classification", "entries", "next_action", "created_at"],
+  "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
+    "ledger_id": {"type": "string", "minLength": 1},
+    "plan_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "approval_id": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "enum": ["ROLLED_BACK", "ESCALATED"]},
+    "classification": {"type": "string", "enum": ["ROLLED_BACK", "PARTIAL_ROLLBACK", "ESCALATED"]},
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["action_id", "operation_id", "status", "retry_allowed", "evidence"],
+        "properties": {
+          "action_id": {"type": "string", "minLength": 1},
+          "operation_id": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "enum": ["COMPLETED", "FAILED", "UNKNOWN", "STALE_OWNER", "BLOCKED"]},
+          "retry_allowed": {"type": "boolean"},
+          "evidence": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "next_action": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1}
+  }
+}

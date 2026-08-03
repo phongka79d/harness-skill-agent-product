@@ -1,0 +1,15 @@
+{
+  "review_id": "BATCH-REV-SP-01-B01",
+  "batch_id": "SP-01-B01",
+  "task_reviews": ["REV-SP-01-B01-T01"],
+  "integration_checks": [
+    {
+      "name": "api_compatibility",
+      "result": "PASS",
+      "evidence": "Contract tests pass against the integrated batch."
+    }
+  ],
+  "findings": [],
+  "scope_valid": true,
+  "verdict": "PASS"
+}

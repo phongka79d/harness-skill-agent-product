@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentic Engineering Wiki"
+  short_description: "Shared agentic engineering source of truth"
+  default_prompt: "Use $agentic-engineering-wiki to route architecture, roles, workflows, policies, contracts, profiles, and rubrics."

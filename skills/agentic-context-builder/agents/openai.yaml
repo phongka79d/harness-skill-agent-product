@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentic Context Builder"
+  short_description: "Build bounded task context"
+  default_prompt: "Use $agentic-context-builder to assemble a bounded context package for one task."

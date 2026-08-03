@@ -1,0 +1,182 @@
+{
+  "schema_version": 1,
+  "config_id": "agentic-engineering",
+  "version": "1.0",
+  "agents": {
+    "agent-brainstorm": {
+      "skill": "agentic-brainstorm-facilitator",
+      "role": "brainstorm_facilitator",
+      "dispatch_kind": "model",
+      "model_dispatch": "5.6-Luna-XHigh",
+      "capabilities": ["goal_clarification", "options_analysis", "risk_identification"],
+      "forbidden": ["source_code_editing", "runtime_state_mutation", "architecture_approval"]
+    },
+    "agent-plan-architect": {
+      "skill": "agentic-plan-architect",
+      "role": "plan_architect",
+      "dispatch_kind": "model",
+      "model_dispatch": "5.6-Luna-XHigh",
+      "capabilities": ["planning_contracts", "dependency_decomposition", "traceability"],
+      "forbidden": ["source_code_editing", "plan_approval", "runtime_state_mutation"]
+    },
+    "agent-plan-reviewer": {
+      "skill": "agentic-plan-reviewer",
+      "role": "plan_reviewer",
+      "dispatch_kind": "model",
+      "model_dispatch": "5.6-Luna-XHigh",
+      "capabilities": ["dependency_analysis", "scope_review", "risk_review"],
+      "forbidden": ["source_code_editing", "plan_mutation", "architecture_approval"]
+    },
+    "agent-explorer": {
+      "skill": "agentic-explorer",
+      "role": "explorer",
+      "dispatch_kind": "model",
+      "model_dispatch": "5.6-Luna-XHigh",
+      "capabilities": ["repository_reading", "code_tracing", "evidence_gathering"],
+      "forbidden": ["source_code_editing", "runtime_state_mutation", "architecture_decision"]
+    },
+    "agent-context-builder": {
+      "skill": "agentic-context-builder",
+      "role": "context_builder",
+      "dispatch_kind": "model",
+      "model_dispatch": "5.6-Luna-XHigh",
+      "capabilities": ["bounded_context", "scope_filtering", "secret_redaction"],
+      "forbidden": ["architecture_decision", "source_code_editing", "full_repository_scan"]
+    },
+    "agent-executor": {
+      "skill": "agentic-implementer",
+      "role": "executor",
+      "dispatch_kind": "model",
+      "model_dispatch": "5.6-Luna-High",
+      "capabilities": ["long_code_generation", "testing", "repository_editing"],
+      "forbidden": ["architecture_decision", "task_review", "scope_expansion", "self_approval"]
+    },
+    "agent-review": {
+      "skill": "agentic-task-reviewer",
+      "role": "task_reviewer",
+      "dispatch_kind": "model",
+      "model_dispatch": "5.6-Luna-XHigh",
+      "capabilities": ["evidence_review", "rubric_scoring", "scope_verification"],
+      "forbidden": ["source_code_editing", "canonical_review_editing", "self_approval"]
+    },
+    "agent-batch-review": {
+      "skill": "agentic-batch-reviewer",
+      "role": "batch_reviewer",
+      "dispatch_kind": "model",
+      "model_dispatch": "5.6-Luna-XHigh",
+      "capabilities": ["integration_review", "regression_review", "recovery_readiness"],
+      "forbidden": ["source_code_editing", "direct_repair", "architecture_approval"]
+    },
+    "agent-runtime-recovery": {
+      "skill": "agentic-runtime-recovery",
+      "role": "runtime_recovery",
+      "dispatch_kind": "model",
+      "model_dispatch": "5.6-Luna-XHigh",
+      "capabilities": ["recovery_inspection", "side_effect_reconciliation", "lease_analysis"],
+      "forbidden": ["unverified_resume", "source_code_editing", "side_effect_retry"]
+    },
+    "agent-dashboard": {
+      "skill": "agentic-dashboard",
+      "role": "dashboard",
+      "dispatch_kind": "model",
+      "model_dispatch": "5.6-Luna-XHigh",
+      "capabilities": ["read_only_observability", "redaction", "runtime_projection"],
+      "forbidden": ["runtime_state_mutation", "canonical_artifact_writes"]
+    },
+    "agent-state-tools": {
+      "skill": "agentic-state-tools",
+      "role": "state_tools",
+      "dispatch_kind": "script",
+      "model_dispatch": null,
+      "capabilities": ["schema_validation", "atomic_runtime_writes", "event_persistence"],
+      "forbidden": ["subjective_architecture_decisions", "unvalidated_writes"]
+    },
+    "agent-configuration": {
+      "skill": "agentic-configuration",
+      "role": "configuration",
+      "dispatch_kind": "primary",
+      "model_dispatch": null,
+      "capabilities": ["config_validation", "routing_resolution", "policy_inspection"],
+      "forbidden": ["automatic_config_mutation", "runtime_state_writes"]
+    }
+  },
+  "model_policy": {
+    "allowed_models": ["5.6-Luna-High", "5.6-Luna-XHigh"],
+    "forbidden_models": ["5.6-Luna-Normal", "5.6-Sol", "5.6-Terra"],
+    "immutable_forbidden_models": ["5.6-Luna-Normal", "5.6-Sol", "5.6-Terra"],
+    "selection_mode": "role_configured_only"
+  },
+  "execution": {
+    "default_mode": "auto",
+    "max_parallel_tasks": 3,
+    "max_execution_attempts": 2,
+    "max_repair_cycles": 3,
+    "async_requires_isolated_worktree": true
+  },
+  "approval_matrix": {
+    "normal_code_change": "automatic",
+    "new_dependency": "primary_agent",
+    "schema_migration": "user",
+    "destructive_operation": "user",
+    "architecture_change": "user",
+    "production_deployment": "user",
+    "batch_commit": "user"
+  },
+  "runtime": {
+    "state_backend": "filesystem",
+    "state_write_mode": "global_scripts_only",
+    "agent_state_access": "read_only",
+    "atomic_writes": true,
+    "optimistic_concurrency": true
+  },
+  "checkpoint": {
+    "required": true,
+    "after_each_major_step": true,
+    "before_side_effect": true,
+    "after_side_effect": true
+  },
+  "locking": {
+    "task_locks": true,
+    "file_locks": true,
+    "resource_locks": true
+  },
+  "recovery": {
+    "auto_detect_stale_runs": true,
+    "auto_resume_safe_tasks": true,
+    "require_primary_for_reconciliation": true,
+    "require_user_for_unsafe_resume": true
+  },
+  "version_control": {
+    "isolated_worktrees": true,
+    "worktree_root": "../project-agent-worktrees",
+    "commit_runtime_state": false,
+    "commit_reviews": false
+  },
+  "documentation": {
+    "planning_root": "docs/agentic",
+    "task_definitions_root": "docs/agentic/tasks",
+    "human_reviews_root": "docs/agentic/reviews"
+  },
+  "context_budget": {
+    "max_files": 20,
+    "max_reference_documents": 8,
+    "max_examples": 3,
+    "max_review_history_items": 5,
+    "allow_full_repository_scan": false
+  },
+  "security": {
+    "redact_environment_values": true,
+    "redact_tokens": true,
+    "redact_authorization_headers": true,
+    "forbid_secret_storage_in_context": true,
+    "forbid_secret_storage_in_logs": true
+  },
+  "retention": {
+    "keep_completed_task_logs_days": 14,
+    "keep_latest_checkpoints_per_task": 5,
+    "archive_accepted_reviews": true,
+    "compact_event_journal_after_batch": true,
+    "never_delete_decision_logs": true,
+    "preserve_active_recovery_data": true
+  }
+}

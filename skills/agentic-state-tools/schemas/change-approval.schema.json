@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["approval_id", "change_request_id", "decision", "approver", "evidence", "created_at", "revision"],
+  "properties": {
+    "approval_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "change_request_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "decision": {"type": "string", "enum": ["APPROVED", "REJECTED", "DEFERRED"]},
+    "approver": {"type": "string", "minLength": 1},
+    "evidence": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1},
+    "revision": {"type": "integer", "minimum": 1}
+  }
+}

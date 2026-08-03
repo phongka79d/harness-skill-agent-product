@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["lock_id", "kind", "key", "owner_id", "run_id", "fencing_token", "acquired_at", "last_heartbeat", "expires_at", "lease_seconds"],
+  "properties": {
+    "lock_id": {"type": "string", "minLength": 1},
+    "kind": {"type": "string", "enum": ["task", "file", "resource"]},
+    "key": {"type": "string", "minLength": 1},
+    "owner_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "fencing_token": {"type": "integer", "minimum": 1},
+    "acquired_at": {"type": "string", "minLength": 1},
+    "last_heartbeat": {"type": "string", "minLength": 1},
+    "expires_at": {"type": "string", "minLength": 1},
+    "lease_seconds": {"type": "integer", "minimum": 1},
+    "reclaimed_from": {"type": ["string", "null"]}
+  }
+}

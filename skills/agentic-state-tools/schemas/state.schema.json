@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "revision", "running_tasks", "blocked_tasks", "completed_tasks", "task_statuses"],
+  "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
+    "revision": {"type": "integer", "minimum": 0},
+    "previous_revision": {"type": ["integer", "null"], "minimum": 0},
+    "last_event_id": {"type": ["string", "null"]},
+    "updated_at": {"type": "string"},
+    "running_tasks": {"type": "array", "items": {"type": "string"}},
+    "blocked_tasks": {"type": "array", "items": {"type": "string"}},
+    "completed_tasks": {"type": "array", "items": {"type": "string"}},
+    "task_statuses": {"type": "object"}
+  }
+}

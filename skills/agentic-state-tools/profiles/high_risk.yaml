@@ -1,0 +1,1 @@
+{"profile_id":"high_risk","version":"1.0","project_profile":{"type":"high_risk","delivery_mode":"controlled","deployment":"regulated_or_critical","data_sensitivity":"sensitive","user_exposure":"multiple_users"},"quality_level":"critical","default_threshold_percent":95}

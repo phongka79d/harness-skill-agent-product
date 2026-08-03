@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["assumption_id", "statement", "status", "impact"],
+  "properties": {
+    "assumption_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "statement": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "enum": ["OPEN", "CONFIRMED", "INVALIDATED"]},
+    "impact": {"type": "string", "minLength": 1}
+  }
+}

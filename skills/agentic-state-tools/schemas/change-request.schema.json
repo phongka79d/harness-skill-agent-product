@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["change_request_id", "target_type", "target_id", "reason", "requested_changes", "status", "requested_by"],
+  "properties": {
+    "change_request_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "target_type": {"type": "string", "enum": ["MASTER_PLAN", "SUB_PLAN", "BATCH", "TASK", "DECISION", "RISK", "RUBRIC", "PROFILE"]},
+    "target_id": {"type": "string", "minLength": 1},
+    "reason": {"type": "string", "minLength": 1},
+    "requested_changes": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "status": {"type": "string", "enum": ["PROPOSED", "APPROVED", "REJECTED", "APPLIED"]},
+    "requested_by": {"type": "string", "minLength": 1},
+    "target_version": {"type": "string", "minLength": 1},
+    "new_version": {"type": "string", "minLength": 1},
+    "impact": {"type": "object"},
+    "approval_id": {"type": "string", "minLength": 1},
+    "supersedes_id": {"type": "string", "minLength": 1},
+    "applied_at": {"type": "string", "minLength": 1}
+  }
+}

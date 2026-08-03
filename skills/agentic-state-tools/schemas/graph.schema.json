@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "graph_id", "revision", "nodes", "edges"],
+  "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
+    "graph_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "revision": {"type": "integer", "minimum": 0},
+    "nodes": {"type": "array"},
+    "edges": {"type": "array", "items": {"type": "object", "required": ["from", "to"], "properties": {"from": {"type": "string", "minLength": 1}, "to": {"type": "string", "minLength": 1}}}}
+  }
+}

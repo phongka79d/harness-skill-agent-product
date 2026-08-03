@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["review_id", "batch_id", "task_reviews", "integration_checks", "findings", "verdict"],
+  "properties": {
+    "review_id": {"type": "string", "minLength": 1},
+    "batch_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "task_reviews": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "integration_checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "result", "evidence"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "result": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED", "NOT_RUN"]},
+          "evidence": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "evidence", "required_change"], "properties": {"severity": {"type": "string", "enum": ["CRITICAL", "MAJOR", "MINOR", "SUGGESTION"]}, "evidence": {"type": "string", "minLength": 1}, "required_change": {"type": "string", "minLength": 1}, "resolved": {"type": "boolean"}}}},
+    "scope_valid": {"type": "boolean"},
+    "blocking_reasons": {"type": "array", "items": {"type": "string"}},
+    "created_at": {"type": "string", "minLength": 1},
+    "revision": {"type": "integer", "minimum": 1},
+    "reviewer": {"type": "string", "minLength": 1},
+    "resolved_rubric": {"type": "object"},
+    "legacy_migration": {"type": "boolean"},
+    "verdict": {"type": "string", "enum": ["PASS", "REPAIR_REQUIRED", "BLOCKED", "PLAN_INVALID"]}
+  }
+}

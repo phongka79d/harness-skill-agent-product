@@ -1,0 +1,9 @@
+{
+  "task_id": "SP-01-B01-T01",
+  "owner": "executor-01",
+  "run_id": "RUN-001",
+  "acquired_at": "2026-08-02T10:00:00Z",
+  "last_heartbeat": "2026-08-02T10:01:00Z",
+  "lease_seconds": 120,
+  "expires_at": "2026-08-02T10:03:00Z"
+}

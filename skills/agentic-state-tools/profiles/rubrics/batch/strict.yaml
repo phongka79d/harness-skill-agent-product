@@ -1,0 +1,1 @@
+{"extension_id":"strict","version":"1.0","criteria":[{"id":"INTEGRATION_COVERAGE","weight":15},{"id":"SCOPE_ALIGNMENT","weight":10},{"id":"RECOVERY_READINESS","weight":15},{"id":"REGRESSION_CONTROL","weight":15}]}

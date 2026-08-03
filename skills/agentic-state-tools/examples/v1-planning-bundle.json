@@ -1,0 +1,26 @@
+{
+  "master_plan": {
+    "plan_id": "MP-V1",
+    "version": "1.0",
+    "title": "V1 runtime",
+    "objective": "Validate the integrated runtime",
+    "requirements": [{"requirement_id": "REQ-1", "description": "Runtime is auditable"}],
+    "in_scope": ["runtime"],
+    "out_of_scope": ["distributed state"],
+    "architecture": "Model A with Primary-controlled routing",
+    "workstreams": ["runtime"],
+    "milestones": ["release gate"],
+    "dependencies": [],
+    "constraints": ["Python standard library"],
+    "success_criteria": ["REQ-1"],
+    "risks": [],
+    "completion_conditions": ["all tests pass"]
+  },
+  "sub_plans": [{"sub_plan_id": "SP-V1", "master_plan_id": "MP-V1", "version": "1.0", "title": "Runtime sub-plan", "objective": "Exercise runtime", "dependencies": [], "outputs": ["evidence"], "batches": ["B-V1"], "risks": []}],
+  "batches": [{"batch_id": "B-V1", "sub_plan_id": "SP-V1", "version": "1.0", "objective": "Run workflow", "depends_on": [], "tasks": ["T-V1"], "integration_criteria": ["workflow passes"], "definition_of_done": ["review accepted"], "review_profile": "personal", "commit_conditions": ["batch passes"]}],
+  "tasks": [{"task_id": "T-V1", "batch_id": "B-V1", "version": "1.0", "title": "Run V1 workflow", "objective": "Exercise runtime", "context": "Integrated test", "depends_on": [], "execution_mode": "auto", "task_type": "backend", "requirement_ids": ["REQ-1"], "read_scope": ["skills/agentic-state-tools/"], "write_scope": ["src/feature.py"], "inputs": [], "required_outputs": ["review"], "acceptance_criteria": ["workflow passes"], "verification": ["python run_tests.py"], "out_of_scope": ["remote state"], "risk_flags": {"architecture_change": false}, "blocker_policy": {"hard_blockers": ["failed verification"]}, "execution_budget": {"max_files_changed": 2, "max_new_dependencies": 0, "allow_schema_change": false, "allow_architecture_change": false}, "architecture_decisions": []}],
+  "decisions": [],
+  "assumptions": [],
+  "risks": [],
+  "change_requests": []
+}

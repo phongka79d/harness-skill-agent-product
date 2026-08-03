@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "config_id", "version", "agents", "model_policy", "execution", "approval_matrix", "runtime", "checkpoint", "locking", "recovery", "version_control", "documentation", "context_budget", "security", "retention"],
+  "properties": {
+    "schema_version": {"type": "integer", "enum": [1]},
+    "config_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "version": {"type": "string", "minLength": 1},
+    "agents": {"type": "object"},
+    "model_policy": {
+      "type": "object",
+      "required": ["allowed_models", "forbidden_models", "immutable_forbidden_models", "selection_mode"],
+      "properties": {
+        "allowed_models": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "forbidden_models": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "immutable_forbidden_models": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "selection_mode": {"type": "string", "enum": ["role_configured_only"]}
+      }
+    },
+    "execution": {
+      "type": "object",
+      "required": ["default_mode", "max_parallel_tasks", "max_execution_attempts", "max_repair_cycles", "async_requires_isolated_worktree"],
+      "properties": {
+        "default_mode": {"type": "string", "enum": ["auto", "async", "sync"]},
+        "max_parallel_tasks": {"type": "integer", "minimum": 1},
+        "max_execution_attempts": {"type": "integer", "minimum": 1},
+        "max_repair_cycles": {"type": "integer", "minimum": 1},
+        "async_requires_isolated_worktree": {"type": "boolean"}
+      }
+    },
+    "approval_matrix": {"type": "object"},
+    "runtime": {
+      "type": "object",
+      "required": ["state_backend", "state_write_mode", "agent_state_access", "atomic_writes", "optimistic_concurrency"],
+      "properties": {
+        "state_backend": {"type": "string", "minLength": 1},
+        "state_write_mode": {"type": "string", "minLength": 1},
+        "agent_state_access": {"type": "string", "minLength": 1},
+        "atomic_writes": {"type": "boolean"},
+        "optimistic_concurrency": {"type": "boolean"}
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "required": ["required", "after_each_major_step", "before_side_effect", "after_side_effect"],
+      "properties": {
+        "required": {"type": "boolean"},
+        "after_each_major_step": {"type": "boolean"},
+        "before_side_effect": {"type": "boolean"},
+        "after_side_effect": {"type": "boolean"}
+      }
+    },
+    "locking": {
+      "type": "object",
+      "required": ["task_locks", "file_locks", "resource_locks"],
+      "properties": {
+        "task_locks": {"type": "boolean"},
+        "file_locks": {"type": "boolean"},
+        "resource_locks": {"type": "boolean"}
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "required": ["auto_detect_stale_runs", "auto_resume_safe_tasks", "require_primary_for_reconciliation", "require_user_for_unsafe_resume"],
+      "properties": {
+        "auto_detect_stale_runs": {"type": "boolean"},
+        "auto_resume_safe_tasks": {"type": "boolean"},
+        "require_primary_for_reconciliation": {"type": "boolean"},
+        "require_user_for_unsafe_resume": {"type": "boolean"}
+      }
+    },
+    "version_control": {
+      "type": "object",
+      "required": ["isolated_worktrees", "worktree_root", "commit_runtime_state", "commit_reviews"],
+      "properties": {
+        "isolated_worktrees": {"type": "boolean"},
+        "worktree_root": {"type": "string", "minLength": 1},
+        "commit_runtime_state": {"type": "boolean"},
+        "commit_reviews": {"type": "boolean"}
+      }
+    },
+    "documentation": {
+      "type": "object",
+      "required": ["planning_root", "task_definitions_root", "human_reviews_root"],
+      "properties": {
+        "planning_root": {"type": "string", "minLength": 1},
+        "task_definitions_root": {"type": "string", "minLength": 1},
+        "human_reviews_root": {"type": "string", "minLength": 1}
+      }
+    },
+    "context_budget": {
+      "type": "object",
+      "required": ["max_files", "max_reference_documents", "max_examples", "max_review_history_items", "allow_full_repository_scan"],
+      "properties": {
+        "max_files": {"type": "integer", "minimum": 1},
+        "max_reference_documents": {"type": "integer", "minimum": 0},
+        "max_examples": {"type": "integer", "minimum": 0},
+        "max_review_history_items": {"type": "integer", "minimum": 0},
+        "allow_full_repository_scan": {"type": "boolean"}
+      }
+    },
+    "security": {
+      "type": "object",
+      "required": ["redact_environment_values", "redact_tokens", "redact_authorization_headers", "forbid_secret_storage_in_context", "forbid_secret_storage_in_logs"],
+      "properties": {
+        "redact_environment_values": {"type": "boolean"},
+        "redact_tokens": {"type": "boolean"},
+        "redact_authorization_headers": {"type": "boolean"},
+        "forbid_secret_storage_in_context": {"type": "boolean"},
+        "forbid_secret_storage_in_logs": {"type": "boolean"}
+      }
+    },
+    "retention": {
+      "type": "object",
+      "required": ["keep_completed_task_logs_days", "keep_latest_checkpoints_per_task", "archive_accepted_reviews", "compact_event_journal_after_batch", "never_delete_decision_logs", "preserve_active_recovery_data"],
+      "properties": {
+        "keep_completed_task_logs_days": {"type": "integer", "minimum": 0},
+        "keep_latest_checkpoints_per_task": {"type": "integer", "minimum": 0},
+        "archive_accepted_reviews": {"type": "boolean"},
+        "compact_event_journal_after_batch": {"type": "boolean"},
+        "never_delete_decision_logs": {"type": "boolean"},
+        "preserve_active_recovery_data": {"type": "boolean"}
+      }
+    }
+  }
+}

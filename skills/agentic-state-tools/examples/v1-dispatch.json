@@ -1,0 +1,12 @@
+{
+  "dispatch_id": "DSP-V1",
+  "task_id": "T-V1",
+  "agent_role": "agent-executor",
+  "selected_mode": "ASYNC",
+  "selected_owner": "primary-agent",
+  "selected_model": "configured-agent-executor-model",
+  "model_reference": "agents.agent-executor.model_dispatch",
+  "input_revisions": {"queue": 1, "task": 0},
+  "approval_references": ["APR-TASK-T-V1-1"],
+  "evidence": {"reason": "independent task", "architecture_owner": "primary-agent"}
+}

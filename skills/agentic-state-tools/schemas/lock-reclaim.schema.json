@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "reclaim_id", "old_lock_id", "new_lock_id", "old_owner", "reclaimed_at", "owner_liveness", "reason", "evidence_hash"],
+  "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
+    "reclaim_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "old_lock_id": {"type": "string", "minLength": 1},
+    "new_lock_id": {"type": "string", "minLength": 1},
+    "old_owner": {"type": "string", "minLength": 1},
+    "old_owner_pid": {"type": ["integer", "null"], "minimum": 1},
+    "reclaimed_at": {"type": "string", "minLength": 1},
+    "owner_liveness": {"type": "string", "enum": ["ALIVE", "DEAD", "UNKNOWN"]},
+    "reason": {"type": "string", "minLength": 1},
+    "evidence": {"type": "object"},
+    "evidence_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

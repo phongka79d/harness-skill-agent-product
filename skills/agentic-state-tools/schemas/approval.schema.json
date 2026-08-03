@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["approval_id", "target_type", "target_id", "decision", "approver", "evidence", "created_at", "revision"],
+  "properties": {
+    "approval_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "target_type": {"type": "string", "enum": ["MASTER_PLAN", "SUB_PLAN", "BATCH", "TASK", "DECISION", "CHANGE_REQUEST", "RUBRIC_OVERRIDE", "ARCHITECTURE_CHANGE", "PLAN_SUPERSEDE", "PROFILE", "ROLLBACK"]},
+    "target_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "decision": {"type": "string", "enum": ["APPROVED", "REJECTED", "DEFERRED"]},
+    "approver": {"type": "string", "minLength": 1},
+    "evidence": {"type": "string", "minLength": 1},
+    "created_at": {"type": "string", "minLength": 1},
+    "revision": {"type": "integer", "minimum": 1}
+  }
+}

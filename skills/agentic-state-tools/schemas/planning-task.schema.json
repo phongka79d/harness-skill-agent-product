@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["task_id", "batch_id", "version", "title", "objective", "context", "depends_on", "execution_mode", "task_type", "read_scope", "write_scope", "inputs", "required_outputs", "acceptance_criteria", "verification", "out_of_scope", "risk_flags", "blocker_policy", "execution_budget", "architecture_decisions"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "batch_id": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "minLength": 1},
+    "title": {"type": "string", "minLength": 1},
+    "objective": {"type": "string", "minLength": 1},
+    "context": {"type": "string", "minLength": 1},
+    "depends_on": {"type": "array", "items": {"type": "string"}},
+    "execution_mode": {"type": "string", "enum": ["auto", "async", "sync"]},
+    "task_type": {"type": "string", "minLength": 1},
+    "requirement_ids": {"type": "array", "items": {"type": "string"}},
+    "read_scope": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "write_scope": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "inputs": {"type": "array", "items": {"type": "string"}},
+    "required_outputs": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "acceptance_criteria": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "verification": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "out_of_scope": {"type": "array", "items": {"type": "string"}},
+    "risk_flags": {"type": "object"},
+    "blocker_policy": {"type": "object", "required": ["hard_blockers"], "properties": {"hard_blockers": {"type": "array", "items": {"type": "string"}}}},
+    "execution_budget": {"type": "object", "required": ["max_files_changed", "max_new_dependencies", "allow_schema_change", "allow_architecture_change"], "properties": {"max_files_changed": {"type": "integer", "minimum": 0}, "max_new_dependencies": {"type": "integer", "minimum": 0}, "allow_schema_change": {"type": "boolean"}, "allow_architecture_change": {"type": "boolean"}}},
+    "architecture_decisions": {"type": "array", "items": {"type": "string"}}
+  }
+}

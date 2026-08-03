@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["action_id", "operation_id", "kind", "provider", "description", "depends_on"],
+  "properties": {
+    "action_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "operation_id": {"type": "string", "minLength": 1, "pattern": "^OP-[A-Za-z0-9._-]+$"},
+    "kind": {"type": "string", "enum": ["REVERSIBLE", "DESTRUCTIVE"]},
+    "provider": {"type": "string", "minLength": 1},
+    "description": {"type": "string", "minLength": 1},
+    "depends_on": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "fencing": {"type": ["object", "null"]}
+  }
+}

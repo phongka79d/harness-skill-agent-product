@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema_version", "revision", "etag", "state", "events"],
+  "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
+    "revision": {"type": "integer", "minimum": 0},
+    "etag": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "state": {"type": "object"},
+    "events": {"type": "array", "items": {"type": "object"}}
+  }
+}

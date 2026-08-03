@@ -1,0 +1,1 @@
+{"extension_id":"backend","version":"1.0","criteria":[{"id":"API_COMPATIBILITY","weight":10},{"id":"DATA_INTEGRITY","weight":10}]}

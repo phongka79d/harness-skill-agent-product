@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["batch_id", "sub_plan_id", "version", "objective", "depends_on", "tasks", "integration_criteria", "definition_of_done", "review_profile", "commit_conditions"],
+  "properties": {
+    "batch_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "sub_plan_id": {"type": "string", "minLength": 1},
+    "version": {"type": "string", "minLength": 1},
+    "objective": {"type": "string", "minLength": 1},
+    "depends_on": {"type": "array", "items": {"type": "string"}},
+    "tasks": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "integration_criteria": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "definition_of_done": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "review_profile": {"type": "string", "minLength": 1},
+    "commit_conditions": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}

@@ -1,0 +1,1 @@
+{"profile_id":"production","version":"1.0","project_profile":{"type":"production","delivery_mode":"controlled","deployment":"public_or_business","data_sensitivity":"business","user_exposure":"multiple_users"},"quality_level":"strict","default_threshold_percent":90}

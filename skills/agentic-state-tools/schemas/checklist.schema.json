@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["task_id", "title", "status", "checked"],
+  "properties": {
+    "task_id": {"type": "string"},
+    "title": {"type": "string"},
+    "status": {"type": "string"},
+    "checked": {"type": "boolean"}
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["rubric_id", "rubric_version", "review_type", "task_type", "profile_id", "profile_version", "profile_hash", "pass_threshold_percent", "hard_fail_rules", "criteria", "applicability", "resolved_weights", "rubric_hash"],
+  "properties": {
+    "rubric_id": {"type": "string", "minLength": 1},
+    "rubric_version": {"type": "string", "minLength": 1},
+    "review_type": {"type": "string", "enum": ["task", "batch"]},
+    "task_type": {"type": "string", "minLength": 1},
+    "profile_id": {"type": "string", "minLength": 1},
+    "profile_version": {"type": "string", "minLength": 1},
+    "profile_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "pass_threshold_percent": {"type": "number", "minimum": 0, "maximum": 100},
+    "hard_fail_rules": {"type": "array", "items": {"type": "string"}},
+    "criteria": {"type": "array", "items": {"type": "object", "required": ["id", "weight", "mandatory", "minimum_score", "applicability"], "properties": {"id": {"type": "string"}, "weight": {"type": "number", "exclusiveMinimum": 0}, "mandatory": {"type": "boolean"}, "minimum_score": {"type": "number", "minimum": 0, "maximum": 4}, "applicability": {"type": "string"}}}},
+    "applicability": {"type": "object"},
+    "resolved_weights": {"type": "object"},
+    "extension_ids": {"type": "array", "items": {"type": "string"}},
+    "extension_versions": {"type": "object"},
+    "override_approval_id": {"type": ["string", "null"]},
+    "rubric_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

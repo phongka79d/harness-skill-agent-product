@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentic Runtime Recovery"
+  short_description: "Inspect and recover runtime state"
+  default_prompt: "Use $agentic-runtime-recovery to inspect interrupted runs and recover runtime state safely."

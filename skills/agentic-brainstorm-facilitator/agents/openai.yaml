@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentic Brainstorm Facilitator"
+  short_description: "Clarify goals before planning"
+  default_prompt: "Use $agentic-brainstorm-facilitator to clarify an engineering request before formal planning."

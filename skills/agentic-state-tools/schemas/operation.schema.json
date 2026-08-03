@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["operation_id", "task_id", "type", "status", "command", "recorded_at", "revision", "actor"],
+  "properties": {
+    "operation_id": {"type": "string", "minLength": 1, "pattern": "^OP-[A-Za-z0-9._-]+$"},
+    "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "run_id": {"type": "string", "minLength": 1},
+    "type": {"type": "string", "enum": ["DATABASE_MIGRATION", "EMAIL", "EXTERNAL_RESOURCE", "COMMIT", "PUSH", "DEPLOY", "DELETE", "DEPENDENCY_INSTALL", "SCHEMA_CHANGE", "OTHER"]},
+    "status": {"type": "string", "enum": ["STARTED", "COMPLETED", "FAILED", "UNKNOWN"]},
+    "command": {"type": "string", "minLength": 1},
+    "result_checksum": {"type": "string", "minLength": 1},
+    "result_summary": {"type": "string"},
+    "recorded_at": {"type": "string", "minLength": 1},
+    "revision": {"type": "integer", "minimum": 1},
+    "actor": {"type": "string", "minLength": 1}
+  }
+}
