@@ -22,5 +22,15 @@
   "decisions": [],
   "assumptions": [],
   "risks": [],
-  "change_requests": []
+  "change_requests": [],
+  "negative_examples": [
+    {"name": "missing-owner", "validator": "validate_planning.py", "expected": "REJECT", "reason": "task T-V1 requires an owner"},
+    {"name": "stale-batch-contract", "validator": "commit_batch.py", "expected": "REJECT", "reason": "batch review batch contract pin does not match the current contract"},
+    {"name": "wrong-run-attempt-handoff", "validator": "create_handoff.py", "expected": "REJECT", "reason": "handoff.run_id does not match the current task state"},
+    {"name": "async-without-isolation-proof", "validator": "resolve_execution_mode.py", "expected": "BLOCKED", "reason": "ISOLATION_PROOF_MISSING"},
+    {"name": "merge-without-approval", "validator": "merge_worktree.py", "expected": "REJECT", "reason": "required approval artifact is missing or unreadable"},
+    {"name": "interrupted-transaction", "validator": "inspect_recovery.py", "expected": "RECOVERY_PENDING", "reason": "RECOVERY_PENDING"},
+    {"name": "invalid-change-operation", "validator": "validate_change_request.py", "expected": "REJECT", "reason": "requested_changes[0].op must be add, replace, remove, move, copy, or test"},
+    {"name": "secret-bearing-context", "validator": "create_context.py", "expected": "REJECT", "reason": "secret scan rejected sensitive value: $.code_context.file_contents.config.py:token_assignment"}
+  ]
 }

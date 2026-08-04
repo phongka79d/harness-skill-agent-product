@@ -1,5 +1,7 @@
 # Batch Review Contract
 
+Policy status: ENFORCED (enforced by `skills/agentic-state-tools/scripts/create_batch_review.py`)
+
 ```yaml
 review_id: "BATCH-REV-SP-01-B01"
 batch_id: "SP-01-B01"
@@ -35,3 +37,8 @@ checks, and any required approval record.
 Submit this payload to `create_batch_review.py`. The script resolves the final
 verdict from accepted task reviews, integration check results, scope validity,
 and unresolved severe findings; a reviewer-provided verdict is not authoritative.
+
+The batch contract revision and hash are pinned at review and commit time. The
+writer command is `create_batch_contract.py`; a stale pin, missing approval,
+missing task review, or task-set mismatch rejects the batch. The Batch Reviewer
+does not merge worktrees or approve the next batch.

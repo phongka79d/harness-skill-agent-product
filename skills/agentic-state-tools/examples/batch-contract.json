@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "contract_id": "BATCH-CONTRACT-B-V1-R1",
+  "plan_id": "MP-V1",
+  "plan_revision": 1,
+  "plan_hash": "47fc6e860fc0da1d291e59fbd61a647f7b83c3dc1a638e0b4e0254282b4b0a91",
+  "plan_approval_id": "APR-MP-V1-1",
+  "batch_id": "B-V1",
+  "batch_revision": 1,
+  "tasks": [
+    {
+      "task_id": "T-V1",
+      "task_revision": 1,
+      "review_contract_hash": "007251c14fb53bfe9f586b6a3917743ec2097be4118dee50adde85a4934cbf7b",
+      "rubric_id": "TASK_REVIEW_BACKEND_LIGHTWEIGHT_V1",
+      "rubric_version": "1.1",
+      "rubric_hash": "ebb470252d77a1309f35dbbbe4e924b687c336b5ab824807ccc40ae53cbbce31"
+    }
+  ],
+  "review_contract": {
+    "project_profile": "personal",
+    "profile_hash": "68d3cbf1f0092461f7d62df20e4e3c1c74dc39d4ed59da59c56f9b1836c6848a",
+    "task_type": "standard",
+    "risk_flags": {},
+    "review_type": "batch",
+    "rubric_id": "BATCH_REVIEW_STANDARD_LIGHTWEIGHT_V1",
+    "rubric_version": "1.1",
+    "rubric_hash": "b16300c8b50c19af42cb97f0a402e65ec545931397025bf0cf283efd4088c167",
+    "review_policy_version": "1"
+  },
+  "rubric_id": "BATCH_REVIEW_STANDARD_LIGHTWEIGHT_V1",
+  "rubric_version": "1.1",
+  "rubric_hash": "b16300c8b50c19af42cb97f0a402e65ec545931397025bf0cf283efd4088c167",
+  "revision": 1,
+  "previous_revision": null,
+  "created_at": "2026-08-04T00:00:00Z",
+  "contract_hash": "11151e92ea782094411e4d7ddee12e16d7ea350cd66e0c77b20bae258894752b"
+}

@@ -1,0 +1,11 @@
+{
+  "task_id": "T-V1",
+  "run_id": "RUN-V1",
+  "worktree_path": "../project-agent-worktrees/T-V1",
+  "branch_name": "agent/T-V1",
+  "base_commit": "0123456789abcdef0123456789abcdef01234567",
+  "plan_revision": 1,
+  "write_scope_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "active_conflicts_checked_at": "2026-08-04T00:00:00Z",
+  "isolation_status": "VERIFIED"
+}

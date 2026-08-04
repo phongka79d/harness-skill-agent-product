@@ -29,7 +29,7 @@ The implementation must preserve the current filesystem backend, Primary-control
 
 The attached specification uses `state-tools/...` as a shorthand. In this repository the concrete package root is `skills/agentic-state-tools/`, and importable runtime modules belong under `skills/agentic-state-tools/scripts/`; the file map below uses those actual paths.
 
-**Progress checkpoint (2026-08-04):** Tasks 1–7 are complete. Task 9 Step 1 has been validated through the focused gates. Task 8 and the remaining Task 9 steps stay open until their documentation, archive, and report deliverables are implemented.
+**Progress checkpoint (2026-08-04):** Tasks 1–8 are complete. Task 9 Step 1 has been validated through the focused gates. The remaining Task 9 steps stay open until the integrated release archive and final report are completed.
 
 ## File map
 
@@ -702,7 +702,7 @@ Expected: the release runner reports every group, zero collection errors, zero f
 - Modify: `skills/agentic-task-reviewer/references/review-contract.md`
 - Modify: `skills/agentic-batch-reviewer/references/batch-contract.md`
 - Modify: `skills/agentic-engineering-core/references/architecture/architecture.md`
-- Modify: `skills/agentic-engineering_system_complete_specification.md`
+- Modify: `skills/agentic_engineering_system_complete_specification.md`
 - Create: `docs/release-report-template.md`
 - Modify: `skills/agentic-state-tools/examples/task-state.json`
 - Modify: `skills/agentic-state-tools/examples/v1-planning-bundle.json`
@@ -711,19 +711,19 @@ Expected: the release runner reports every group, zero collection errors, zero f
 - Create: `skills/agentic-state-tools/examples/isolation-proof.json`
 - Create: `skills/agentic-state-tools/examples/transaction.json`
 
-- [ ] **Step 1: Add documentation tests for policy status.**
+- [x] **Step 1: Add documentation tests for policy status.**
 
 Add a test that every listed policy document contains exactly one of `ENFORCED`, `VALIDATED_ONLY`, `DECLARATIVE_ONLY`, or `NOT_IMPLEMENTED`, and that an `ENFORCED` claim names the script/validator that enforces it. Add a failure for a documented feature with no corresponding command or schema.
 
-- [ ] **Step 2: Update the Wiki and role contracts from implementation.**
+- [x] **Step 2: Update the Wiki and role contracts from implementation.**
 
 Document the exact state transitions, owner/review pin rules, batch writer command, handoff identity checks, async eligibility and recovery classifications, transaction lifecycle, authorization fields/expiry, secret scan behavior, package allowlist, test groups, and release commands. Mark remaining distributed/remote features `NOT_IMPLEMENTED` unless they are backed by a script and release test. Do not describe a policy as enforced solely because a schema contains its fields.
 
-- [ ] **Step 3: Validate every example through the official CLI.**
+- [x] **Step 3: Validate every example through the official CLI.**
 
 Add negative examples for missing owner, stale batch contract, wrong run/attempt handoff, async without isolation proof, merge without approval, interrupted transaction, invalid change operation, and secret-bearing context. Update `validate_examples.py` to invoke the relevant scripts, not only JSON schema validation, and make the release runner fail if any positive example or expected negative outcome disagrees with its declared result.
 
-- [ ] **Step 4: Add the required implementation report template.**
+- [x] **Step 4: Add the required implementation report template.**
 
 Create `docs/release-report-template.md` with these exact sections and tables:
 
@@ -751,7 +751,7 @@ Create `docs/release-report-template.md` with these exact sections and tables:
 
 The implementation report must choose exactly one verdict: `READY`, `READY_WITH_RESTRICTIONS`, or `NOT_READY`. It must not use `READY` while runtime identity, async isolation, or release tests are failing.
 
-- [ ] **Step 5: Run Wiki, example, and documentation checks.**
+- [x] **Step 5: Run Wiki, example, and documentation checks.**
 
 Run:
 

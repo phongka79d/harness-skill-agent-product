@@ -5,6 +5,8 @@ description: Use when project-local `.agent/` artifacts must be initialized, val
 
 # Agentic State Tools
 
+Policy status: ENFORCED (enforced by `skills/agentic-state-tools/scripts/validate_state.py`)
+
 This skill is the only approved writer for canonical `.agent/` runtime artifacts. Agents submit structured payloads; these scripts validate and persist them.
 
 Read `agentic-engineering-wiki` for shared state-boundary, workflow, recovery, approval, rubric, and contract routing before using these tools.
@@ -125,5 +127,22 @@ request with an idempotency key and reports transport uncertainty as
 `NETWORK_UNCERTAIN`; it never retries an uncertain side effect automatically.
 
 If validation fails, do not hand-edit the target artifact. Return the error to the agent, allow one focused correction, then mark the workflow blocked or escalated.
+
+Runtime identity is carried by task ID, plan revision, batch ID, run ID, attempt
+ID, dispatch ID, lease ID, and artifact hashes. Handoffs, leases, dispatches,
+recovery, and merges reject mismatched identity instead of treating a matching
+task ID as sufficient. Async execution requires a verified external isolation
+proof; merge remains sequential and approval-backed.
+
+Secret-bearing context is scanned by `secret_scanner.py` and `redaction.py`.
+Reject mode returns non-zero and does not persist the payload; redact mode
+replaces sensitive values and records only secret-free evidence. Package
+creation uses `package_skill.py` and the checked-in allowlist. The release
+commands are `python run_tests.py --all` and the ordered preflight described by
+`run_tests.py`.
+
+The file-backed distributed adapter is a deterministic reference backend only;
+multi-machine scheduling, remote locks, and remote runtime state are
+NOT_IMPLEMENTED.
 
 Read [artifact-contracts.md](references/artifact-contracts.md) and [cli-behavior.md](references/cli-behavior.md).

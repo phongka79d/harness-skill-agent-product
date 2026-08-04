@@ -33,6 +33,8 @@ GROUP_NAMES = (
     "concurrency",
     "release",
 )
+# The nested grouped suite receives one caller timeout budget per configured group.
+GROUPED_SUITE_TIMEOUT_MULTIPLIER = len(GROUP_NAMES)
 GROUP_ALIASES = {"end_to_end": "e2e"}
 GROUP_ASSIGNMENTS = {
     "test_config.py": "schema",
@@ -339,11 +341,16 @@ def run_release_preflight(timeout_seconds: int = 120) -> list[str]:
         command_env = dict(env)
         if name == "test-suite":
             command_env["AGENTIC_RELEASE_GROUPS_ONLY"] = "1"
+        command_timeout = (
+            timeout_seconds * GROUPED_SUITE_TIMEOUT_MULTIPLIER
+            if name == "test-suite"
+            else timeout_seconds
+        )
         result = _run_release_process(
             command,
             cwd=ROOT,
             env=command_env,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=command_timeout,
         )
         if result.stdout:
             print(result.stdout, end="")

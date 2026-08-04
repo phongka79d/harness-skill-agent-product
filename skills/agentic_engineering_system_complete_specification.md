@@ -1,4 +1,7 @@
 # Agentic Engineering System
+
+Policy status: DECLARATIVE_ONLY
+
 ## Complete Architecture, Workflow, Global Skills, Review Rubrics, Persistence, and Recovery Specification
 
 **Status:** Finalized Design  
@@ -2728,9 +2731,9 @@ V1 should implement:
 
 Do not include these in V1 unless required:
 
-- distributed state database
-- multi-machine scheduler
-- remote lock service
+- Feature: distributed state database; command=none; status=NOT_IMPLEMENTED
+- Feature: multi-machine scheduler; command=none; status=NOT_IMPLEMENTED
+- Feature: remote lock service; command=none; status=NOT_IMPLEMENTED
 - advanced dashboard
 - fully automatic rollback
 - autonomous architecture refactoring

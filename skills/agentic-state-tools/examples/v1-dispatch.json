@@ -9,5 +9,6 @@
   "input_revisions": {"queue": 1, "task": 0},
   "approval_references": ["APR-TASK-T-V1-1"],
   "evidence": {"reason": "independent task", "architecture_owner": "primary-agent"},
-  "review_contract": {"project_profile": "personal", "profile_hash": "68d3cbf1f0092461f7d62df20e4e3c1c74dc39d4ed59da59c56f9b1836c6848a", "task_type": "backend", "risk_flags": {}, "review_type": "task", "rubric_id": "TASK_REVIEW_BACKEND_LIGHTWEIGHT_V1", "rubric_version": "1.1", "rubric_hash": "ebb470252d77a1309f35dbbbe4e924b687c336b5ab824807ccc40ae53cbbce31", "review_policy_version": "1"}
+  "review_contract": {"project_profile": "personal", "profile_hash": "68d3cbf1f0092461f7d62df20e4e3c1c74dc39d4ed59da59c56f9b1836c6848a", "task_type": "backend", "risk_flags": {}, "review_type": "task", "rubric_id": "TASK_REVIEW_BACKEND_LIGHTWEIGHT_V1", "rubric_version": "1.1", "rubric_hash": "ebb470252d77a1309f35dbbbe4e924b687c336b5ab824807ccc40ae53cbbce31", "review_policy_version": "1"},
+  "expected_result": "PASS"
 }

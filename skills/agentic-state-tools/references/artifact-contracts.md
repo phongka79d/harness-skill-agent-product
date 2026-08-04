@@ -1,5 +1,7 @@
 # Artifact Contracts
 
+Policy status: ENFORCED (enforced by `skills/agentic-state-tools/scripts/write_artifact.py`)
+
 Canonical runtime files:
 
 ```text
@@ -35,3 +37,9 @@ from task reviews because their directory key is a batch ID.
 
 Updates may include `expected_revision`. The script compares it with the current
 artifact revision and rejects stale payloads instead of overwriting newer state.
+
+Task and handoff artifacts bind task, plan, batch, run, attempt, dispatch, and
+revision identity. A handoff with the wrong run or attempt is rejected by
+`create_handoff.py`; a batch review with a stale contract revision or hash is
+rejected at the commit boundary. Schema validation is necessary but not by
+itself evidence that an artifact was created through the owning writer.

@@ -1,8 +1,8 @@
 {
   "task_id": "SP-01-B01-T01",
+  "owner": "agent-executor",
   "title": "Implement product service",
-  "status": "ACCEPTED",
-  "review_status": "PASS",
+  "status": "READY",
   "revision": 4,
   "next_action": "none",
   "blockers": []

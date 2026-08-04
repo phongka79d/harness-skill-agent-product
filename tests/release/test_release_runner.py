@@ -56,7 +56,19 @@ class ReleaseRunnerTests(unittest.TestCase):
         with patch.object(run_tests, "_run_release_process", side_effect=fake_run):
             self.assertEqual(run_tests.run_release_preflight(timeout_seconds=7), [])
         self.assertEqual([name for name, _ in calls], [name for name, _ in run_tests.release_preflight_commands()])
-        self.assertEqual({timeout for _, timeout in calls}, {7})
+        self.assertEqual(calls[0], ("test-suite", 7 * len(run_tests.GROUP_NAMES)))
+        self.assertEqual({timeout for _, timeout in calls[1:]}, {7})
+
+    def test_release_test_suite_is_forced_into_group_only_mode(self) -> None:
+        captured: list[dict[str, str]] = []
+
+        def fake_run(command, **kwargs):
+            captured.append(kwargs["env"])
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        with patch.object(run_tests, "_run_release_process", side_effect=fake_run):
+            self.assertEqual(run_tests.run_release_preflight(timeout_seconds=7), [])
+        self.assertEqual(captured[0].get("AGENTIC_RELEASE_GROUPS_ONLY"), "1")
 
     def test_release_preflight_names_each_failure_and_does_not_stop_early(self) -> None:
         calls: list[str] = []

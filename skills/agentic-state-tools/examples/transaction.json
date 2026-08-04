@@ -1,0 +1,29 @@
+{
+  "operation_id": "OP-bc010fdfdc57e75586961a17508d39e9",
+  "operation_type": "WRITE_ARTIFACT",
+  "idempotency_key": "example-transaction",
+  "status": "COMMITTED",
+  "expected_revisions": {"runtime/state.json": 1},
+  "target_files": ["runtime/state.json"],
+  "staged_files": [
+    {
+      "target_path": "runtime/state.json",
+      "staged_path": "runtime/staging/OP-bc010fdfdc57e75586961a17508d39e9/runtime/state.json",
+      "previous_hash": "0387d343d65dc7d886be4e0bb509255f205308fd08004588600ee8d93696ac05",
+      "staged_hash": "62a92cd956a686a92c788388dd8078640c027860b121f9a6d591a6f392bfb2ac",
+      "target_hash": "62a92cd956a686a92c788388dd8078640c027860b121f9a6d591a6f392bfb2ac"
+    }
+  ],
+  "started_at": "2026-08-04T00:00:00Z",
+  "committed_at": "2026-08-04T00:00:01Z",
+  "rollback_reason": null,
+  "commit_marker": "runtime/transactions/OP-bc010fdfdc57e75586961a17508d39e9.commit.json",
+  "rollback_marker": null,
+  "evidence": {
+    "classification": "COMMITTED",
+    "phase": "COMMIT",
+    "previous_hashes": {"runtime/state.json": "0387d343d65dc7d886be4e0bb509255f205308fd08004588600ee8d93696ac05"},
+    "target_hashes": {"runtime/state.json": "62a92cd956a686a92c788388dd8078640c027860b121f9a6d591a6f392bfb2ac"},
+    "staged_hashes": {"runtime/state.json": "62a92cd956a686a92c788388dd8078640c027860b121f9a6d591a6f392bfb2ac"}
+  }
+}
