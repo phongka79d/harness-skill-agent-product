@@ -1,72 +1,138 @@
-"""Run tests from staged skills whose directory names are not Python packages."""
+"""Run the explicit test groups and the ordered release preflight."""
 
 from __future__ import annotations
 
-import importlib.util
 import argparse
+import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from typing import Iterable
 
 
 ROOT = Path(__file__).resolve().parent
 STATE_ROOT = ROOT / "skills" / "agentic-state-tools"
 CONFIG_ROOT = ROOT / "skills" / "agentic-configuration"
 DEPLOYMENT_TEST = CONFIG_ROOT / "config" / "deployment.test.json"
+TEST_ROOT = ROOT / "tests"
+
+# These are the only executable test directories owned by the release runner.
 GROUP_NAMES = (
     "unit",
     "schema",
     "cli",
     "integration",
-    "end_to_end",
+    "e2e",
     "recovery",
     "concurrency",
-    "rollback",
-    "review_integrity",
-    "examples",
-    "package",
+    "release",
 )
+GROUP_ALIASES = {"end_to_end": "e2e"}
 GROUP_ASSIGNMENTS = {
     "test_config.py": "schema",
     "test_schema_runtime.py": "schema",
+    "test_p1a.py": "schema",
     "test_skill_metadata.py": "unit",
     "test_wiki_routing.py": "unit",
+    "test_dashboard.py": "unit",
+    "test_context_security.py": "unit",
     "test_orchestration.py": "cli",
     "test_distributed_state.py": "concurrency",
-    "test_p1a.py": "schema",
-    "test_recovery_hardening.py": "recovery",
     "test_report_gaps.py": "integration",
-    "test_rollback.py": "rollback",
-    "test_adaptive_quality.py": "review_integrity",
     "test_state_tools.py": "integration",
-    "test_v1_workflow.py": "end_to_end",
-    "test_authorization.py": "review_integrity",
-    "test_commit_batch.py": "rollback",
-    "test_release_runner.py": "unit",
-    "test_example_runtime.py": "examples",
-    "test_packaging.py": "package",
+    "test_example_runtime.py": "integration",
+    "test_v1_workflow.py": "e2e",
+    "test_recovery_hardening.py": "recovery",
+    "test_recovery_policy.py": "recovery",
+    "test_task4_merge_recovery.py": "recovery",
+    "test_transaction_recovery.py": "recovery",
+    "test_adaptive_quality.py": "release",
+    "test_authorization.py": "release",
+    "test_commit_batch.py": "release",
+    "test_contract_hardening.py": "release",
+    "test_rollback.py": "release",
+    "test_transition_registry.py": "release",
+    "test_release_runner.py": "release",
+    "test_release_gate.py": "release",
+    "test_packaging.py": "release",
 }
-EXCLUDED_PARTS = {"__pycache__", ".pytest_cache", ".agent", "runtime", "dist", "build"}
+
+EXCLUDED_PARTS = {
+    ".git",
+    ".agent",
+    ".pytest_cache",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "coverage",
+    "tmp",
+    "temp",
+    "temporary",
+}
+
+
+def _relative_parts(path: Path) -> tuple[str, ...]:
+    try:
+        return path.resolve().relative_to(ROOT).parts
+    except ValueError:
+        return ()
+
+
+def _is_excluded(path: Path) -> bool:
+    return any(part.casefold() in EXCLUDED_PARTS for part in _relative_parts(path))
+
+
+def _skill_test_roots() -> Iterable[Path]:
+    skills_root = ROOT / "skills"
+    if not skills_root.is_dir():
+        return ()
+    return (
+        skill / "tests"
+        for skill in sorted(skills_root.iterdir())
+        if skill.is_dir()
+        and ((skill / "SKILL.md").is_file() or skill.name.startswith("agentic-"))
+    )
 
 
 def discover_test_files() -> list[Path]:
-    return [
-        path
-        for path in sorted((ROOT / "skills").glob("*/tests/test_*.py"))
-        if not any(part in EXCLUDED_PARTS for part in path.relative_to(ROOT).parts)
-    ]
+    """Discover only configured group tests and official skill-local tests."""
+
+    candidates: set[Path] = set()
+    for group in GROUP_NAMES:
+        group_root = TEST_ROOT / group
+        if group_root.is_dir():
+            candidates.update(group_root.rglob("test_*.py"))
+    for test_root in _skill_test_roots():
+        if test_root.is_dir():
+            candidates.update(test_root.rglob("test_*.py"))
+    return sorted(
+        path.resolve()
+        for path in candidates
+        if path.is_file() and not path.is_symlink() and not _is_excluded(path)
+    )
+
+
+def _path_group(path: Path) -> str:
+    parts = _relative_parts(path)
+    if len(parts) >= 3 and parts[0].casefold() == "tests" and parts[1] in GROUP_NAMES:
+        return parts[1]
+    return GROUP_ASSIGNMENTS.get(path.name, "unit")
 
 
 def test_groups() -> dict[str, list[Path]]:
     groups = {name: [] for name in GROUP_NAMES}
     for path in discover_test_files():
-        group = GROUP_ASSIGNMENTS.get(path.name, "unit")
-        groups[group].append(path)
+        group = _path_group(path)
+        groups.setdefault(group, []).append(path)
+    for paths in groups.values():
+        paths.sort()
     return groups
 
 
@@ -77,6 +143,7 @@ def empty_group_summary(group: str) -> dict[str, object]:
         "passed": 0,
         "failed": 0,
         "skipped": 0,
+        "collection_errors": 0,
         "elapsed_seconds": 0.0,
         "timed_out": False,
     }
@@ -84,6 +151,107 @@ def empty_group_summary(group: str) -> dict[str, object]:
 
 def _module_name(test_path: Path) -> str:
     return "staged_" + "_".join(test_path.relative_to(ROOT).with_suffix("").parts)
+
+
+def load_suite(group: str | None = None) -> unittest.TestSuite:
+    """Import pure-Python test modules into one in-process suite."""
+
+    if group is not None:
+        group = GROUP_ALIASES.get(group, group)
+        if group not in GROUP_NAMES:
+            raise ValueError(f"unknown test group: {group}")
+    paths = test_groups().get(group, []) if group is not None else discover_test_files()
+    suite = unittest.TestSuite()
+    loader = unittest.defaultTestLoader
+    for test_path in paths:
+        module_name = _module_name(test_path)
+        spec = importlib.util.spec_from_file_location(module_name, test_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"cannot load test module: {test_path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        suite.addTests(loader.loadTestsFromModule(module))
+    return suite
+
+
+def _parse_subprocess_tests(process: subprocess.CompletedProcess[str], group: str) -> dict[str, object]:
+    summary = empty_group_summary(group)
+    output = (process.stdout or "") + "\n" + (process.stderr or "")
+    match = re.search(r"Ran (\d+) tests?", output)
+    if match:
+        summary["tests"] = int(match.group(1))
+    skipped_match = re.search(r"skipped=(\d+)", output)
+    if skipped_match:
+        summary["skipped"] = int(skipped_match.group(1))
+    summary["failed"] = 0 if process.returncode == 0 else 1
+    summary["passed"] = max(0, int(summary["tests"]) - int(summary["skipped"]) - int(summary["failed"]))
+    if process.returncode != 0 and (
+        int(summary["tests"]) == 0
+        or any(marker in output for marker in ("ImportError", "ModuleNotFoundError", "SyntaxError"))
+    ):
+        summary["collection_errors"] = 1
+    return summary
+
+
+def _run_cli_group(paths: list[Path], timeout_seconds: int = 120) -> dict[str, object]:
+    summary = empty_group_summary("cli")
+    started = time.monotonic()
+    for path in paths:
+        command = [sys.executable, "-m", "unittest", "discover", "-s", str(path.parent), "-p", path.name]
+        try:
+            process = subprocess.run(
+                command,
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            summary["failed"] = int(summary["failed"]) + 1
+            summary["timed_out"] = True
+            print(exc.stdout or "", end="")
+            continue
+        parsed = _parse_subprocess_tests(process, "cli")
+        for key in ("tests", "passed", "failed", "skipped", "collection_errors"):
+            summary[key] = int(summary[key]) + int(parsed[key])
+        summary["timed_out"] = bool(summary["timed_out"]) or bool(parsed["timed_out"])
+        print(process.stdout, end="")
+        if process.stderr:
+            print(process.stderr, file=sys.stderr, end="")
+    summary["elapsed_seconds"] = round(time.monotonic() - started, 3)
+    return summary
+
+
+def run_group(group: str, timeout_seconds: int = 120) -> dict[str, object]:
+    group = GROUP_ALIASES.get(group, group)
+    if group not in GROUP_NAMES:
+        raise ValueError(f"unknown test group: {group}")
+    if group == "cli":
+        return _run_cli_group(test_groups()[group], timeout_seconds)
+    started = time.monotonic()
+    summary = empty_group_summary(group)
+    try:
+        result = unittest.TextTestRunner(verbosity=2).run(load_suite(group))
+    except Exception as exc:  # collection errors are release failures, not hidden exceptions
+        print(f"COLLECTION_ERROR[{group}]: {exc}", file=sys.stderr)
+        summary["failed"] = 1
+        summary["collection_errors"] = 1
+        summary["elapsed_seconds"] = round(time.monotonic() - started, 3)
+        return summary
+    failed = len(result.failures) + len(result.errors)
+    skipped = len(result.skipped)
+    summary.update(
+        {
+            "tests": result.testsRun,
+            "passed": result.testsRun - failed - skipped,
+            "failed": failed,
+            "skipped": skipped,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+        }
+    )
+    return summary
 
 
 def _run_release_process(
@@ -114,178 +282,115 @@ def _run_release_process(
         )
 
 
-def validate_release_examples(timeout_seconds: int = 120) -> list[str]:
-    """Validate the bundled V1 examples before loading the test suite."""
+def release_preflight_commands(output: str | Path = r"C:\Temp\agent-skills-release.zip") -> list[tuple[str, list[str]]]:
+    """Return the ordered, named commands required for a release."""
 
-    examples = STATE_ROOT / "examples"
-    release_env = os.environ.copy()
-    release_env["AGENTIC_DEPLOYMENT_CONFIG"] = str(DEPLOYMENT_TEST)
-    preflight_commands = [
-        ("agentic-config", [sys.executable, str(CONFIG_ROOT / "scripts/load_config.py"), "--check", "--deployment", str(DEPLOYMENT_TEST)]),
-        ("agentic-config-schema", [sys.executable, str(STATE_ROOT / "scripts/validate_payload.py"), "--input", str(CONFIG_ROOT / "config/agentic-config.yaml"), "--schema", str(CONFIG_ROOT / "schemas/agentic-config.schema.json")]),
-        ("example-runtime", [sys.executable, str(STATE_ROOT / "scripts/validate_examples.py"), "--examples-root", str(examples), "--deployment", str(DEPLOYMENT_TEST)]),
+    return [
+        ("test-suite", [sys.executable, str(ROOT / "run_tests.py"), "--all"]),
+        ("compile", [sys.executable, "-m", "compileall", "-q", "skills", "tests", "run_tests.py"]),
+        (
+            "wiki-links",
+            [
+                sys.executable,
+                str(ROOT / "skills/agentic-engineering-wiki/scripts/validate_wiki_links.py"),
+                "--root",
+                str(ROOT / "skills/agentic-engineering-wiki"),
+            ],
+        ),
+        (
+            "state-machine",
+            [
+                sys.executable,
+                str(ROOT / "skills/agentic-state-tools/scripts/validate_state_machine.py"),
+                "--input",
+                str(ROOT / "skills/agentic-state-tools/schemas/state-machine.json"),
+            ],
+        ),
+        (
+            "examples",
+            [
+                sys.executable,
+                str(ROOT / "skills/agentic-state-tools/scripts/validate_examples.py"),
+                "--examples-root",
+                str(ROOT / "skills/agentic-state-tools/examples"),
+                "--deployment",
+                str(ROOT / "skills/agentic-configuration/config/deployment.test.json"),
+            ],
+        ),
+        (
+            "package",
+            [
+                sys.executable,
+                str(ROOT / "skills/agentic-state-tools/scripts/package_skill.py"),
+                "--root",
+                str(ROOT),
+                "--output",
+                str(output),
+            ],
+        ),
     ]
-    example_commands = [
-        ("v1-planning-bundle.json", [sys.executable, str(STATE_ROOT / "scripts/validate_planning.py"), "--input", str(examples / "v1-planning-bundle.json")]),
-        ("v1-dispatch.json", [sys.executable, str(STATE_ROOT / "scripts/validate_payload.py"), "--input", str(examples / "v1-dispatch.json"), "--schema", str(STATE_ROOT / "schemas/dispatch.schema.json")]),
-        ("v1-recovery.json", [sys.executable, str(STATE_ROOT / "scripts/validate_payload.py"), "--input", str(examples / "v1-recovery.json"), "--schema", str(STATE_ROOT / "schemas/reconciliation.schema.json")]),
-    ]
+
+
+def run_release_preflight(timeout_seconds: int = 120) -> list[str]:
     errors: list[str] = []
-    for name, command in preflight_commands:
-        result = _run_release_process(command, cwd=ROOT, env=release_env, timeout_seconds=timeout_seconds)
+    env = os.environ.copy()
+    env["AGENTIC_DEPLOYMENT_CONFIG"] = str(DEPLOYMENT_TEST)
+    for name, command in release_preflight_commands():
+        command_env = dict(env)
+        if name == "test-suite":
+            command_env["AGENTIC_RELEASE_GROUPS_ONLY"] = "1"
+        result = _run_release_process(
+            command,
+            cwd=ROOT,
+            env=command_env,
+            timeout_seconds=timeout_seconds,
+        )
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, file=sys.stderr, end="")
         if result.returncode != 0:
-            errors.append(f"{name}: {result.stderr.strip() or result.stdout.strip()}")
-    for name, command in example_commands:
-        path = examples / name
-        if not path.is_file():
-            errors.append(f"missing release example: {name}")
-            continue
-        try:
-            json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            errors.append(f"invalid JSON in {name}: {exc}")
-            continue
-        result = _run_release_process(command, cwd=ROOT, env=release_env, timeout_seconds=timeout_seconds)
-        if result.returncode != 0:
-            errors.append(f"{name}: {result.stderr.strip() or result.stdout.strip()}")
-        if name == "v1-dispatch.json":
-            try:
-                dispatch = json.loads(path.read_text(encoding="utf-8"))
-                dispatch["input_revisions"] = {"task": 1, "queue": 0}
-                with tempfile.TemporaryDirectory(prefix="agentic-release-dispatch-") as directory:
-                    project = Path(directory) / "project"
-                    init_result = _run_release_process(
-                        [sys.executable, str(STATE_ROOT / "scripts/init_runtime.py"), "--project-root", str(project)],
-                        cwd=ROOT,
-                        env=release_env,
-                        timeout_seconds=timeout_seconds,
-                    )
-                    if init_result.returncode != 0:
-                        errors.append(f"{name} policy init: {init_result.stderr.strip() or init_result.stdout.strip()}")
-                    ready = Path(directory) / "ready.json"
-                    ready.write_text(json.dumps({"task_id": dispatch.get("task_id"), "title": "release", "status": "READY", "depends_on": [], "write_scope": [], "review_contract": dispatch.get("review_contract")}), encoding="utf-8")
-                    ready_result = _run_release_process(
-                        [sys.executable, str(STATE_ROOT / "scripts/update_task_state.py"), "--project-root", str(project), "--input", str(ready)],
-                        cwd=ROOT,
-                        env=release_env,
-                        timeout_seconds=timeout_seconds,
-                    )
-                    if ready_result.returncode != 0:
-                        errors.append(f"{name} policy task: {ready_result.stderr.strip() or ready_result.stdout.strip()}")
-                    policy_command = [sys.executable, str(STATE_ROOT / "scripts/dispatch_task.py"), "--project-root", str(project), "--input", "-"]
-                    policy_result = _run_release_process(
-                        policy_command,
-                        cwd=ROOT,
-                        input_text=json.dumps(dispatch),
-                        env=release_env,
-                        timeout_seconds=timeout_seconds,
-                    )
-                    if policy_result.returncode != 0:
-                        errors.append(f"{name} policy: {policy_result.stderr.strip() or policy_result.stdout.strip()}")
-            except (OSError, TypeError, ValueError) as exc:
-                errors.append(f"{name} policy: {exc}")
+            detail = (result.stderr or result.stdout or "command failed").strip()
+            errors.append(f"{name}: {detail}")
     return errors
 
 
-def load_suite(group: str | None = None) -> unittest.TestSuite:
-    suite = unittest.TestSuite()
-    loader = unittest.defaultTestLoader
-    paths = test_groups().get(group, []) if group is not None else discover_test_files()
-    if group is not None and group not in GROUP_NAMES:
-        raise ValueError(f"unknown test group: {group}")
-    for test_path in paths:
-        module_name = _module_name(test_path)
-        spec = importlib.util.spec_from_file_location(module_name, test_path)
-        if spec is None or spec.loader is None:
-            raise RuntimeError(f"cannot load test module: {test_path}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        suite.addTests(loader.loadTestsFromModule(module))
-    return suite
+def validate_release_examples(timeout_seconds: int = 120) -> list[str]:
+    """Compatibility name for the complete release preflight."""
+
+    return run_release_preflight(timeout_seconds=timeout_seconds)
 
 
-def run_group(group: str) -> dict[str, object]:
-    started = time.monotonic()
-    result = unittest.TextTestRunner(verbosity=2).run(load_suite(group))
-    failed = len(result.failures) + len(result.errors)
-    skipped = len(result.skipped)
-    return {
-        "group": group,
-        "tests": result.testsRun,
-        "passed": result.testsRun - failed - skipped,
-        "failed": failed,
-        "skipped": skipped,
-        "elapsed_seconds": round(time.monotonic() - started, 3),
-        "timed_out": False,
-    }
+def _print_group_summaries(summaries: list[dict[str, object]]) -> None:
+    for summary in summaries:
+        print("TEST_GROUP_SUMMARY:" + json.dumps(summary, sort_keys=True))
 
 
-def _worker_main(group: str) -> int:
-    summary = run_group(group)
-    print("GROUP_RESULT:" + json.dumps(summary, sort_keys=True))
-    return 0 if summary["failed"] == 0 else 1
-
-
-def _run_group_process(group: str, timeout_seconds: int) -> dict[str, object]:
-    started = time.monotonic()
-    try:
-        process = subprocess.run(
-            [sys.executable, str(Path(__file__).resolve()), "--worker", "--group", group],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=timeout_seconds,
-        )
-    except subprocess.TimeoutExpired:
-        summary = empty_group_summary(group)
-        summary["timed_out"] = True
-        summary["elapsed_seconds"] = round(time.monotonic() - started, 3)
-        summary["failed"] = 1
-        return summary
-    summary: dict[str, object] | None = None
-    for line in process.stdout.splitlines():
-        if line.startswith("GROUP_RESULT:"):
-            try:
-                parsed = json.loads(line.removeprefix("GROUP_RESULT:"))
-            except json.JSONDecodeError:
-                parsed = None
-            if isinstance(parsed, dict):
-                summary = parsed
-    if summary is None:
-        summary = empty_group_summary(group)
-        summary["failed"] = 1
-    summary["elapsed_seconds"] = round(time.monotonic() - started, 3)
-    if process.returncode != 0 and summary.get("failed", 0) == 0:
-        summary["failed"] = 1
-    print(process.stdout, end="")
-    if process.stderr:
-        print(process.stderr, file=sys.stderr, end="")
-    return summary
+def _run_all_groups(timeout_seconds: int) -> int:
+    summaries = [run_group(group, timeout_seconds) for group in GROUP_NAMES]
+    _print_group_summaries(summaries)
+    return 0 if all(summary["failed"] == 0 and not summary["timed_out"] for summary in summaries) else 1
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--worker", action="store_true")
-    parser.add_argument("--group", choices=GROUP_NAMES)
+    parser.add_argument("--all", action="store_true", help="run the complete ordered release preflight")
+    parser.add_argument("--group", choices=tuple(GROUP_NAMES) + tuple(GROUP_ALIASES), help="run one named test group")
     parser.add_argument("--timeout", type=int, default=120)
     args = parser.parse_args()
-    if args.worker:
-        if args.group is None:
-            parser.error("--worker requires --group")
-        return _worker_main(args.group)
 
-    release_errors = validate_release_examples(timeout_seconds=args.timeout)
-    if release_errors:
-        for error in release_errors:
-            print(f"RELEASE_GATE_FAILED: {error}", file=sys.stderr)
-        return 1
-    groups = [args.group] if args.group else list(GROUP_NAMES)
-    summaries = [_run_group_process(group, args.timeout) for group in groups]
-    for summary in summaries:
+    if args.group:
+        summary = run_group(args.group, args.timeout)
         print("TEST_GROUP_SUMMARY:" + json.dumps(summary, sort_keys=True))
-    return 0 if all(summary["failed"] == 0 and not summary["timed_out"] for summary in summaries) else 1
+        return 0 if summary["failed"] == 0 and not summary["timed_out"] else 1
+    if args.all and os.environ.get("AGENTIC_RELEASE_GROUPS_ONLY") == "1":
+        return _run_all_groups(args.timeout)
+    if args.all or os.environ.get("AGENTIC_RELEASE_GROUPS_ONLY") != "1":
+        errors = run_release_preflight(timeout_seconds=args.timeout)
+        for error in errors:
+            print(f"RELEASE_PREFLIGHT_FAILED: {error}", file=sys.stderr)
+        return 0 if not errors else 1
+    return _run_all_groups(args.timeout)
 
 
 if __name__ == "__main__":

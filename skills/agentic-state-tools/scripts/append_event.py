@@ -8,6 +8,7 @@ from typing import Any
 
 from rebuild_state import rebuild_state_for_root
 from render_checklist import render_checklist
+from redaction import sanitize_for_persistence
 from runtime_utils import (
     RuntimeLockedError,
     RuntimeNotInitializedError,
@@ -28,9 +29,12 @@ from runtime_utils import (
 def append_event_for_root(root, event: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     events_path = root / "runtime" / "events.jsonl"
     events = iter_events(events_path)
-    record = dict(event)
+    sanitized_event, _ = sanitize_for_persistence(event)
+    record = dict(sanitized_event)
     record.setdefault("event_id", next_event_id(events))
     record.setdefault("timestamp", utc_now())
+    # Scan the complete serialized record after generated fields are attached.
+    record, _ = sanitize_for_persistence(record)
     validate_event(record)
     validate_event_preconditions(root, record)
     if any(item["event_id"] == record["event_id"] for item in events):

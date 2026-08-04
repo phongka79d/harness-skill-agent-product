@@ -6,9 +6,18 @@ import json
 import re
 from typing import Any
 
+from redaction import (
+    REDACTED,
+    SECRET_CATEGORIES,
+    redact_value,
+    redaction_report,
+    sanitize_for_persistence,
+    scan_value as scan_structured_value,
+)
+
 
 SENSITIVE_KEY = re.compile(
-    r"(?:api[_-]?key|access[_-]?token|auth(?:orization)?|bearer|cookie|password|passwd|secret|private[_-]?key|database[_-]?url|client[_-]?secret|cloud[_-]?credential)",
+    r"(?:api[_-]?(?:key|token)|access[_-]?token|auth(?:orization)?|bearer|cookie|password|passwd|secret|token|private[_-]?key|database[_-]?url|client[_-]?secret|cloud[_-]?credential)",
     re.IGNORECASE,
 )
 SECRET_VALUE_PATTERNS = (
@@ -41,12 +50,13 @@ def scan_text(value: str, path: str = "") -> list[str]:
         findings.append(f"{path}:binary")
     if any(pattern.search(value) for pattern in SECRET_VALUE_PATTERNS):
         findings.append(f"{path}:secret")
+    findings.extend(f"{item['path']}:{item['category']}" for item in scan_structured_value(value, path or "$"))
     return findings
 
 
 def scan_value(value: Any, path: str = "$", *, key_hint: str | None = None) -> list[str]:
     findings: list[str] = []
-    if key_hint and SENSITIVE_KEY.search(key_hint):
+    if key_hint and SENSITIVE_KEY.search(key_hint) and value != REDACTED:
         if isinstance(value, (str, bytes)) and value:
             findings.append(f"{path}:sensitive-key")
         elif isinstance(value, (dict, list)) and value:
@@ -66,6 +76,7 @@ def scan_value(value: Any, path: str = "$", *, key_hint: str | None = None) -> l
 
 def context_security_errors(payload: Any, *, max_bytes: int) -> list[str]:
     errors = scan_value(payload)
+    errors.extend(f"{item['path']}:{item['category']}" for item in scan_structured_value(payload))
     if isinstance(payload, dict):
         code_context = payload.get("code_context")
         if isinstance(code_context, dict):

@@ -20,6 +20,7 @@ from runtime_utils import (
     validate_identifier,
 )
 from write_artifact import write_validated
+from redaction import redaction_mode, sanitize_for_persistence
 from secret_scanner import context_security_errors
 
 
@@ -51,10 +52,17 @@ def canonical_budget(payload_budget: Any, config: dict[str, Any]) -> dict[str, i
     return budget
 
 
-def normalize(payload: Any, config: dict[str, Any] | None = None) -> dict[str, Any]:
+def normalize(
+    payload: Any,
+    config: dict[str, Any] | None = None,
+    *,
+    redaction_policy: str | None = None,
+) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("context must be an object")
     config = load_config() if config is None else validate_config(config)
+    configured_policy = redaction_policy or config.get("security", {}).get("redaction_mode", "REJECT")
+    payload, _ = sanitize_for_persistence(payload, mode=redaction_mode(configured_policy))
     task = payload.get("task")
     if not isinstance(task, dict):
         raise ValueError("context.task must be an object")
@@ -97,9 +105,11 @@ def main() -> int:
     parser.add_argument("--project-root", required=True)
     parser.add_argument("--input", required=True)
     parser.add_argument("--actor", default="context-builder")
+    parser.add_argument("--redaction-mode", choices=("REJECT", "REDACT"))
     args = parser.parse_args()
     try:
-        payload = normalize(read_payload(args.input), load_config())
+        config = load_config()
+        payload = normalize(read_payload(args.input), config, redaction_policy=args.redaction_mode)
         task_id = payload["task"]["task_id"]
         with runtime_lock(args.project_root) as root:
             existing_path = root / "work" / task_id / "context.json"
@@ -108,6 +118,8 @@ def main() -> int:
             record["context_id"] = record.get("context_id") or f"CTX-{task_id}-{existing_revision + 1}"
             record["created_at"] = utc_now()
             record["revision"] = next_revision(record, existing_revision)
+            policy = args.redaction_mode or config.get("security", {}).get("redaction_mode")
+            record, _ = sanitize_for_persistence(record, mode=redaction_mode(policy))
             target = write_validated(args.project_root, f"work/{task_id}/context.json", record, SCHEMA)
             append_event_for_root(
                 root,

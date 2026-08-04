@@ -17,6 +17,7 @@ STATE_TOOLS_SCRIPTS = Path(__file__).resolve().parents[2] / "agentic-state-tools
 if str(STATE_TOOLS_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(STATE_TOOLS_SCRIPTS))
 from validate_payload import validate  # noqa: E402
+from redaction import redact_value  # noqa: E402
 
 
 DEFAULT_REDACT_KEYS = {
@@ -310,6 +311,7 @@ def collect_dashboard(project_root: Path, as_of_value: str, config_path: str | N
         },
         "diagnostics": sorted(diagnostics, key=lambda item: (item["code"], item["path"], item["detail"])),
     }
+    snapshot = redact_value(snapshot)
     validate_snapshot(snapshot)
     return snapshot
 

@@ -11,6 +11,7 @@ from typing import Any
 
 from append_event import append_event_for_root  # compatibility seam; required events are staged below
 from operation_ledger import read_operation_ledger
+from redaction import sanitize_for_persistence
 from rebuild_state import rebuild_state_for_root
 from render_checklist import render_checklist_for_root
 from runtime_utils import (
@@ -77,7 +78,7 @@ def main() -> int:
     parser.add_argument("--actor", default="agentic-state-tools")
     args = parser.parse_args()
     try:
-        payload = normalize(read_payload(args.input))
+        payload, _ = sanitize_for_persistence(normalize(read_payload(args.input)))
         with runtime_lock(args.project_root) as root:
             operations_path = root / "work" / payload["task_id"] / "operations.jsonl"
             records = read_operation_ledger(operations_path, payload["task_id"], SCHEMA)
@@ -113,11 +114,14 @@ def main() -> int:
             record.setdefault("phase", "PREPARE" if record["status"] == "STARTED" else "COMMIT" if record["status"] == "COMPLETED" else "ROLLBACK")
             record.setdefault("transaction_id", operation_id)
             record.setdefault("idempotency_key", operation_id)
+            record, _ = sanitize_for_persistence(record)
             errors = validate(record, read_json(SCHEMA))
             if errors:
                 raise ValueError("; ".join(errors))
             existing_content = operations_path.read_text(encoding="utf-8") if operations_path.is_file() else ""
+            existing_content, _ = sanitize_for_persistence(existing_content)
             next_content = existing_content + json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+            next_content, _ = sanitize_for_persistence(next_content)
             relative_operations_path = f"work/{payload['task_id']}/operations.jsonl"
             event = {
                 "type": "OPERATION_RECORDED",
@@ -125,6 +129,7 @@ def main() -> int:
                 "task_id": record["task_id"],
                 "data": {"operation_id": operation_id, "status": record["status"], "type": record["type"]},
             }
+            event, _ = sanitize_for_persistence(event)
             if record.get("run_id"):
                 event["run_id"] = record["run_id"]
             event_relative, event_revision, event_content, _ = prepare_event_log(root, event)

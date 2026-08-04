@@ -29,7 +29,7 @@ The implementation must preserve the current filesystem backend, Primary-control
 
 The attached specification uses `state-tools/...` as a shorthand. In this repository the concrete package root is `skills/agentic-state-tools/`, and importable runtime modules belong under `skills/agentic-state-tools/scripts/`; the file map below uses those actual paths.
 
-**Progress checkpoint (2026-08-04):** Tasks 1–5 are complete. Task 9 Step 1 has been validated through the focused gates. Tasks 6–8 and the remaining Task 9 steps stay open until their missing registry, manifest, redaction, documentation, archive, and report deliverables are implemented.
+**Progress checkpoint (2026-08-04):** Tasks 1–7 are complete. Task 9 Step 1 has been validated through the focused gates. Task 8 and the remaining Task 9 steps stay open until their documentation, archive, and report deliverables are implemented.
 
 ## File map
 
@@ -631,11 +631,11 @@ Expected: `STATE_MACHINE_VALID`, all stale/forged/incorrect-target approvals fai
 - Create: `tests/release/test_release_gate.py`
 - Move: current executable tests into `tests/unit/`, `tests/schema/`, `tests/cli/`, `tests/integration/`, `tests/e2e/`, `tests/recovery/`, `tests/concurrency/`, and `tests/release/`; retain `skills/*/tests` only for package-local metadata fixtures that are included by the manifest.
 
-- [ ] **Step 1: Add failing scanner and redaction tests.**
+- [x] **Step 1: Add failing scanner and redaction tests.**
 
 Test detection and safe reporting for multiline private keys, JWTs, cookie headers, credentialed URLs, database URLs, long base64 values, nested objects, Markdown code blocks, logs, and generated context summaries. Assert that error/report strings contain a path and finding category but never the matched secret value. Test both `REJECT` and configured `REDACT` behavior.
 
-- [ ] **Step 2: Implement one scan-before-persist boundary.**
+- [x] **Step 2: Implement one scan-before-persist boundary.**
 
 Add `scan_value`, `redact_value`, and `redaction_report` APIs that recursively traverse dictionaries/lists and serialized JSON/Markdown. Use explicit regexes with named categories:
 
@@ -648,15 +648,15 @@ SECRET_CATEGORIES = {
 
 `create_context.py` must scan and redact/reject before calling `write_validated`; `append_event.py` and `record_operation.py` must scan serialized event/ledger data before persistence; dashboard projection must scan/redact generated summaries. A redaction report may contain only `{path, category, action}` entries.
 
-- [ ] **Step 3: Split test discovery into explicit groups.**
+- [x] **Step 3: Split test discovery into explicit groups.**
 
 Update `run_tests.py` so `discover_test_files()` scans only configured `tests/` group directories and skill directories that contain `SKILL.md` or match the official `agentic-*` pattern. Exclude `.pytest_cache`, `__pycache__`, `.git`, `.agent`, `dist`, `build`, and temporary roots by path component. Preserve the public APIs `discover_test_files`, `test_groups`, `empty_group_summary`, and `GROUP_ASSIGNMENTS`; add `--all` as an alias for the complete release group set and keep `--group unit`, `--group integration`, and `--group release` stable. Use subprocess execution only for CLI tests; import pure functions for unit tests.
 
-- [ ] **Step 4: Implement an allowlist package manifest.**
+- [x] **Step 4: Implement an allowlist package manifest.**
 
 Make `MANIFEST.txt` the source of release members. It must list only `SKILL.md`, `references/` or `refs/`, `scripts/`, `schemas/`, `examples/`, `configuration/`, `tests/`, `README.md`, `MANIFEST.txt`, and the top-level `run_tests.py` under approved package roots. `package_skill.py` must reject a missing manifest, an unlisted file, a missing listed file, `.pyc`, cache, `.agent`, logs, coverage, build output, secret files, and local environment files. Build the ZIP deterministically and reopen it to validate every member against the same allowlist.
 
-- [ ] **Step 5: Add release preflight commands and expected failures.**
+- [x] **Step 5: Add release preflight commands and expected failures.**
 
 Make the release runner execute, in order:
 
@@ -671,7 +671,7 @@ python skills/agentic-state-tools/scripts/package_skill.py --root . --output C:\
 
 Each command must have a named release error and non-zero exit status on failure; no failed preflight may be hidden by later tests.
 
-- [ ] **Step 6: Run package and security validation.**
+- [x] **Step 6: Run package and security validation.**
 
 Run:
 
