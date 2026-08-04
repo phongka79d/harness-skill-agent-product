@@ -82,10 +82,10 @@ class StateToolsTests(unittest.TestCase):
             }],
             "tasks": [{
                 "task_id": task_id, "batch_id": batch_id, "version": "1.0", "title": "Batch task",
-                "objective": "Test", "context": "Test", "depends_on": [], "execution_mode": "sync",
+                "objective": "Test", "context": "Test", "owner": "agent-executor", "depends_on": [], "execution_mode": "sync",
                 "task_type": task_contract["task_type"], "review_contract": task_contract, "requirement_ids": ["REQ-1"],
                 "read_scope": ["src"], "write_scope": ["src/app.py"], "inputs": [], "required_outputs": ["review"],
-                "acceptance_criteria": ["tests"], "verification": ["tests"], "out_of_scope": [], "risk_flags": {},
+                "acceptance_criteria": [{"criterion_id": "AC-1", "text": "tests", "requirement_ids": ["REQ-1"]}], "verification": ["tests"], "out_of_scope": [], "risk_flags": {},
                 "blocker_policy": {"hard_blockers": []},
                 "execution_budget": {"max_files_changed": 1, "max_new_dependencies": 0, "allow_schema_change": False, "allow_architecture_change": False},
                 "architecture_decisions": [],

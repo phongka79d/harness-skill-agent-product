@@ -195,7 +195,10 @@ def resolve_rubric(
 
     risk_enabled = {key for key, value in risk_flags.items() if value is True}
     conditional_security = bool(risk_enabled & SECURITY_FLAGS)
-    conditional_performance = any(risk_flags.get(key) is True for key in ("performance_sensitive", "large_dataset", "latency_sensitive"))
+    conditional_performance = any(
+        risk_flags.get(key) is True
+        for key in ("database", "external_api", "concurrency", "shared_state", "infrastructure")
+    )
     applicability: dict[str, dict[str, str]] = {}
     criteria: list[dict[str, Any]] = []
     weights: dict[str, float] = {}

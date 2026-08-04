@@ -7,21 +7,25 @@ import json
 import sys
 
 from runtime_utils import read_object
-from validate_planning import classify_scope_overlap, normalize_scope, scopes_overlap
+from validate_planning import _approval_records, classify_scope_overlap, normalize_scope, scopes_overlap
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
+    parser.add_argument("--approval-root")
     args = parser.parse_args()
     try:
         tasks = read_object(args.input).get("tasks")
         if not isinstance(tasks, list):
             raise ValueError("tasks must be an array")
-        approvals = read_object(args.input).get("approvals", [])
-        if not isinstance(approvals, list):
-            raise ValueError("approvals must be an array")
         task_edges = {task.get("task_id"): list(task.get("depends_on", [])) for task in tasks}
+        groups = {
+            task.get("shared_write_group")
+            for task in tasks
+            if isinstance(task.get("shared_write_group"), str) and task.get("shared_write_group").strip()
+        }
+        approvals = _approval_records({}, args.approval_root, groups)
         overlaps: list[dict[str, str]] = []
         for index, left_task in enumerate(tasks):
             for right_task in tasks[index + 1:]:

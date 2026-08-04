@@ -29,6 +29,7 @@ from runtime_utils import (
 from task_state_contract import EXECUTION_IDENTITY_FIELDS, merge_task_state, validate_execution_identity
 from validate_payload import validate
 from write_artifact import write_validated
+from review_contract import validate_contract
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -196,6 +197,18 @@ def persist_dispatch(
         current_revision = current_task.get("revision", 0)
         if current_revision != expected_task_revision:
             raise ValueError(f"stale task revision: expected {expected_task_revision}, current {current_revision}")
+        try:
+            current_review_contract = validate_contract(current_task.get("review_contract"), review_type="task")
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"task {task_id} review_contract is invalid or missing: {exc}") from exc
+        submitted_review_contract = dispatch.get("review_contract")
+        if submitted_review_contract is not None:
+            try:
+                submitted_review_contract = validate_contract(submitted_review_contract, review_type="task")
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"dispatch review_contract is invalid: {exc}") from exc
+            if submitted_review_contract != current_review_contract:
+                raise ValueError("dispatch review_contract does not match the pinned task contract")
         current_status = str(current_task.get("status", "")).upper()
         if current_status not in {"READY", "REPAIR_REQUIRED", "QUEUED", "QUEUED_SYNC", "QUEUED_ASYNC"}:
             raise ValueError(f"task status is not dispatchable: {current_status}")
@@ -233,6 +246,7 @@ def persist_dispatch(
                 "attempt_id": attempt_id,
                 "task_revision": next_revision,
                 "operation_id": operation_id,
+                "review_contract": current_review_contract,
                 **binding_metadata,
             }
         )

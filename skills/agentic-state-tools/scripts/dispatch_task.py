@@ -11,6 +11,7 @@ from runtime_utils import read_payload, write_json_atomic
 from dispatch_contract import validate_dispatch_schema
 from dispatch_transaction import persist_dispatch
 from review_contract import validate_contract
+from risk_flags import normalize_risk_flags
 
 CONFIG_SKILL = Path(__file__).resolve().parents[2] / "agentic-configuration"
 sys.path.insert(0, str(CONFIG_SKILL / "scripts"))
@@ -27,9 +28,21 @@ def normalize_dispatch(
         raise ValueError("dispatch must be an object")
     validate_dispatch_schema(value)
     result = dict(value)
+    if "risk_flags" in result:
+        result["risk_flags"] = normalize_risk_flags(result["risk_flags"])
+    for field in ("planning_task", "task"):
+        nested_task = result.get(field)
+        if nested_task is None:
+            continue
+        if not isinstance(nested_task, dict):
+            raise ValueError(f"dispatch.{field} must be an object")
+        normalized_task = dict(nested_task)
+        if "risk_flags" in normalized_task:
+            normalized_task["risk_flags"] = normalize_risk_flags(normalized_task["risk_flags"])
+        if "review_contract" in normalized_task:
+            normalized_task["review_contract"] = validate_contract(normalized_task["review_contract"], review_type="task")
+        result[field] = normalized_task
     planned_task = result.get("planning_task", result.get("task"))
-    if planned_task is not None and not isinstance(planned_task, dict):
-        raise ValueError("dispatch.planning_task must be an object")
     approved = bool(result.get("approved")) or str(
         result.get("task_status", result.get("planning_status", result.get("approval_status", "")))
     ).upper() in {"APPROVED", "ACCEPTED"}

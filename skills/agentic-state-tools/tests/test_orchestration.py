@@ -15,6 +15,8 @@ SCHEMAS = SKILL_ROOT / "schemas"
 sys.path.insert(0, str(SCRIPTS))
 
 from reconcile_queue import reconcile_queue  # noqa: E402
+from resolve_rubric import resolve_rubric  # noqa: E402
+from review_contract import contract_from_rubric  # noqa: E402
 
 CONFIG_VALUE = json.loads(
     (SKILL_ROOT.parent / "agentic-configuration" / "config" / "agentic-config.yaml").read_text(encoding="utf-8")
@@ -23,6 +25,7 @@ DEPLOYMENT_PATH = SKILL_ROOT.parent / "agentic-configuration" / "config" / "depl
 DEPLOYMENT_VALUE = json.loads(DEPLOYMENT_PATH.read_text(encoding="utf-8"))
 EXECUTOR_MODEL = DEPLOYMENT_VALUE["model_ids"][CONFIG_VALUE["agents"]["agent-executor"]["model_ref"]]
 REVIEW_MODEL = DEPLOYMENT_VALUE["model_ids"][CONFIG_VALUE["agents"]["agent-review"]["model_ref"]]
+TASK_REVIEW_CONTRACT = contract_from_rubric(resolve_rubric("personal", "backend", {}))
 
 
 def run_script(name: str, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -51,7 +54,7 @@ class OrchestrationHarnessTests(unittest.TestCase):
         project = Path(directory) / f"project-{task_id}"
         initialized = run_script("init_runtime.py", "--project-root", str(project))
         self.assertEqual(initialized.returncode, 0, initialized.stderr)
-        task = write_json(directory, f"{task_id}-task.json", {"task_id": task_id, "title": task_id, "status": "READY", "depends_on": [], "write_scope": []})
+        task = write_json(directory, f"{task_id}-task.json", {"task_id": task_id, "title": task_id, "status": "READY", "depends_on": [], "write_scope": [], "review_contract": TASK_REVIEW_CONTRACT})
         updated = run_script("update_task_state.py", "--project-root", str(project), "--input", str(task))
         self.assertEqual(updated.returncode, 0, updated.stderr)
         return project
@@ -60,7 +63,7 @@ class OrchestrationHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory) / "project"
             self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
-            task = write_json(directory, "durable-task.json", {"task_id": "T-DURABLE", "title": "Durable", "status": "READY", "write_scope": ["src/durable.py"], "depends_on": []})
+            task = write_json(directory, "durable-task.json", {"task_id": "T-DURABLE", "title": "Durable", "status": "READY", "write_scope": ["src/durable.py"], "depends_on": [], "review_contract": TASK_REVIEW_CONTRACT})
             self.assertEqual(run_script("update_task_state.py", "--project-root", str(project), "--input", str(task)).returncode, 0)
             dispatch = write_json(
                 directory,
@@ -218,7 +221,7 @@ class OrchestrationHarnessTests(unittest.TestCase):
             config_value["execution"]["max_parallel_tasks"] = 1
             config = write_json(directory, "capacity-config.json", config_value)
             first_project = self._dispatch_project(directory, "T-CAPACITY-1")
-            second_task = write_json(directory, "T-CAPACITY-2-task.json", {"task_id": "T-CAPACITY-2", "title": "T-CAPACITY-2", "status": "READY", "depends_on": [], "write_scope": []})
+            second_task = write_json(directory, "T-CAPACITY-2-task.json", {"task_id": "T-CAPACITY-2", "title": "T-CAPACITY-2", "status": "READY", "depends_on": [], "write_scope": [], "review_contract": TASK_REVIEW_CONTRACT})
             self.assertEqual(run_script("update_task_state.py", "--project-root", str(first_project), "--input", str(second_task)).returncode, 0)
             first_dispatch = write_json(directory, "capacity-first.json", {"dispatch_id": "DSP-CAP-1", "task_id": "T-CAPACITY-1", "agent_role": "agent-executor", "selected_mode": "SYNC", "selected_owner": "primary-agent", "selected_model": EXECUTOR_MODEL, "input_revisions": {"task": 1, "queue": 0}, "approval_references": [], "evidence": {"architecture_owner": "primary-agent"}})
             second_dispatch = write_json(directory, "capacity-second.json", {"dispatch_id": "DSP-CAP-2", "task_id": "T-CAPACITY-2", "agent_role": "agent-executor", "selected_mode": "SYNC", "selected_owner": "primary-agent", "selected_model": EXECUTOR_MODEL, "input_revisions": {"task": 1, "queue": 1}, "approval_references": [], "evidence": {"architecture_owner": "primary-agent"}})

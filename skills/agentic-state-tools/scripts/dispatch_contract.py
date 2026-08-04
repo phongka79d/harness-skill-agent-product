@@ -14,6 +14,6 @@ DISPATCH_SCHEMA = Path(__file__).resolve().parents[1] / "schemas" / "dispatch.sc
 
 def validate_dispatch_schema(dispatch: Any) -> None:
     schema = json.loads(DISPATCH_SCHEMA.read_text(encoding="utf-8"))
-    errors = validate(dispatch, schema)
+    errors = validate(dispatch, schema, base_path=DISPATCH_SCHEMA.parent)
     if errors:
         raise ValueError("dispatch schema validation failed: " + "; ".join(errors))

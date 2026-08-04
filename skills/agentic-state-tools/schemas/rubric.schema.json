@@ -10,7 +10,7 @@
     "profile_id": {"type": "string", "minLength": 1},
     "profile_version": {"type": "string", "minLength": 1},
     "profile_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "risk_flags": {"type": "object", "additionalProperties": {"type": "boolean"}},
+    "risk_flags": {"$ref": "risk-flags.schema.json"},
     "review_policy_version": {"type": "string", "minLength": 1},
     "pass_threshold_percent": {"type": "number", "minimum": 0, "maximum": 100},
     "hard_fail_rules": {"type": "array", "items": {"type": "string"}},

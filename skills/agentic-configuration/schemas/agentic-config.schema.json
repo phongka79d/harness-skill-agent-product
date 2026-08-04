@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["schema_version", "config_id", "version", "agents", "model_policy", "execution", "approval_matrix", "runtime", "checkpoint", "locking", "recovery", "version_control", "documentation", "context_budget", "security", "retention"],
+  "required": ["schema_version", "config_id", "version", "agents", "planning", "model_policy", "execution", "approval_matrix", "runtime", "checkpoint", "locking", "recovery", "version_control", "documentation", "context_budget", "security", "retention"],
   "properties": {
     "schema_version": {"type": "integer", "enum": [1]},
     "config_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
@@ -21,6 +21,15 @@
         },
         "additionalProperties": false
       }
+    },
+    "planning": {
+      "type": "object",
+      "required": ["owner_aliases", "task_type_capabilities"],
+      "properties": {
+        "owner_aliases": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"}},
+        "task_type_capabilities": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}}
+      },
+      "additionalProperties": false
     },
     "model_policy": {
       "type": "object",

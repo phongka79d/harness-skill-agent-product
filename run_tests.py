@@ -137,7 +137,7 @@ def validate_release_examples() -> list[str]:
                     if init_result.returncode != 0:
                         errors.append(f"{name} policy init: {init_result.stderr.strip() or init_result.stdout.strip()}")
                     ready = Path(directory) / "ready.json"
-                    ready.write_text(json.dumps({"task_id": dispatch.get("task_id"), "title": "release", "status": "READY", "depends_on": [], "write_scope": []}), encoding="utf-8")
+                    ready.write_text(json.dumps({"task_id": dispatch.get("task_id"), "title": "release", "status": "READY", "depends_on": [], "write_scope": [], "review_contract": dispatch.get("review_contract")}), encoding="utf-8")
                     ready_result = subprocess.run(
                         [sys.executable, str(STATE_ROOT / "scripts/update_task_state.py"), "--project-root", str(project), "--input", str(ready)],
                         cwd=ROOT,

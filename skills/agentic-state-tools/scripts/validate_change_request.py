@@ -5,13 +5,44 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from runtime_utils import read_object, read_payload
+from risk_flags import normalize_risk_flags
+from validate_payload import validate
 
 
 PLAN_TARGETS = {"MASTER_PLAN", "SUB_PLAN", "BATCH", "TASK", "DECISION", "RISK", "RUBRIC", "PROFILE"}
 CHANGE_OPERATIONS = {"add", "replace", "remove"}
+SCHEMA = Path(__file__).resolve().parents[1] / "schemas/change-request.schema.json"
+
+
+def _normalize_nested_risk_flags(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_normalize_nested_risk_flags(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    normalized: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "risk_flags":
+            normalized[key] = normalize_risk_flags(item)
+        else:
+            normalized[key] = _normalize_nested_risk_flags(item)
+    return normalized
+
+
+def _normalize_operation_risk_flags(operation: dict[str, Any]) -> dict[str, Any]:
+    if "value" not in operation:
+        return operation
+    normalized = dict(operation)
+    value = operation["value"]
+    path = str(operation.get("path", ""))
+    pointer_name = path.rsplit("/", 1)[-1].replace("~1", "/").replace("~0", "~")
+    if pointer_name == "risk_flags":
+        value = normalize_risk_flags(value)
+    normalized["value"] = _normalize_nested_risk_flags(value)
+    return normalized
 
 
 def validate_operations(value: Any, *, applying: bool) -> list[dict[str, Any]]:
@@ -35,7 +66,7 @@ def validate_operations(value: Any, *, applying: bool) -> list[dict[str, Any]]:
             raise ValueError(f"requested_changes[{index}].path must be a JSON Pointer")
         if operation["op"] in {"add", "replace"} and "value" not in operation:
             raise ValueError(f"requested_changes[{index}] requires value for {operation['op']}")
-        operations.append(operation)
+        operations.append(_normalize_operation_risk_flags(operation))
     return operations
 
 
@@ -53,6 +84,15 @@ def validate_change_request(value: object, approval: dict[str, Any] | None = Non
     validate_operations(requested_changes, applying=applying)
     if not isinstance(record.get("impact"), dict):
         raise ValueError("change_request.impact must be an object")
+    impact = dict(record["impact"])
+    try:
+        impact["risk_flags"] = normalize_risk_flags(impact.get("risk_flags", {}))
+    except ValueError as exc:
+        raise ValueError(f"change_request.impact.risk_flags is invalid: {exc}") from exc
+    record["impact"] = impact
+    schema_errors = validate(record, read_object(SCHEMA), base_path=SCHEMA.parent)
+    if schema_errors:
+        raise ValueError("change request schema validation failed: " + "; ".join(schema_errors))
     if record["target_version"] == record["new_version"]:
         raise ValueError("change request must create a new version")
     if target_type in PLAN_TARGETS and not record["supersedes_id"].startswith(record["target_id"] + "@"):

@@ -15,6 +15,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from create_batch_review import normalize as normalize_batch_review  # noqa: E402
 from resolve_rubric import resolve_rubric  # noqa: E402
+from validate_change_request import validate_change_request  # noqa: E402
 
 
 def run_script(name: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -49,6 +50,36 @@ class AdaptiveQualityTests(unittest.TestCase):
             resolve_rubric("personal", "backend", {"authentication": "yes"})
         with self.assertRaisesRegex(ValueError, "unknown"):
             resolve_rubric("personal", "backend", {"database_write": True})
+
+    def test_change_request_rejects_legacy_risk_flags(self) -> None:
+        request = {
+            "change_request_id": "CR-RISK",
+            "target_type": "MASTER_PLAN",
+            "target_id": "MP-1",
+            "target_version": "1.0",
+            "new_version": "1.1",
+            "reason": "risk contract",
+            "requested_changes": [{"op": "replace", "path": "/title", "value": "new"}],
+            "impact": {"risk_flags": {"database_write": True}},
+            "status": "PROPOSED",
+            "requested_by": "primary-agent",
+            "approval_id": "APR-RISK",
+            "supersedes_id": "MP-1@1.0",
+        }
+        with self.assertRaisesRegex(ValueError, "unknown risk flag"):
+            validate_change_request(request, {"approval_id": "APR-RISK", "decision": "APPROVED"})
+        request["impact"] = {"database_write": True}
+        with self.assertRaisesRegex(ValueError, "schema validation"):
+            validate_change_request(request, {"approval_id": "APR-RISK", "decision": "APPROVED"})
+
+        request["impact"] = {"risk_flags": {}}
+        request["requested_changes"] = [{"op": "replace", "path": "/risk_flags", "value": {"database_write": True}}]
+        with self.assertRaisesRegex(ValueError, "unknown risk flag"):
+            validate_change_request(request, {"approval_id": "APR-RISK", "decision": "APPROVED", "target_id": "CR-RISK"})
+
+    def test_rubric_schema_uses_canonical_risk_flag_ref(self) -> None:
+        schema = json.loads((SCHEMAS / "rubric.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(schema["properties"]["risk_flags"]["$ref"], "risk-flags.schema.json")
 
     def _resolved_review(self, directory: str, *, score: int = 4) -> tuple[dict, Path]:
         result = run_script("resolve_rubric.py", "--profile", "personal", "--task-type", "backend", "--risk-flags", "{}")

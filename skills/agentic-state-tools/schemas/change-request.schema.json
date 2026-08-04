@@ -30,7 +30,7 @@
     "requested_by": {"type": "string", "minLength": 1},
     "target_version": {"type": "string", "minLength": 1},
     "new_version": {"type": "string", "minLength": 1},
-    "impact": {"type": "object", "properties": {"risk_flags": {"$ref": "risk-flags.schema.json"}}},
+    "impact": {"type": "object", "properties": {"risk_level": {"type": "string"}, "architecture_change": {"type": "boolean"}, "risk_flags": {"$ref": "risk-flags.schema.json"}}, "additionalProperties": false},
     "approval_id": {"type": "string", "minLength": 1},
     "supersedes_id": {"type": "string", "minLength": 1},
     "applied_at": {"type": "string", "minLength": 1}

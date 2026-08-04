@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from runtime_utils import read_object, read_json
+from runtime_utils import read_object, read_json, validate_identifier
 from validate_payload import validate
 
 
@@ -17,6 +17,7 @@ CONFIG_ROOT = ROOT.parent / "agentic-configuration"
 sys.path.insert(0, str(CONFIG_ROOT / "scripts"))
 
 from load_config import load_config  # noqa: E402
+from authorization import require_persisted_approval  # noqa: E402
 from review_contract import validate_contract  # noqa: E402
 from risk_flags import normalize_risk_flags  # noqa: E402
 
@@ -31,6 +32,7 @@ SCHEMAS = {
     "risks": ROOT / "schemas/risk.schema.json",
     "change_requests": ROOT / "schemas/change-request.schema.json",
 }
+APPROVAL_SCHEMA = ROOT / "schemas/approval.schema.json"
 
 ID_FIELDS = {
     "master_plan": "plan_id",
@@ -42,26 +44,6 @@ ID_FIELDS = {
     "risks": "risk_id",
     "change_requests": "change_request_id",
 }
-
-OWNER_ALIASES = {
-    "implementer": "agent-executor",
-    "task-reviewer": "agent-review",
-    "batch-reviewer": "agent-batch-review",
-    "runtime-recovery": "agent-runtime-recovery",
-}
-TASK_CAPABILITIES = {
-    "backend": "repository_editing",
-    "frontend": "repository_editing",
-    "data": "repository_editing",
-    "infrastructure": "repository_editing",
-    "documentation": "repository_editing",
-    "backend_change": "repository_editing",
-    "frontend_change": "repository_editing",
-    "data_change": "repository_editing",
-    "testing": "testing",
-    "review": "evidence_review",
-}
-
 
 def documents(value: Any, key: str) -> list[dict[str, Any]]:
     if key == "master_plan":
@@ -151,11 +133,24 @@ def has_dependency_path(left: str, right: str, task_edges: dict[str, list[str]])
     return False
 
 
-def _approval_records(manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    value = manifest.get("approvals", manifest.get("persisted_approvals", []))
-    if isinstance(value, dict):
-        value = list(value.values())
-    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+def _approval_records(manifest: dict[str, Any], approval_root: str | Path | None = None, groups: set[str] | None = None) -> list[dict[str, Any]]:
+    if approval_root is None:
+        return []
+    root = Path(approval_root).expanduser().resolve()
+    records: list[dict[str, Any]] = []
+    approval_schema = read_json(APPROVAL_SCHEMA)
+    for group in sorted(groups or set()):
+        validate_identifier(group, "shared_write_group")
+        path = root / "approvals" / f"SHARED_WRITE-{group}.json"
+        if not path.is_file():
+            continue
+        approval = read_object(path)
+        schema_errors = validate(approval, approval_schema, base_path=APPROVAL_SCHEMA.resolve().parent)
+        if schema_errors:
+            raise ValueError("shared-write approval schema validation failed: " + "; ".join(schema_errors))
+        require_persisted_approval(root, approval, target_type="SHARED_WRITE", target_id=group)
+        records.append(approval)
+    return records
 
 
 def _shared_write_approved(left: dict[str, Any], right: dict[str, Any], approvals: list[dict[str, Any]]) -> bool:
@@ -170,7 +165,8 @@ def _shared_write_approved(left: dict[str, Any], right: dict[str, Any], approval
     return any(
         record.get("approval_id") == approval_id
         and str(record.get("decision", "")).upper() == "APPROVED"
-        and (record.get("target_id") in {None, group} or record.get("target_type") in {None, "SHARED_WRITE"})
+        and record.get("target_type") == "SHARED_WRITE"
+        and record.get("target_id") == group
         for record in approvals
     )
 
@@ -184,12 +180,12 @@ def classify_scope_overlap(
     """Classify one write intersection without considering read scopes."""
     left_id = str(left.get("task_id"))
     right_id = str(right.get("task_id"))
+    if left.get("shared_write_group") or right.get("shared_write_group"):
+        if _shared_write_approved(left, right, approvals or []):
+            return "APPROVED_SHARED_WRITE"
+        return "INVALID_SHARED_WRITE_APPROVAL"
     if has_dependency_path(left_id, right_id, task_edges) or has_dependency_path(right_id, left_id, task_edges):
         return "SEQUENTIAL_OVERLAP"
-    if _shared_write_approved(left, right, approvals or []):
-        return "APPROVED_SHARED_WRITE"
-    if left.get("shared_write_group") or right.get("shared_write_group"):
-        return "INVALID_SHARED_WRITE_APPROVAL"
     return "CONFLICT"
 
 
@@ -213,11 +209,12 @@ def _requirement_records(master: dict[str, Any], errors: list[str]) -> tuple[dic
     return records, deprecated
 
 
-def _task_acceptance_ids(task: dict[str, Any]) -> list[tuple[int, list[str]]]:
-    result: list[tuple[int, list[str]]] = []
+def _task_acceptance_ids(task: dict[str, Any]) -> list[tuple[str, list[str]]]:
+    result: list[tuple[str, list[str]]] = []
     for index, criterion in enumerate(task.get("acceptance_criteria", [])):
         if isinstance(criterion, dict):
-            result.append((index, list(criterion.get("requirement_ids", []))))
+            criterion_id = criterion.get("criterion_id", index)
+            result.append((str(criterion_id), list(criterion.get("requirement_ids", []))))
     return result
 
 
@@ -230,9 +227,9 @@ def requirement_report(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         identifier = requirement.get("requirement_id")
         task_ids = sorted({task.get("task_id") for task in tasks if identifier in task.get("requirement_ids", [])})
         criteria = sorted(
-            f"{task.get('task_id')}[{index}]"
+            f"{task.get('task_id')}[{criterion_id}]"
             for task in tasks
-            for index, requirement_ids in _task_acceptance_ids(task)
+            for criterion_id, requirement_ids in _task_acceptance_ids(task)
             if identifier in requirement_ids
         )
         status = "DEPRECATED" if _is_deprecated(requirement) else ("TRACED" if task_ids or criteria else "UNTRACED")
@@ -243,18 +240,27 @@ def requirement_report(manifest: dict[str, Any]) -> list[dict[str, Any]]:
 def _validate_owners(tasks: list[dict[str, Any]], errors: list[str]) -> None:
     config = load_config()
     agents = config.get("agents", {})
+    planning = config.get("planning")
+    if not isinstance(planning, dict):
+        errors.append("central planning policy is missing from agentic configuration")
+        return
+    aliases = planning.get("owner_aliases")
+    task_capabilities = planning.get("task_type_capabilities")
+    if not isinstance(aliases, dict) or not isinstance(task_capabilities, dict):
+        errors.append("central planning policy must define owner_aliases and task_type_capabilities")
+        return
     for task in tasks:
         task_id = task.get("task_id")
         owner = task.get("owner")
         if not isinstance(owner, str) or not owner.strip():
             errors.append(f"task {task_id} requires an owner")
             continue
-        owner_id = OWNER_ALIASES.get(owner, owner)
+        owner_id = aliases.get(owner, owner)
         agent = agents.get(owner_id)
         if not isinstance(agent, dict):
             errors.append(f"task {task_id} owner is unknown: {owner}")
             continue
-        capability = TASK_CAPABILITIES.get(str(task.get("task_type", "")).lower())
+        capability = task_capabilities.get(str(task.get("task_type", "")).lower())
         if capability is None:
             errors.append(f"task {task_id} has unknown task type: {task.get('task_type')}")
             continue
@@ -285,21 +291,21 @@ def _validate_requirements(master: dict[str, Any], tasks: list[dict[str, Any]], 
                 errors.append(f"task {task_id} references deprecated requirement: {requirement_id}")
             else:
                 traced.add(requirement_id)
-        for index, requirement_ids in _task_acceptance_ids(task):
+        for criterion_id, requirement_ids in _task_acceptance_ids(task):
             for requirement_id in requirement_ids:
                 if requirement_id not in known:
-                    errors.append(f"task {task_id} acceptance criterion {index} references unknown requirement: {requirement_id}")
+                    errors.append(f"task {task_id} acceptance criterion {criterion_id} references unknown requirement: {requirement_id}")
                 elif requirement_id in deprecated:
-                    errors.append(f"task {task_id} acceptance criterion {index} references deprecated requirement: {requirement_id}")
+                    errors.append(f"task {task_id} acceptance criterion {criterion_id} references deprecated requirement: {requirement_id}")
                 elif requirement_id not in task_requirements:
-                    errors.append(f"task {task_id} acceptance criterion {index} is not traced by task requirement_ids")
+                    errors.append(f"task {task_id} acceptance criterion {criterion_id} is not traced by task requirement_ids")
                 else:
                     traced.add(requirement_id)
     for requirement_id in sorted(known - deprecated - traced):
         errors.append(f"untraceable requirement: {requirement_id}")
 
 
-def validate_relationships(manifest: dict[str, Any], errors: list[str]) -> None:
+def validate_relationships(manifest: dict[str, Any], errors: list[str], approval_root: str | Path | None = None) -> None:
     index, kinds, index_errors = index_documents(manifest)
     errors.extend(index_errors)
     master = manifest["master_plan"]
@@ -391,7 +397,12 @@ def validate_relationships(manifest: dict[str, Any], errors: list[str]) -> None:
             if decision_id not in accepted_decisions:
                 errors.append(f"task {task.get('task_id')} requires unapproved architecture decision: {decision_id}")
 
-    approvals = _approval_records(manifest)
+    shared_groups = {
+        task.get("shared_write_group")
+        for task in tasks
+        if isinstance(task.get("shared_write_group"), str) and task.get("shared_write_group").strip()
+    }
+    approvals = _approval_records(manifest, approval_root, shared_groups)
     for index, left in enumerate(tasks):
         for right in tasks[index + 1:]:
             for left_scope in left.get("write_scope", []):
@@ -402,7 +413,7 @@ def validate_relationships(manifest: dict[str, Any], errors: list[str]) -> None:
                             errors.append(f"{classification}: {left.get('task_id')}:{normalize_scope(left_scope)} and {right.get('task_id')}:{normalize_scope(right_scope)}")
 
 
-def validate_manifest(value: Any) -> list[str]:
+def validate_manifest(value: Any, approval_root: str | Path | None = None) -> list[str]:
     if not isinstance(value, dict):
         return ["planning input must be an object"]
     errors: list[str] = []
@@ -412,7 +423,7 @@ def validate_manifest(value: Any) -> list[str]:
         if "master_plan" not in value:
             errors.append("master_plan is required")
         else:
-            validate_relationships(value, errors)
+            validate_relationships(value, errors, approval_root)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         errors.append(str(exc))
     return errors
@@ -430,11 +441,12 @@ def format_requirement_report(manifest: dict[str, Any]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
+    parser.add_argument("--approval-root")
     parser.add_argument("--requirements-report", action="store_true")
     args = parser.parse_args()
     try:
         manifest = read_object(args.input)
-        errors = validate_manifest(manifest)
+        errors = validate_manifest(manifest, args.approval_root)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"PLANNING_INVALID: {exc}", file=sys.stderr)
         return 1

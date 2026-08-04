@@ -98,6 +98,26 @@
       "forbidden": ["automatic_config_mutation", "runtime_state_writes"]
     }
   },
+  "planning": {
+    "owner_aliases": {
+      "implementer": "agent-executor",
+      "task-reviewer": "agent-review",
+      "batch-reviewer": "agent-batch-review",
+      "runtime-recovery": "agent-runtime-recovery"
+    },
+    "task_type_capabilities": {
+      "backend": "repository_editing",
+      "frontend": "repository_editing",
+      "data": "repository_editing",
+      "backend_change": "repository_editing",
+      "frontend_change": "repository_editing",
+      "data_change": "repository_editing",
+      "infrastructure": "repository_editing",
+      "documentation": "repository_editing",
+      "testing": "testing",
+      "review": "evidence_review"
+    }
+  },
   "model_policy": {
     "allowed_model_refs": ["analysis", "planning", "review", "exploration", "context", "implementation", "recovery", "observability"],
     "forbidden_model_refs": ["forbidden-legacy", "forbidden-unsafe"],

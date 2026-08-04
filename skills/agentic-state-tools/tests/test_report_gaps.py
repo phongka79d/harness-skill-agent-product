@@ -95,18 +95,19 @@ class ReportGapTests(unittest.TestCase):
                     "title": "Add validator",
                     "objective": "Validate plans",
                     "context": "Runtime package",
+                    "owner": "agent-executor",
                     "depends_on": [],
                     "execution_mode": "sync",
-                    "task_type": "tooling",
+                    "task_type": "backend_change",
                     "requirement_ids": ["REQ-1"],
                     "read_scope": ["skills/"],
                     "write_scope": ["skills/agentic-state-tools/"],
                     "inputs": [],
                     "required_outputs": ["validator"],
-                    "acceptance_criteria": ["Reject overlap"],
+                    "acceptance_criteria": [{"criterion_id": "AC-1", "text": "Reject overlap", "requirement_ids": ["REQ-1"]}],
                     "verification": ["unit test"],
                     "out_of_scope": [],
-                    "risk_flags": {"architecture_change": False},
+                    "risk_flags": {},
                     "blocker_policy": {"hard_blockers": []},
                     "execution_budget": {"max_files_changed": 5, "max_new_dependencies": 0, "allow_schema_change": True, "allow_architecture_change": False},
                     "architecture_decisions": [],
@@ -127,7 +128,7 @@ class ReportGapTests(unittest.TestCase):
             invalid_path = self.write_json(Path(directory) / "invalid-planning.json", invalid)
             result = run_script("validate_planning.py", "--input", str(invalid_path))
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("overlapping write scope", result.stderr)
+            self.assertIn("CONFLICT", result.stderr)
 
     def test_profile_and_rubric_resolvers_emit_immutable_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -144,7 +145,7 @@ class ReportGapTests(unittest.TestCase):
                 "--task-type",
                 "quick_change",
                 "--risk-flags",
-                '{"external_input":true}',
+                '{"external_api":true}',
             )
             self.assertEqual(rubric.returncode, 0, rubric.stderr)
             rubric_value = json.loads(rubric.stdout)

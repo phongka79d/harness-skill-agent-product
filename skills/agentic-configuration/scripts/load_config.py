@@ -18,6 +18,7 @@ DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "config" / "agentic-confi
 CONFIG_SCHEMA = Path(__file__).resolve().parents[1] / "schemas" / "agentic-config.schema.json"
 DEPLOYMENT_SCHEMA = Path(__file__).resolve().parents[1] / "schemas" / "deployment-config.schema.json"
 REQUIRED_SECTIONS = (
+    "planning",
     "execution",
     "approval_matrix",
     "runtime",

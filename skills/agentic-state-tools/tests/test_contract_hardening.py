@@ -17,6 +17,7 @@ import authorization  # noqa: E402
 import reissue_task_attempt  # noqa: E402
 import create_batch_contract  # noqa: E402
 import commit_batch  # noqa: E402
+import dispatch_task  # noqa: E402
 from create_batch_contract import _resolve_documents  # noqa: E402
 from create_batch_review import load_batch_contract  # noqa: E402
 from commit_batch import CommitRejected, validate_batch_contract_pin, validate_batch_review_artifact  # noqa: E402
@@ -253,11 +254,11 @@ class ContractHardeningTests(unittest.TestCase):
                     "review_profile": "personal", "commit_conditions": ["approved"],
                 }],
                 "tasks": [{
-                    "task_id": "T-1", "batch_id": "B-1", "version": "1.0", "title": "Task",
+                    "task_id": "T-1", "batch_id": "B-1", "version": "1.0", "title": "Task", "owner": "agent-executor",
                     "objective": "Test", "context": "Test", "depends_on": [], "execution_mode": "sync",
                     "task_type": "backend", "requirement_ids": ["REQ-1"], "read_scope": ["src"],
                     "write_scope": ["src/app.py"], "inputs": [], "required_outputs": ["result"],
-                    "acceptance_criteria": ["pass"], "verification": ["tests"], "out_of_scope": [],
+                    "acceptance_criteria": [{"criterion_id": "AC-1", "text": "pass", "requirement_ids": ["REQ-1"]}], "verification": ["tests"], "out_of_scope": [],
                     "risk_flags": {}, "blocker_policy": {"hard_blockers": []},
                     "execution_budget": {"max_files_changed": 1, "max_new_dependencies": 0,
                         "allow_schema_change": False, "allow_architecture_change": False},
@@ -631,10 +632,10 @@ class ContractHardeningTests(unittest.TestCase):
                     "definition_of_done": ["done"], "review_profile": "personal", "commit_conditions": ["approved"],
                 }],
                 "tasks": [{
-                    "task_id": "T-1", "batch_id": "B-1", "version": "1.0", "title": "Task", "objective": "Test",
+                    "task_id": "T-1", "batch_id": "B-1", "version": "1.0", "title": "Task", "objective": "Test", "owner": "agent-executor",
                     "context": "Test", "depends_on": [], "execution_mode": "sync", "task_type": "backend",
                     "requirement_ids": ["REQ-1"], "read_scope": ["src"], "write_scope": ["src/app.py"],
-                    "inputs": [], "required_outputs": ["result"], "acceptance_criteria": ["pass"],
+                    "inputs": [], "required_outputs": ["result"], "acceptance_criteria": [{"criterion_id": "AC-1", "text": "pass", "requirement_ids": ["REQ-1"]}],
                     "verification": ["tests"], "out_of_scope": [], "risk_flags": {},
                     "blocker_policy": {"hard_blockers": []},
                     "execution_budget": {"max_files_changed": 1, "max_new_dependencies": 0,
@@ -1042,6 +1043,7 @@ class ContractHardeningTests(unittest.TestCase):
 
     def _prepare_dispatch_retry(self, project: Path) -> Path:
         self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+        contract = contract_from_rubric(resolve_rubric("personal", "backend", {}))
         task = {
             "task_id": "T-DISPATCH-RETRY",
             "title": "dispatch retry identity",
@@ -1049,6 +1051,7 @@ class ContractHardeningTests(unittest.TestCase):
             "revision": 1,
             "previous_revision": 0,
             "updated_at": "2026-08-03T00:00:00Z",
+            "review_contract": contract,
         }
         write_validated(str(project), "work/T-DISPATCH-RETRY/task-state.json", task, SCHEMAS / "task-state.schema.json")
         return self.write_json(
@@ -1063,6 +1066,7 @@ class ContractHardeningTests(unittest.TestCase):
                 "input_revisions": {"task": 1, "queue": 0},
                 "approval_references": [],
                 "evidence": {"reason": "retry identity", "architecture_owner": "primary-agent"},
+                "review_contract": contract,
                 "plan_revision": 4,
                 "worktree_path": "C:/work/T-DISPATCH-RETRY",
                 "branch_name": "agent/T-DISPATCH-RETRY-r4",
@@ -1118,6 +1122,47 @@ class ContractHardeningTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("plan_revision", result.stderr)
 
+    def test_dispatch_rejects_task_state_without_pinned_review_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            dispatch_path = self._prepare_dispatch_retry(project)
+            task_path = project / ".agent/work/T-DISPATCH-RETRY/task-state.json"
+            task = json.loads(task_path.read_text(encoding="utf-8"))
+            task.pop("review_contract", None)
+            task_path.write_text(json.dumps(task), encoding="utf-8")
+            result = run_script(
+                "dispatch_task.py",
+                "--project-root", str(project),
+                "--input", str(dispatch_path),
+                "--deployment", str(DEPLOYMENT_PATH),
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("review_contract", result.stderr)
+
+    def test_dispatch_rejects_legacy_risk_flags_in_nested_review_contract(self) -> None:
+        contract = contract_from_rubric(resolve_rubric("personal", "backend", {}))
+        dispatch = {
+            "dispatch_id": "DSP-NESTED-RISK",
+            "task_id": "T-NESTED-RISK",
+            "agent_role": "agent-executor",
+            "selected_mode": "SYNC",
+            "selected_owner": "primary-agent",
+            "selected_model": EXECUTOR_MODEL,
+            "input_revisions": {"task": 1},
+            "approval_references": [],
+            "evidence": {"reason": "nested risk check"},
+            "review_contract": contract,
+            "planning_task": {
+                "owner": "agent-executor",
+                "risk_flags": {},
+                "review_contract": {**contract, "risk_flags": {"database_write": True}},
+            },
+        }
+        config = dispatch_task.load_config()
+        deployment = dispatch_task.load_deployment_config(str(DEPLOYMENT_PATH), config)
+        with self.assertRaisesRegex(ValueError, "unknown risk flag"):
+            dispatch_task.normalize_dispatch(dispatch, config, deployment)
+
     def test_reissue_failure_restores_events_snapshot_and_runtime_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)
@@ -1155,6 +1200,10 @@ class ContractHardeningTests(unittest.TestCase):
 
 
 class PlanningIntegrityTests(unittest.TestCase):
+    def write_json(self, path: Path, value: object) -> Path:
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
     def planning_bundle(self, *, task_type: str = "backend_change") -> dict:
         contract = contract_from_rubric(resolve_rubric("personal", "backend", {}))
         return {
@@ -1186,7 +1235,7 @@ class PlanningIntegrityTests(unittest.TestCase):
                 "depends_on": [], "execution_mode": "sync", "task_type": task_type,
                 "requirement_ids": ["REQ-1"], "read_scope": ["src"],
                 "write_scope": ["src/app.py"], "inputs": [], "required_outputs": ["result"],
-                "acceptance_criteria": [{"criterion": "pass", "requirement_ids": ["REQ-1"]}],
+                "acceptance_criteria": [{"criterion_id": "AC-1", "text": "pass", "requirement_ids": ["REQ-1"]}],
                 "verification": ["tests"], "out_of_scope": [], "risk_flags": {},
                 "review_contract": contract, "blocker_policy": {"hard_blockers": []},
                 "execution_budget": {"max_files_changed": 1, "max_new_dependencies": 0,
@@ -1202,6 +1251,11 @@ class PlanningIntegrityTests(unittest.TestCase):
         self.assertTrue(any(text.lower() in error.lower() for error in errors), errors)
 
     def test_task_owner_is_required_known_and_capable(self) -> None:
+        alias = self.planning_bundle()
+        alias["tasks"][0]["owner"] = "implementer"
+        alias["master_plan"]["requirements"] = [{"requirement_id": "REQ-1", "description": "First"}]
+        self.assertFalse(validate_manifest(alias), validate_manifest(alias))
+
         missing = self.planning_bundle()
         missing["tasks"][0].pop("owner")
         self.assert_planning_invalid(missing, "owner")
@@ -1253,13 +1307,18 @@ class PlanningIntegrityTests(unittest.TestCase):
 
         untraced = self.planning_bundle()
         untraced["tasks"][0]["requirement_ids"] = ["REQ-1"]
-        untraced["tasks"][0]["acceptance_criteria"] = [{"criterion": "only first", "requirement_ids": ["REQ-1"]}]
+        untraced["tasks"][0]["acceptance_criteria"] = [{"criterion_id": "AC-1", "text": "only first", "requirement_ids": ["REQ-1"]}]
         self.assert_planning_invalid(untraced, "untraceable")
 
     def test_structured_acceptance_criteria_cannot_reference_untraced_requirements(self) -> None:
         bundle = self.planning_bundle()
-        bundle["tasks"][0]["acceptance_criteria"] = [{"criterion": "wrong", "requirement_ids": ["REQ-2"]}]
+        bundle["tasks"][0]["acceptance_criteria"] = [{"criterion_id": "AC-1", "text": "wrong", "requirement_ids": ["REQ-2"]}]
         self.assert_planning_invalid(bundle, "acceptance")
+
+    def test_string_acceptance_criteria_are_rejected_without_requirement_trace(self) -> None:
+        bundle = self.planning_bundle()
+        bundle["tasks"][0]["acceptance_criteria"] = ["unstructured"]
+        self.assert_planning_invalid(bundle, "acceptance_criteria")
 
     def test_dependency_ordered_overlaps_are_sequential_and_unordered_are_conflicts(self) -> None:
         sequential = self.planning_bundle()
@@ -1282,10 +1341,177 @@ class PlanningIntegrityTests(unittest.TestCase):
         bundle["tasks"].append(second)
         bundle["batches"][0]["tasks"].append("T-2")
         bundle["approvals"] = [{"approval_id": "APR-SHARED", "target_type": "SHARED_WRITE", "target_id": "GROUP-1", "decision": "APPROVED"}]
-        self.assertFalse(any("shared" in error.lower() or "conflict" in error.lower() for error in validate_manifest(bundle)), validate_manifest(bundle))
+        self.assert_planning_invalid(bundle, "approval")
 
         bundle["approvals"] = []
         self.assert_planning_invalid(bundle, "approval")
+
+        bundle["approvals"] = [{"approval_id": "APR-SHARED", "decision": "APPROVED"}]
+        self.assert_planning_invalid(bundle, "approval")
+
+        sequential = self.planning_bundle()
+        second = dict(sequential["tasks"][0], task_id="T-2", depends_on=["T-1"])
+        second["requirement_ids"] = ["REQ-2"]
+        second["acceptance_criteria"] = [{"criterion_id": "AC-2", "text": "pass", "requirement_ids": ["REQ-2"]}]
+        for task in (sequential["tasks"][0], second):
+            task["shared_write_group"] = "GROUP-1"
+            task["shared_write_approval_id"] = "APR-SHARED"
+            task["execution_mode"] = "sync"
+        sequential["tasks"].append(second)
+        sequential["batches"][0]["tasks"].append("T-2")
+        sequential["approvals"] = [{"approval_id": "APR-SHARED", "decision": "APPROVED"}]
+        self.assert_planning_invalid(sequential, "shared")
+
+        persisted = self.planning_bundle()
+        persisted_second = dict(persisted["tasks"][0], task_id="T-2", depends_on=["T-1"])
+        persisted_second["requirement_ids"] = ["REQ-2"]
+        persisted_second["acceptance_criteria"] = [{"criterion_id": "AC-2", "text": "pass", "requirement_ids": ["REQ-2"]}]
+        for task in (persisted["tasks"][0], persisted_second):
+            task["shared_write_group"] = "GROUP-1"
+            task["shared_write_approval_id"] = "APR-SHARED"
+            task["execution_mode"] = "sync"
+        persisted["tasks"].append(persisted_second)
+        persisted["batches"][0]["tasks"].append("T-2")
+        with tempfile.TemporaryDirectory() as directory:
+            approval_root = Path(directory) / ".agent"
+            (approval_root / "approvals").mkdir(parents=True)
+            self.assertTrue(any("approval" in error.lower() for error in validate_manifest(persisted, approval_root)))
+            self.write_json(approval_root / "approvals/SHARED_WRITE-GROUP-1.json", {
+                "approval_id": "APR-SHARED",
+                "target_type": "SHARED_WRITE",
+                "target_id": "GROUP-1",
+                "decision": "APPROVED",
+                "approver": "primary-agent",
+                "actor_type": "primary_agent",
+                "actor_id": "primary-agent",
+                "action": "SHARED_WRITE",
+                "target_revision": 1,
+                "target_hash": "a" * 64,
+                "policy_version": "1",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "evidence": "approved shared write group",
+                "created_at": "2026-08-03T00:00:00Z",
+                "revision": 1,
+            })
+            self.assertFalse(validate_manifest(persisted, approval_root), validate_manifest(persisted, approval_root))
+
+    def test_shared_write_rejects_inline_approval_without_persisted_artifact(self) -> None:
+        bundle = self.planning_bundle()
+        second = dict(bundle["tasks"][0], task_id="T-2")
+        for task in (bundle["tasks"][0], second):
+            task["shared_write_group"] = "GROUP-1"
+            task["shared_write_approval_id"] = "APR-SHARED"
+            task["execution_mode"] = "sync"
+        bundle["tasks"].append(second)
+        bundle["batches"][0]["tasks"].append("T-2")
+        bundle["approvals"] = [{
+            "approval_id": "APR-SHARED",
+            "target_type": "SHARED_WRITE",
+            "target_id": "GROUP-1",
+            "decision": "APPROVED",
+        }]
+        errors = validate_manifest(bundle)
+        self.assertTrue(any("persist" in error.lower() or "approval" in error.lower() for error in errors), errors)
+
+    def test_shared_write_approval_uses_the_official_persisted_artifact(self) -> None:
+        bundle = self.planning_bundle()
+        second = dict(bundle["tasks"][0], task_id="T-2", depends_on=["T-1"])
+        second["requirement_ids"] = ["REQ-2"]
+        second["acceptance_criteria"] = [{"criterion_id": "AC-2", "text": "pass", "requirement_ids": ["REQ-2"]}]
+        for task in (bundle["tasks"][0], second):
+            task["shared_write_group"] = "GROUP-1"
+            task["shared_write_approval_id"] = "APR-SHARED"
+            task["execution_mode"] = "sync"
+        bundle["tasks"].append(second)
+        bundle["batches"][0]["tasks"].append("T-2")
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+            approval = self.write_json(project / "shared-write-approval.json", {
+                "approval_id": "APR-SHARED",
+                "target_type": "SHARED_WRITE",
+                "target_id": "GROUP-1",
+                "decision": "APPROVED",
+                "approver": "primary-agent",
+                "actor_type": "primary_agent",
+                "actor_id": "primary-agent",
+                "action": "SHARED_WRITE",
+                "target_revision": 1,
+                "target_hash": "a" * 64,
+                "policy_version": "1",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "evidence": "approved shared write group",
+            })
+            result = run_script("record_approval.py", "--project-root", str(project), "--input", str(approval))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(validate_manifest(bundle, project / ".agent"), validate_manifest(bundle, project / ".agent"))
+
+    def test_acceptance_criteria_use_stable_ids_and_text(self) -> None:
+        bundle = self.planning_bundle()
+        bundle["master_plan"]["requirements"] = [{"requirement_id": "REQ-1", "description": "First"}]
+        bundle["tasks"][0]["acceptance_criteria"] = [{
+            "criterion_id": "AC-1",
+            "text": "pass",
+            "requirement_ids": ["REQ-1"],
+        }]
+        self.assertFalse(validate_manifest(bundle), validate_manifest(bundle))
+        report = requirement_report(bundle)
+        self.assertEqual(report[0]["acceptance_criteria"], ["T-1[AC-1]"])
+
+    def test_dispatch_rejects_legacy_risk_flags(self) -> None:
+        contract = contract_from_rubric(resolve_rubric("personal", "backend", {}))
+        dispatch = {
+            "dispatch_id": "DSP-RISK",
+            "task_id": "T-RISK",
+            "agent_role": "agent-executor",
+            "selected_mode": "SYNC",
+            "selected_owner": "primary-agent",
+            "selected_model": EXECUTOR_MODEL,
+            "input_revisions": {"task": 1},
+            "approval_references": [],
+            "evidence": {"reason": "risk check"},
+            "risk_flags": {"database_write": True},
+            "review_contract": contract,
+        }
+        config = dispatch_task.load_config()
+        deployment = dispatch_task.load_deployment_config(str(DEPLOYMENT_PATH), config)
+        with self.assertRaisesRegex(ValueError, "unknown risk flag|additional property"):
+            dispatch_task.normalize_dispatch(dispatch, config, deployment)
+        embedded = dict(dispatch)
+        embedded.pop("risk_flags")
+        embedded["planning_task"] = {"owner": "agent-executor", "risk_flags": {"database_write": True}}
+        with self.assertRaisesRegex(ValueError, "unknown risk flag"):
+            dispatch_task.normalize_dispatch(embedded, config, deployment)
+        task_alias = dict(dispatch)
+        task_alias.pop("risk_flags")
+        task_alias["task"] = {"owner": "agent-executor", "risk_flags": {"database_write": True}}
+        with self.assertRaisesRegex(ValueError, "unknown risk flag"):
+            dispatch_task.normalize_dispatch(task_alias, config, deployment)
+        both_nested = dict(dispatch)
+        both_nested.pop("risk_flags")
+        both_nested["planning_task"] = {"owner": "agent-executor", "risk_flags": {}}
+        both_nested["task"] = {"owner": "agent-executor", "risk_flags": {"database_write": True}}
+        with self.assertRaisesRegex(ValueError, "unknown risk flag"):
+            dispatch_task.normalize_dispatch(both_nested, config, deployment)
+
+    def test_scope_detector_cli_emits_classification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            input_path = self.write_json(Path(directory) / "overlap.json", {
+                "tasks": [
+                    {"task_id": "T-1", "depends_on": [], "write_scope": ["src/config.py"]},
+                    {"task_id": "T-2", "depends_on": [], "write_scope": ["src/config.py"]},
+                ],
+            })
+            conflict = run_script("detect_scope_overlap.py", "--input", str(input_path))
+            self.assertEqual(conflict.returncode, 1)
+            self.assertEqual(json.loads(conflict.stdout)["overlaps"][0]["classification"], "CONFLICT")
+
+            ordered = json.loads(input_path.read_text(encoding="utf-8"))
+            ordered["tasks"][1]["depends_on"] = ["T-1"]
+            input_path.write_text(json.dumps(ordered), encoding="utf-8")
+            sequential = run_script("detect_scope_overlap.py", "--input", str(input_path))
+            self.assertEqual(sequential.returncode, 0)
+            self.assertEqual(json.loads(sequential.stdout)["overlaps"][0]["classification"], "SEQUENTIAL_OVERLAP")
 
     def test_read_only_intersections_are_not_scope_conflicts(self) -> None:
         bundle = self.planning_bundle()
