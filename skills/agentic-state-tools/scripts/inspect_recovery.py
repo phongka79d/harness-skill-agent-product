@@ -11,25 +11,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from append_event import append_event
 from capture_workspace import capture_workspace
 from operation_ledger import read_operation_ledger
+from rebuild_state import rebuild_state_for_root
 from runtime_utils import (
+    ensure_runtime_initialized,
     RuntimeLockedError,
     RuntimeNotInitializedError,
     parse_timestamp,
+    prepare_event_log,
     read_object,
     runtime_lock,
     inspect_terminal_cleanup,
     utc_now,
     validate_identifier,
-    write_json_atomic,
 )
 from task_state_contract import validate_execution_identity
-from write_artifact import write_validated
+from runtime_transaction import RuntimeTransaction, TransactionError, recover_transactions
+from validate_payload import validate
 
 
 OPERATION_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/operation.schema.json"
+RECONCILIATION_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/reconciliation.schema.json"
 
 
 def _policy(resume: str, *, requires_lease: bool, inspect_git: bool, rollback: bool, terminal: bool) -> dict[str, object]:
@@ -347,9 +350,23 @@ def _read_optional_for_recovery(path: Path) -> dict[str, Any] | None:
         return None
     return value if isinstance(value, dict) else None
 
-def persist_reconciliation(root: Path, result: dict) -> dict:
+
+def transaction_recovery_evidence(record: dict[str, Any]) -> dict[str, Any]:
+    evidence = record.get("evidence") if isinstance(record.get("evidence"), dict) else {}
+    return {
+        "operation_id": record.get("operation_id"),
+        "operation_type": record.get("operation_type"),
+        "idempotency_key": record.get("idempotency_key"),
+        "status": record.get("status"),
+        "target_paths": list(record.get("target_files", [])),
+        "previous_hashes": dict(evidence.get("previous_hashes", {})),
+        "target_hashes": dict(evidence.get("target_hashes", {})),
+        "classification": evidence.get("classification", record.get("status")),
+        "rollback_reason": record.get("rollback_reason"),
+    }
+
+def _build_reconciliation_record(result: dict) -> tuple[dict, dict]:
     task_id = result["task_id"]
-    created_at = utc_now()
     record = {
         "schema_version": 1,
         "reconciliation_id": "pending",
@@ -359,17 +376,166 @@ def persist_reconciliation(root: Path, result: dict) -> dict:
         "next_action": result.get("next_action"),
         "reasons": list(result.get("reasons", [])),
         "workspace": result.get("workspace", {}),
-        "created_at": created_at,
+        "transactions": list(result.get("transactions", [])),
+        "created_at": utc_now(),
     }
     canonical = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     evidence_hash = hashlib.sha256(canonical).hexdigest()
     record["reconciliation_id"] = f"REC-{task_id}-{evidence_hash[:12]}"
     canonical = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     record["evidence_hash"] = hashlib.sha256(canonical).hexdigest()
-    write_validated(str(root.parent), f"recovery/reconciliation-{task_id}.json", record, Path(__file__).resolve().parents[1] / "schemas/reconciliation.schema.json")
-    result["reconciliation_id"] = record["reconciliation_id"]
-    result["reconciliation_hash"] = record["evidence_hash"]
-    return result
+    errors = validate(record, read_object(RECONCILIATION_SCHEMA), base_path=RECONCILIATION_SCHEMA.parent)
+    if errors:
+        raise ValueError("invalid reconciliation record: " + "; ".join(errors))
+    enriched = dict(result)
+    enriched["reconciliation_id"] = record["reconciliation_id"]
+    enriched["reconciliation_hash"] = record["evidence_hash"]
+    return record, enriched
+
+
+def persist_reconciliation(root: Path, result: dict) -> dict:
+    """Enrich a reconciliation result without publishing it."""
+
+    _record, enriched = _build_reconciliation_record(result)
+    return enriched
+
+
+def _json_artifact_revision(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    try:
+        value = read_object(path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return 0
+    revision = value.get("revision") if isinstance(value, dict) else None
+    return revision if isinstance(revision, int) and not isinstance(revision, bool) and revision >= 0 else 0
+
+
+def _event_journal_snapshot(root: Path, results: list[dict]) -> tuple[str, int, str]:
+    event_relative = "runtime/events.jsonl"
+    event_content: str | None = None
+    event_revision = 0
+    prior_events: list[dict[str, Any]] = []
+    for result in results:
+        event = {
+            "type": "RECOVERY_INSPECTED",
+            "actor": "agentic-state-tools",
+            "data": dict(result),
+        }
+        if isinstance(result.get("task_id"), str) and result["task_id"].strip():
+            event["task_id"] = result["task_id"]
+        event_relative, event_revision, event_content, validated_event = prepare_event_log(
+            root,
+            event,
+            prior_events=prior_events,
+        )
+        prior_events.append(validated_event)
+    if event_content is None:
+        events_path = root / event_relative
+        try:
+            event_content = events_path.read_text(encoding="utf-8") if events_path.is_file() else ""
+        except (OSError, UnicodeError) as exc:
+            raise ValueError(f"event journal is unreadable: {exc}") from exc
+        event_revision = sum(1 for line in event_content.splitlines() if line.strip())
+    return event_relative, event_revision, event_content
+
+
+def _stage_inspection_transaction(
+    project_root: Path,
+    root: Path,
+    output: dict,
+    reconciliation_records: list[tuple[str, dict]],
+    event_relative: str,
+    event_revision: int,
+    event_content: str,
+) -> dict:
+    recovery_relative = "recovery/recovery-state.json"
+    target_files = [relative for relative, _record in reconciliation_records]
+    target_files.append(recovery_relative)
+    target_files.append(event_relative)
+    expected_revisions = {
+        relative: _json_artifact_revision(root / relative)
+        for relative, _record in reconciliation_records
+    }
+    expected_revisions[recovery_relative] = _json_artifact_revision(root / recovery_relative)
+    expected_revisions[event_relative] = event_revision
+    operation_payload = {
+        "output": output,
+        "reconciliation_records": [record for _relative, record in reconciliation_records],
+        "event_content": event_content,
+    }
+    operation_hash = hashlib.sha256(
+        json.dumps(operation_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    transaction = RuntimeTransaction(
+        project_root,
+        operation_type="RECOVERY_INSPECTION",
+        idempotency_key=f"recovery-inspection:{operation_hash}",
+        expected_revisions=expected_revisions,
+    )
+    transaction.prepare(target_files)
+    for relative, record in reconciliation_records:
+        transaction.stage_json(relative, record, RECONCILIATION_SCHEMA)
+    transaction.stage_text(
+        recovery_relative,
+        json.dumps(output, ensure_ascii=False, indent=2) + "\n",
+    )
+    transaction.stage_text(event_relative, event_content)
+    return transaction.commit()
+
+
+def _recovery_failure_evidence(args: argparse.Namespace, exc: Exception) -> dict:
+    evidence = {
+        "operation_id": getattr(exc, "operation_id", None),
+        "operation_type": getattr(exc, "operation_type", None),
+        "idempotency_key": getattr(exc, "idempotency_key", None),
+        "target_paths": list(getattr(exc, "target_paths", []) or []),
+        "previous_hashes": dict(getattr(exc, "previous_hashes", {}) or {}),
+        "target_hashes": dict(getattr(exc, "target_hashes", {}) or {}),
+        "classification": "RECOVERY_PENDING",
+    }
+    return {
+        "schema_version": 1,
+        "inspected_at": utc_now(),
+        "classification": "RECOVERY_PENDING",
+        "error_type": type(exc).__name__,
+        "error": str(exc),
+        **evidence,
+        "transactions": [evidence],
+        "results": ([{"task_id": args.task_id, **evidence}] if args.task_id else []),
+    }
+
+
+def _persist_recovery_failure(project_root: Path, failure: dict) -> dict:
+    root = ensure_runtime_initialized(project_root)
+    event = {
+        "type": "RECOVERY_INSPECTED",
+        "actor": "agentic-state-tools",
+        "data": failure,
+    }
+    task_id = failure.get("results", [{}])[0].get("task_id") if failure.get("results") else None
+    if isinstance(task_id, str) and task_id.strip():
+        event["task_id"] = task_id
+    event_relative, event_revision, event_content, _validated_event = prepare_event_log(root, event)
+    recovery_relative = "recovery/recovery-state.json"
+    expected_revisions = {
+        recovery_relative: _json_artifact_revision(root / recovery_relative),
+        event_relative: event_revision,
+    }
+    operation_hash = hashlib.sha256(
+        json.dumps({"failure": failure, "event_content": event_content}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    transaction = RuntimeTransaction(
+        project_root,
+        operation_type="RECOVERY_INSPECTION_ERROR",
+        idempotency_key=f"recovery-inspection-error:{operation_hash}",
+        expected_revisions=expected_revisions,
+    )
+    transaction.prepare([recovery_relative, event_relative])
+    transaction.stage_text(recovery_relative, json.dumps(failure, ensure_ascii=False, indent=2) + "\n")
+    transaction.stage_text(event_relative, event_content)
+    transaction.commit()
+    return failure
 
 
 def inspect_task(root: Path, task_id: str) -> dict:
@@ -413,6 +579,13 @@ def inspect_task(root: Path, task_id: str) -> dict:
             "reasons": [f"unsupported task status {status or '<missing>'}"],
         }
     checkpoint_path = task_path.parent / "checkpoint.json"
+    checkpoint: dict | None = None
+    checkpoint_error: Exception | None = None
+    if checkpoint_path.is_file():
+        try:
+            checkpoint = read_object(checkpoint_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            checkpoint_error = exc
     workspace = {"status": "NOT_INSPECTED", "mismatch": False, "reasons": ["workspace inspection is not required for this status"]}
     try:
         operations = read_operation_ledger(task_path.parent / "operations.jsonl", task_id, OPERATION_SCHEMA)
@@ -436,14 +609,18 @@ def inspect_task(root: Path, task_id: str) -> dict:
     ]
     runtime_reasons = reconcile_runtime_artifacts(root, task_id, status)
     if runtime_reasons and not policy["terminal"]:
+        runtime_workspace = inspect_workspace(root, checkpoint) if policy["inspect_git"] else workspace
+        recovery_reasons = [*runtime_reasons, *operation_reasons]
+        if checkpoint_error is not None:
+            recovery_reasons.append(f"checkpoint is unreadable: {checkpoint_error}")
         return {
             "task_id": task_id,
             "classification": "NEEDS_RECONCILIATION",
             "status": status,
             "next_action": task.get("next_action"),
             "inspected_at": utc_now(),
-            "workspace": inspect_workspace(root, None) if policy["inspect_git"] else workspace,
-            "reasons": [*runtime_reasons, *operation_reasons],
+            "workspace": runtime_workspace,
+            "reasons": recovery_reasons,
         }
 
     if policy["terminal"]:
@@ -487,7 +664,7 @@ def inspect_task(root: Path, task_id: str) -> dict:
             "status": status,
             "next_action": task.get("next_action"),
             "inspected_at": utc_now(),
-            "workspace": inspect_workspace(root, None),
+            "workspace": inspect_workspace(root, checkpoint),
             "reasons": ["review artifact exists but state transition is not reconciled", *operation_reasons],
         }
 
@@ -537,7 +714,7 @@ def inspect_task(root: Path, task_id: str) -> dict:
             "status": status,
             "next_action": task.get("next_action"),
             "inspected_at": utc_now(),
-            "workspace": inspect_workspace(root, None) if policy["inspect_git"] else workspace,
+            "workspace": inspect_workspace(root, checkpoint) if policy["inspect_git"] else workspace,
             "reasons": [f"status {status} has explicit recovery policy", *operation_reasons],
         }
 
@@ -586,17 +763,22 @@ def inspect_task(root: Path, task_id: str) -> dict:
                 "status": status,
                 "next_action": task.get("next_action"),
                 "inspected_at": utc_now(),
-                "workspace": inspect_workspace(root, None),
+                "workspace": inspect_workspace(root, checkpoint),
                 "reasons": ["active task lease has expired", *operation_reasons],
             }
-        if not checkpoint_path.is_file():
+        if checkpoint_error is not None:
+            return {
+                "task_id": task_id,
+                "classification": "UNSAFE_TO_RESUME",
+                "status": status,
+                "next_action": task.get("next_action"),
+                "inspected_at": utc_now(),
+                "reasons": [f"checkpoint is unreadable: {checkpoint_error}"],
+            }
+        if checkpoint is None:
             classification = "NEEDS_RECONCILIATION"
             reasons = ["active task has no checkpoint", *operation_reasons]
         else:
-            try:
-                checkpoint = read_object(checkpoint_path)
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                return {"task_id": task_id, "classification": "UNSAFE_TO_RESUME", "reasons": [f"checkpoint is unreadable: {exc}"]}
             binding_errors = validate_checkpoint_binding(task, checkpoint)
             workspace = inspect_workspace(root, checkpoint)
             safe = checkpoint.get("resume_safe", True)
@@ -633,22 +815,41 @@ def main() -> int:
     args = parser.parse_args()
     try:
         with runtime_lock(args.project_root) as root:
+            transaction_records = recover_transactions(args.project_root)
+            transactions = [transaction_recovery_evidence(record) for record in transaction_records]
             task_ids = [args.task_id] if args.task_id else [path.parent.name for path in sorted((root / "work").glob("*/task-state.json"))]
-            results = [persist_reconciliation(root, inspect_task(root, task_id)) for task_id in task_ids]
-            output = {"schema_version": 1, "inspected_at": utc_now(), "results": results}
-            write_json_atomic(root / "recovery" / "recovery-state.json", output)
-            for result in results:
-                append_event(
-                    args.project_root,
-                    {"type": "RECOVERY_INSPECTED", "actor": "agentic-state-tools", "task_id": result["task_id"], "data": result},
-                    acquire_lock=False,
-                    refresh_checklist=False,
-                )
+            results: list[dict] = []
+            reconciliation_records: list[tuple[str, dict]] = []
+            for task_id in task_ids:
+                result = inspect_task(root, task_id)
+                result["transactions"] = transactions
+                record, enriched = _build_reconciliation_record(result)
+                results.append(enriched)
+                reconciliation_records.append((f"recovery/reconciliation-{task_id}.json", record))
+            output = {"schema_version": 1, "inspected_at": utc_now(), "transactions": transactions, "results": results}
+            event_relative, event_revision, event_content = _event_journal_snapshot(root, results)
+            _stage_inspection_transaction(
+                Path(args.project_root).expanduser().resolve(),
+                root,
+                output,
+                reconciliation_records,
+                event_relative,
+                event_revision,
+                event_content,
+            )
+        # Recovery inspection appends a journal event; refresh the derived state revision after publication.
+        rebuild_state_for_root(root)
     except RuntimeNotInitializedError as exc:
         print(f"RECOVERY_BLOCKED: {exc}", file=sys.stderr)
         return 2
-    except (RuntimeLockedError, OSError, ValueError, TypeError) as exc:
-        print(f"RECOVERY_FAILED: {exc}", file=sys.stderr)
+    except (RuntimeLockedError, TransactionError, OSError, ValueError, TypeError) as exc:
+        failure = _recovery_failure_evidence(args, exc)
+        try:
+            _persist_recovery_failure(Path(args.project_root).expanduser().resolve(), failure)
+        except (RuntimeLockedError, RuntimeNotInitializedError, TransactionError, OSError, ValueError, TypeError) as persistence_error:
+            failure["persistence_error_type"] = type(persistence_error).__name__
+            failure["persistence_error"] = str(persistence_error)
+        print(json.dumps(failure, ensure_ascii=False, indent=2))
         return 1
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0

@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from append_event import append_event_for_root
+from append_event import append_event_for_root  # compatibility seam; dispatch events are staged below
+from rebuild_state import rebuild_state_for_root
 from operation_ledger import read_operation_ledger
 from render_checklist import render_checklist_for_root
 from worktree_manager import validate_canonical_isolation_proof, validate_isolation_proof
@@ -21,16 +22,16 @@ from runtime_utils import (
     append_jsonl,
     lease_expiry,
     parse_timestamp,
+    prepare_event_log,
     read_object,
     runtime_lock,
     task_dependencies,
     task_write_scopes,
     utc_now,
-    write_json_atomic,
 )
 from task_state_contract import EXECUTION_IDENTITY_FIELDS, merge_task_state, validate_execution_identity
 from validate_payload import validate
-from write_artifact import write_validated
+from runtime_transaction import RuntimeTransaction
 from review_contract import validate_contract
 
 
@@ -99,31 +100,59 @@ def _typed_dependency_edge(source: str, target: str, expected: dict[str, Any]) -
     return edge
 
 
-def _validated_write(path: Path, value: dict[str, Any], schema_path: Path) -> None:
-    errors = validate(value, read_object(schema_path), base_path=schema_path.resolve().parent)
+def _operation_record(existing: list[dict[str, Any]], operation: dict[str, Any]) -> dict[str, Any]:
+    """Build one validated operation record without publishing it."""
+
+    latest = next((item for item in existing if item["operation_id"] == operation["operation_id"]), None)
+    record = dict(operation)
+    record["revision"] = (latest["revision"] + 1) if latest else 1
+    record["recorded_at"] = utc_now()
+    record.setdefault("phase", "PREPARE" if record["status"] == "STARTED" else "COMMIT" if record["status"] == "COMPLETED" else "ROLLBACK")
+    record.setdefault("transaction_id", record["operation_id"])
+    record.setdefault("idempotency_key", record["operation_id"])
+    if record["status"] == "COMPLETED":
+        record.setdefault("commit_marker", record["operation_id"])
+    elif record["status"] in {"FAILED", "UNKNOWN"}:
+        record.setdefault("rollback_marker", record["operation_id"])
+    errors = validate(record, read_object(OPERATION_SCHEMA), base_path=OPERATION_SCHEMA.resolve().parent)
     if errors:
-        raise ValueError("invalid runtime artifact: " + "; ".join(errors))
-    write_json_atomic(path, value)
+        raise ValueError("invalid dispatch operation: " + "; ".join(errors))
+    return record
+
+
+def _operation_log_content(root: Path, task_id: str, operation: dict[str, Any]) -> tuple[str, int, dict[str, Any], dict[str, Any]]:
+    """Return complete operation JSONL content for one atomic dispatch."""
+
+    path = root / "work" / task_id / "operations.jsonl"
+    records = read_operation_ledger(path, task_id, OPERATION_SCHEMA)
+    if any(item["operation_id"] == operation["operation_id"] for item in records):
+        raise ValueError("dispatch operation evidence already exists; reconcile before retry")
+    started = _operation_record(records, operation)
+    completed = _operation_record(
+        [*records, started],
+        {
+            **operation,
+            "status": "COMPLETED",
+            "phase": "COMMIT",
+            "commit_marker": operation["operation_id"],
+            "result_summary": "dispatch persisted",
+        },
+    )
+    existing_content = path.read_text(encoding="utf-8") if path.is_file() else ""
+    prefix = existing_content if not existing_content or existing_content.endswith("\n") else existing_content + "\n"
+    content = prefix + "".join(
+        json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n"
+        for item in (started, completed)
+    )
+    return content, len(existing_content.splitlines()), started, completed
 
 
 def _append_operation(root: Path, task_id: str, operation: dict[str, Any]) -> None:
+    """Preserve the legacy helper used by attempt-reissue compatibility flows."""
+
     path = root / "work" / task_id / "operations.jsonl"
     records = read_operation_ledger(path, task_id, OPERATION_SCHEMA)
-    latest = next((item for item in records if item["operation_id"] == operation["operation_id"]), None)
-    operation = dict(operation)
-    operation["revision"] = (latest["revision"] + 1) if latest else 1
-    operation["recorded_at"] = utc_now()
-    operation.setdefault("phase", "PREPARE" if operation["status"] == "STARTED" else "COMMIT" if operation["status"] == "COMPLETED" else "ROLLBACK")
-    operation.setdefault("transaction_id", operation["operation_id"])
-    operation.setdefault("idempotency_key", operation["operation_id"])
-    if operation["status"] == "COMPLETED":
-        operation.setdefault("commit_marker", operation["operation_id"])
-    elif operation["status"] in {"FAILED", "UNKNOWN"}:
-        operation.setdefault("rollback_marker", operation["operation_id"])
-    errors = validate(operation, read_object(OPERATION_SCHEMA), base_path=OPERATION_SCHEMA.resolve().parent)
-    if errors:
-        raise ValueError("invalid dispatch operation: " + "; ".join(errors))
-    append_jsonl(path, operation)
+    append_jsonl(path, _operation_record(records, operation))
 
 
 def _active_lease_count(root: Path, current_task_id: str) -> int:
@@ -212,6 +241,8 @@ def persist_dispatch(
         task_path = root / "work" / task_id / "task-state.json"
         queue = read_object(queue_path)
         graph = read_object(graph_path)
+        original_queue_revision = int(queue.get("revision", 0))
+        original_graph_revision = int(graph.get("revision", 0))
         existing = _find_existing_dispatch(queue, task_id, idempotency_key)
         if existing is not None:
             if not task_path.is_file():
@@ -248,7 +279,16 @@ def persist_dispatch(
                 if existing.get("lease_id") is not None:
                     repair_lease["lease_id"] = existing["lease_id"]
                 validate_execution_identity(existing_task, repair_lease, None)
-                write_validated(project_root, f"work/{task_id}/lease.json", repair_lease, LEASE_SCHEMA)
+                repair_relative = f"work/{task_id}/lease.json"
+                repair_transaction = RuntimeTransaction(
+                    project_root,
+                    operation_type="DISPATCH",
+                    idempotency_key=f"{idempotency_key}:lease-repair",
+                    expected_revisions={repair_relative: 0},
+                )
+                repair_transaction.prepare([repair_relative])
+                repair_transaction.stage_json(repair_relative, repair_lease, LEASE_SCHEMA)
+                repair_transaction.commit()
             return existing
         if queue.get("revision") != expected_queue_revision:
             raise ValueError(f"stale queue revision: expected {expected_queue_revision}, current {queue.get('revision')}")
@@ -280,7 +320,6 @@ def persist_dispatch(
             lease = read_object(active_lease)
             if parse_timestamp(lease.get("expires_at")) > datetime.now(timezone.utc):
                 raise ValueError(f"task already has an active lease: {task_id}")
-            active_lease.unlink()
         dependencies = task_dependencies(current_task)
         runtime_state = read_object(root / "runtime" / "state.json")
         statuses = runtime_state.get("task_statuses", {})
@@ -293,7 +332,7 @@ def persist_dispatch(
         run_id = str(dispatch.get("run_id") or (proof["run_id"] if mode == "ASYNC" and proof is not None else f"RUN-{task_id}-{uuid.uuid4().hex[:12].upper()}"))
         attempt_id = str(dispatch.get("attempt_id") or f"ATTEMPT-{task_id}-{uuid.uuid4().hex[:12].upper()}")
         lease_id = str(dispatch.get("lease_id") or f"LEASE-{task_id}-{attempt_id}")
-        operation_id = f"OP-{task_id}-DISPATCH-{uuid.uuid4().hex[:12].upper()}"
+        operation_id = f"OP-{task_id}-DISPATCH-R{expected_task_revision}"
         next_status = "QUEUED_ASYNC" if mode == "ASYNC" else "QUEUED_SYNC"
         next_revision = current_revision + 1
         envelope = dict(dispatch)
@@ -324,9 +363,6 @@ def persist_dispatch(
             }
         )
 
-        original_queue = copy.deepcopy(queue)
-        original_graph = copy.deepcopy(graph)
-        original_task = copy.deepcopy(current_task)
         operation = {
             "operation_id": operation_id,
             "task_id": task_id,
@@ -336,10 +372,7 @@ def persist_dispatch(
             "command": "dispatch_task",
             "actor": "agentic-state-tools",
         }
-        event_written = False
         try:
-            _append_operation(root, task_id, operation)
-
             task_entry = {
                 "task_id": task_id,
                 "queue_state": "DISPATCHED",
@@ -362,8 +395,6 @@ def persist_dispatch(
                 {"task_id": task_id, "status": next_status, "revision": next_revision, "run_id": run_id, "attempt_id": attempt_id, "dispatch_id": envelope["dispatch_id"], **({"lease_id": lease_id} if mode == "ASYNC" else {}), **binding_metadata}
             ]
             queue["revision"] = int(queue.get("revision", 0)) + 1
-            _validated_write(queue_path, queue, QUEUE_SCHEMA)
-
             nodes = list(graph.get("nodes", []))
             graph_node: dict[str, Any] | None = None
             if mode == "ASYNC":
@@ -411,7 +442,6 @@ def persist_dispatch(
             graph["nodes"] = nodes
             graph["edges"] = edges
             graph["revision"] = int(graph.get("revision", 0)) + 1
-            _validated_write(graph_path, graph, GRAPH_SCHEMA)
 
             for field, value in {"run_id": run_id, "attempt_id": attempt_id, "dispatch_id": envelope["dispatch_id"], **binding_metadata}.items():
                 if current_task.get(field) is not None and current_task.get(field) != value:
@@ -426,8 +456,6 @@ def persist_dispatch(
                 },
             )
             next_task.update({"run_id": run_id, "attempt_id": attempt_id, "dispatch_id": envelope["dispatch_id"], "idempotency_key": idempotency_key, **binding_metadata})
-            write_validated(project_root, f"work/{task_id}/task-state.json", next_task, TASK_STATE_SCHEMA)
-
             lease = {
                 "task_id": task_id,
                 "owner": str(dispatch["selected_owner"]),
@@ -445,7 +473,6 @@ def persist_dispatch(
                 "idempotency_key": idempotency_key,
                 **binding_metadata,
             }
-            write_validated(project_root, f"work/{task_id}/lease.json", lease, LEASE_SCHEMA)
             validate_execution_identity(next_task, lease, queue)
             if mode == "ASYNC":
                 expected_identity = {
@@ -463,29 +490,72 @@ def persist_dispatch(
                 if graph_node is not None:
                     _validate_async_record(graph_node, expected_identity)
 
-            append_event_for_root(
+            operation_content, operation_revision, started_operation, completed_operation = _operation_log_content(
+                root,
+                task_id,
+                operation,
+            )
+            dispatch_event_relative, event_revision, event_content, dispatch_event = prepare_event_log(
                 root,
                 {
                     "type": STATUS_TO_EVENT_TYPE[next_status],
                     "actor": "agentic-state-tools",
                     "task_id": task_id,
                     "run_id": run_id,
-                    "data": {"dispatch_id": envelope["dispatch_id"], "attempt_id": attempt_id, "task_revision": next_revision},
+                    "data": {
+                        "dispatch_id": envelope["dispatch_id"],
+                        "attempt_id": attempt_id,
+                        "task_revision": next_revision,
+                    },
                 },
             )
-            event_written = True
-            _append_operation(root, task_id, {**operation, "status": "COMPLETED", "phase": "COMMIT", "commit_marker": operation_id, "result_summary": "dispatch persisted"})
+            _, event_revision, event_content, _ = prepare_event_log(
+                root,
+                {
+                    "type": "OPERATION_RECORDED",
+                    "actor": "agentic-state-tools",
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "data": {
+                        "operation_id": operation["operation_id"],
+                        "status": completed_operation["status"],
+                        "type": completed_operation["type"],
+                    },
+                },
+                prior_events=[dispatch_event],
+            )
+            operations_relative = f"work/{task_id}/operations.jsonl"
+            transaction = RuntimeTransaction(
+                project_root,
+                operation_type="DISPATCH",
+                idempotency_key=idempotency_key,
+                expected_revisions={
+                    "runtime/queue.json": original_queue_revision,
+                    "runtime/graph.json": original_graph_revision,
+                    f"work/{task_id}/task-state.json": current_revision,
+                    f"work/{task_id}/lease.json": 0,
+                    operations_relative: operation_revision,
+                    dispatch_event_relative: event_revision,
+                },
+            )
+            transaction_targets = [
+                "runtime/queue.json",
+                "runtime/graph.json",
+                f"work/{task_id}/task-state.json",
+                f"work/{task_id}/lease.json",
+                operations_relative,
+                dispatch_event_relative,
+            ]
+            transaction.prepare(transaction_targets)
+            transaction.stage_json("runtime/queue.json", queue, QUEUE_SCHEMA)
+            transaction.stage_json("runtime/graph.json", graph, GRAPH_SCHEMA)
+            transaction.stage_json(f"work/{task_id}/task-state.json", next_task, TASK_STATE_SCHEMA)
+            transaction.stage_json(f"work/{task_id}/lease.json", lease, LEASE_SCHEMA)
+            transaction.stage_text(operations_relative, operation_content)
+            transaction.stage_text(dispatch_event_relative, event_content)
+            transaction.commit()
+            rebuild_state_for_root(root)
             render_checklist_for_root(root)
             return envelope
         except Exception:
-            if not event_written:
-                write_json_atomic(queue_path, original_queue)
-                write_json_atomic(graph_path, original_graph)
-                write_validated(project_root, f"work/{task_id}/task-state.json", original_task, TASK_STATE_SCHEMA)
-                if active_lease.exists():
-                    active_lease.unlink()
-            try:
-                _append_operation(root, task_id, {**operation, "status": "FAILED", "phase": "ROLLBACK", "rollback_marker": operation_id, "result_summary": "dispatch transaction failed"})
-            except Exception:
-                pass
             raise

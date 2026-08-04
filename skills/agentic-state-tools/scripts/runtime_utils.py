@@ -465,8 +465,26 @@ def validate_event(event: dict[str, Any]) -> None:
         raise ValueError("event.data must be an object")
 
 
-def validate_event_preconditions(root: Path, event: dict[str, Any]) -> None:
+def validate_event_preconditions(
+    root: Path,
+    event: dict[str, Any],
+    *,
+    artifact_overrides: dict[str, dict[str, Any] | None] | None = None,
+) -> None:
     """Validate artifact-backed gates before an event becomes immutable history."""
+
+    def artifact(relative_path: str) -> dict[str, Any] | None:
+        if artifact_overrides is not None and relative_path in artifact_overrides:
+            value = artifact_overrides[relative_path]
+            if value is None:
+                return None
+            if not isinstance(value, dict):
+                raise ValueError(f"event precondition artifact must be an object: {relative_path}")
+            return value
+        path = root / relative_path
+        if not path.is_file():
+            return None
+        return read_object(path)
 
     event_type = event.get("type")
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
@@ -475,8 +493,8 @@ def validate_event_preconditions(root: Path, event: dict[str, Any]) -> None:
         review_id = data.get("review_id")
         if not isinstance(task_id, str) or not isinstance(review_id, str) or not review_id.strip():
             raise ValueError("REVIEW_CREATED requires task_id and review_id evidence")
-        review_path = root / "work" / task_id / "review.json"
-        if not review_path.is_file() or read_object(review_path).get("review_id") != review_id:
+        review = artifact(f"work/{task_id}/review.json")
+        if review is None or review.get("review_id") != review_id:
             raise ValueError("REVIEW_CREATED requires a matching persisted review artifact")
         return
     if event_type == "BATCH_REVIEW_CREATED":
@@ -484,8 +502,8 @@ def validate_event_preconditions(root: Path, event: dict[str, Any]) -> None:
         review_id = data.get("review_id")
         if not isinstance(batch_id, str) or not isinstance(review_id, str) or not review_id.strip():
             raise ValueError("BATCH_REVIEW_CREATED requires batch_id and review_id evidence")
-        review_path = root / "work" / batch_id / "review.json"
-        if not review_path.is_file() or read_object(review_path).get("review_id") != review_id:
+        review = artifact(f"work/{batch_id}/review.json")
+        if review is None or review.get("review_id") != review_id:
             raise ValueError("BATCH_REVIEW_CREATED requires a matching persisted batch review artifact")
         return
     if event_type == "CHECKPOINT_CREATED":
@@ -493,8 +511,8 @@ def validate_event_preconditions(root: Path, event: dict[str, Any]) -> None:
         checkpoint_id = data.get("checkpoint_id")
         if not isinstance(task_id, str) or not isinstance(checkpoint_id, str):
             raise ValueError("CHECKPOINT_CREATED requires task_id and checkpoint_id evidence")
-        checkpoint_path = root / "work" / task_id / "checkpoint.json"
-        if not checkpoint_path.is_file() or read_object(checkpoint_path).get("checkpoint_id") != checkpoint_id:
+        checkpoint = artifact(f"work/{task_id}/checkpoint.json")
+        if checkpoint is None or checkpoint.get("checkpoint_id") != checkpoint_id:
             raise ValueError("CHECKPOINT_CREATED requires a matching persisted checkpoint artifact")
         return
     if event_type == "APPROVAL_RECORDED":
@@ -503,8 +521,8 @@ def validate_event_preconditions(root: Path, event: dict[str, Any]) -> None:
         target_id = data.get("target_id")
         if not all(isinstance(item, str) and item.strip() for item in (approval_id, target_type, target_id)):
             raise ValueError("APPROVAL_RECORDED requires approval target evidence")
-        approval_path = root / "approvals" / f"{target_type}-{target_id}.json"
-        if not approval_path.is_file() or read_object(approval_path).get("approval_id") != approval_id:
+        approval = artifact(f"approvals/{target_type}-{target_id}.json")
+        if approval is None or approval.get("approval_id") != approval_id:
             raise ValueError("APPROVAL_RECORDED requires a matching persisted approval artifact")
         return
     if event_type != "TASK_ACCEPTED":
@@ -515,18 +533,16 @@ def validate_event_preconditions(root: Path, event: dict[str, Any]) -> None:
     review_id = data.get("review_id")
     if not isinstance(review_id, str) or not review_id.strip():
         raise ValueError("TASK_ACCEPTED requires review_id evidence")
-    review_path = root / "work" / task_id / "review.json"
-    if not review_path.is_file():
+    review = artifact(f"work/{task_id}/review.json")
+    if review is None:
         raise ValueError("TASK_ACCEPTED requires a persisted review artifact")
-    review = read_object(review_path)
     if review.get("task_id") != task_id or review.get("review_id") != review_id:
         raise ValueError("TASK_ACCEPTED review identity does not match task")
     if str(review.get("verdict", "")).upper() != "PASS":
         raise ValueError("TASK_ACCEPTED requires a PASS review")
-    task_state_path = root / "work" / task_id / "task-state.json"
-    if not task_state_path.is_file():
+    task_state = artifact(f"work/{task_id}/task-state.json")
+    if task_state is None:
         raise ValueError("TASK_ACCEPTED requires persisted task state")
-    task_state = read_object(task_state_path)
     if str(task_state.get("status", "")).upper() != "ACCEPTED" or task_state.get("review_id") != review_id:
         raise ValueError("TASK_ACCEPTED task state is not linked to the passing review")
 
@@ -539,6 +555,57 @@ def next_event_id(events: list[dict[str, Any]]) -> str:
         if match:
             highest = max(highest, int(match.group(1)))
     return f"EVT-{highest + 1:06d}"
+
+
+def prepare_event_log(
+    root: Path,
+    event: dict[str, Any],
+    *,
+    artifact_overrides: dict[str, dict[str, Any] | None] | None = None,
+    prior_events: list[dict[str, Any]] | None = None,
+) -> tuple[str, int, str, dict[str, Any]]:
+    """Prepare a complete, validated event journal for transactional staging.
+
+    ``artifact_overrides`` lets a caller validate an event against artifacts that
+    are staged in the same transaction but are not published yet.  Existing
+    journal bytes are preserved and only the new validated event lines are
+    appended to the returned content.
+    """
+
+    events_path = root / "runtime" / "events.jsonl"
+    existing_events = iter_events(events_path)
+    staged_events = list(prior_events or [])
+    for prior in staged_events:
+        if not isinstance(prior, dict):
+            raise ValueError("prior event must be an object")
+        validate_event(prior)
+        validate_event_preconditions(root, prior, artifact_overrides=artifact_overrides)
+    all_events = [*existing_events, *staged_events]
+    record = dict(event)
+    record.setdefault("event_id", next_event_id(all_events))
+    record.setdefault("timestamp", utc_now())
+    validate_event(record)
+    if any(item.get("event_id") == record["event_id"] for item in all_events):
+        raise ValueError(f"event_id already exists: {record['event_id']}")
+    validate_event_preconditions(root, record, artifact_overrides=artifact_overrides)
+    replayed = empty_state()
+    for existing in all_events:
+        replayed = apply_event(replayed, existing)
+    apply_event(replayed, record)
+
+    try:
+        existing_content = events_path.read_text(encoding="utf-8") if events_path.is_file() else ""
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"event journal is unreadable: {exc}") from exc
+    prefix = existing_content
+    new_events = [*staged_events, record]
+    if prefix and not prefix.endswith("\n"):
+        prefix += "\n"
+    content = prefix + "".join(
+        json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n"
+        for item in new_events
+    )
+    return "runtime/events.jsonl", len(existing_events), content, record
 
 
 def validate_state_event_transition(state: dict[str, Any], event: dict[str, Any]) -> None:

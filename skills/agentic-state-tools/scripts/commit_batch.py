@@ -16,13 +16,14 @@ from create_batch_review import derive_verdict, load_batch_contract
 from runtime_utils import (
     RuntimeLockedError,
     RuntimeNotInitializedError,
-    append_jsonl,
+    prepare_event_log,
     read_object,
     read_payload,
     runtime_lock,
     utc_now,
     validate_identifier,
 )
+from runtime_transaction import RuntimeTransaction
 from validate_payload import validate
 
 
@@ -31,6 +32,7 @@ class CommitRejected(AuthorizationError):
 
 
 BATCH_REVIEW_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/batch-review.schema.json"
+OPERATION_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/operation.schema.json"
 
 
 def _target(review: dict[str, Any]) -> dict[str, Any]:
@@ -163,6 +165,50 @@ def _used_approval(path: Path, approval_id: str) -> bool:
     return False
 
 
+def _publish_operation_record(
+    project_root: Path,
+    root: Path,
+    batch_id: str,
+    record: dict[str, Any],
+    *,
+    revision: int,
+) -> RuntimeTransaction:
+    operation_path = _operation_path(root, batch_id)
+    existing_content = operation_path.read_text(encoding="utf-8") if operation_path.is_file() else ""
+    errors = validate(record, read_object(OPERATION_SCHEMA), base_path=OPERATION_SCHEMA.parent)
+    if errors:
+        raise CommitRejected("commit operation is invalid: " + "; ".join(errors))
+    next_content = existing_content + json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+    relative_path = f"work/{batch_id}/operations.jsonl"
+    event_relative, event_revision, event_content, _ = prepare_event_log(
+        root,
+        {
+            "type": "OPERATION_RECORDED",
+            "actor": record["actor"],
+            "task_id": batch_id,
+            "data": {
+                "operation_id": record["operation_id"],
+                "status": record["status"],
+                "type": record["type"],
+                "batch_id": batch_id,
+            },
+        },
+    )
+    transaction = RuntimeTransaction(
+        project_root,
+        operation_type=record["type"],
+        idempotency_key=f"commit:{record['operation_id']}:r{revision}",
+        expected_revisions={
+            relative_path: len(existing_content.splitlines()),
+            event_relative: event_revision,
+        },
+    )
+    transaction.prepare([relative_path, event_relative])
+    transaction.stage_text(relative_path, next_content)
+    transaction.stage_text(event_relative, event_content)
+    return transaction
+
+
 def commit_batch(
     project_root: str | Path,
     batch_id: str,
@@ -210,7 +256,8 @@ def commit_batch(
             "revision": 1,
             "actor": actor["actor_id"],
         }
-        append_jsonl(operation_path, started)
+        start_transaction = _publish_operation_record(root_path, root, batch_id, started, revision=1)
+        start_transaction.commit()
         result: dict[str, Any] = {
             "operation_id": operation_id,
             "approval_id": approval_id,
@@ -220,7 +267,8 @@ def commit_batch(
         }
         if dry_run:
             result["status"] = "AUTHORIZED"
-            append_jsonl(operation_path, {**started, "status": "COMPLETED", "result_summary": "commit authorization validated", "revision": 2})
+            completion = {**started, "status": "COMPLETED", "result_summary": "commit authorization validated", "revision": 2}
+            _publish_operation_record(root_path, root, batch_id, completion, revision=2).commit()
             return result
         try:
             subprocess.run(["git", "add", "--", *selected_paths], cwd=root_path, check=True, capture_output=True, text=True)
@@ -232,11 +280,13 @@ def commit_batch(
                 text=True,
             )
         except subprocess.CalledProcessError as exc:
-            append_jsonl(operation_path, {**started, "status": "FAILED", "result_summary": (exc.stderr or exc.stdout or str(exc)).strip(), "revision": 2})
+            failure = {**started, "status": "FAILED", "result_summary": (exc.stderr or exc.stdout or str(exc)).strip(), "revision": 2}
+            _publish_operation_record(root_path, root, batch_id, failure, revision=2).commit()
             raise CommitRejected("git commit failed") from exc
         result["status"] = "COMMITTED"
         result["commit_output"] = (completed.stdout or "").strip()
-        append_jsonl(operation_path, {**started, "status": "COMPLETED", "result_summary": result["commit_output"], "revision": 2})
+        completion = {**started, "status": "COMPLETED", "result_summary": result["commit_output"], "revision": 2}
+        _publish_operation_record(root_path, root, batch_id, completion, revision=2).commit()
         return result
 
 

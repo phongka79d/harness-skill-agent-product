@@ -86,7 +86,35 @@ def _module_name(test_path: Path) -> str:
     return "staged_" + "_".join(test_path.relative_to(ROOT).with_suffix("").parts)
 
 
-def validate_release_examples() -> list[str]:
+def _run_release_process(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout_seconds: int,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            command,
+            cwd=cwd,
+            input=input_text,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return subprocess.CompletedProcess(
+            command,
+            124,
+            stdout=exc.stdout or "",
+            stderr=f"TIMEOUT: release command exceeded {timeout_seconds} seconds",
+        )
+
+
+def validate_release_examples(timeout_seconds: int = 120) -> list[str]:
     """Validate the bundled V1 examples before loading the test suite."""
 
     examples = STATE_ROOT / "examples"
@@ -104,7 +132,7 @@ def validate_release_examples() -> list[str]:
     ]
     errors: list[str] = []
     for name, command in preflight_commands:
-        result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False, env=release_env)
+        result = _run_release_process(command, cwd=ROOT, env=release_env, timeout_seconds=timeout_seconds)
         if result.returncode != 0:
             errors.append(f"{name}: {result.stderr.strip() or result.stdout.strip()}")
     for name, command in example_commands:
@@ -117,7 +145,7 @@ def validate_release_examples() -> list[str]:
         except (OSError, ValueError) as exc:
             errors.append(f"invalid JSON in {name}: {exc}")
             continue
-        result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False, env=release_env)
+        result = _run_release_process(command, cwd=ROOT, env=release_env, timeout_seconds=timeout_seconds)
         if result.returncode != 0:
             errors.append(f"{name}: {result.stderr.strip() or result.stdout.strip()}")
         if name == "v1-dispatch.json":
@@ -126,37 +154,31 @@ def validate_release_examples() -> list[str]:
                 dispatch["input_revisions"] = {"task": 1, "queue": 0}
                 with tempfile.TemporaryDirectory(prefix="agentic-release-dispatch-") as directory:
                     project = Path(directory) / "project"
-                    init_result = subprocess.run(
+                    init_result = _run_release_process(
                         [sys.executable, str(STATE_ROOT / "scripts/init_runtime.py"), "--project-root", str(project)],
                         cwd=ROOT,
-                        text=True,
-                        capture_output=True,
-                        check=False,
                         env=release_env,
+                        timeout_seconds=timeout_seconds,
                     )
                     if init_result.returncode != 0:
                         errors.append(f"{name} policy init: {init_result.stderr.strip() or init_result.stdout.strip()}")
                     ready = Path(directory) / "ready.json"
                     ready.write_text(json.dumps({"task_id": dispatch.get("task_id"), "title": "release", "status": "READY", "depends_on": [], "write_scope": [], "review_contract": dispatch.get("review_contract")}), encoding="utf-8")
-                    ready_result = subprocess.run(
+                    ready_result = _run_release_process(
                         [sys.executable, str(STATE_ROOT / "scripts/update_task_state.py"), "--project-root", str(project), "--input", str(ready)],
                         cwd=ROOT,
-                        text=True,
-                        capture_output=True,
-                        check=False,
                         env=release_env,
+                        timeout_seconds=timeout_seconds,
                     )
                     if ready_result.returncode != 0:
                         errors.append(f"{name} policy task: {ready_result.stderr.strip() or ready_result.stdout.strip()}")
                     policy_command = [sys.executable, str(STATE_ROOT / "scripts/dispatch_task.py"), "--project-root", str(project), "--input", "-"]
-                    policy_result = subprocess.run(
+                    policy_result = _run_release_process(
                         policy_command,
                         cwd=ROOT,
-                        input=json.dumps(dispatch),
-                        text=True,
-                        capture_output=True,
-                        check=False,
+                        input_text=json.dumps(dispatch),
                         env=release_env,
+                        timeout_seconds=timeout_seconds,
                     )
                     if policy_result.returncode != 0:
                         errors.append(f"{name} policy: {policy_result.stderr.strip() or policy_result.stdout.strip()}")
@@ -254,7 +276,7 @@ def main() -> int:
             parser.error("--worker requires --group")
         return _worker_main(args.group)
 
-    release_errors = validate_release_examples()
+    release_errors = validate_release_examples(timeout_seconds=args.timeout)
     if release_errors:
         for error in release_errors:
             print(f"RELEASE_GATE_FAILED: {error}", file=sys.stderr)

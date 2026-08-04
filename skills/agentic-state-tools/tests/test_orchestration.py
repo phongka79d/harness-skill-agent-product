@@ -463,6 +463,36 @@ class OrchestrationHarnessTests(unittest.TestCase):
             self.assertEqual([item["task_id"] for item in output["runnable"]], ["FREE"])
             self.assertEqual(output["reasons"]["CHILD"], "DEPENDENCY_NOT_ACCEPTED:DONE")
 
+    def test_runnable_queue_blocks_async_required_when_policy_is_unsafe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = write_json(
+                directory,
+                "queue.json",
+                {
+                    "queue_id": "Q-ASYNC-REQUIRED",
+                    "revision": 1,
+                    "tasks": [
+                        {
+                            "task_id": "REQUIRED",
+                            "status": "READY",
+                            "depends_on": [],
+                            "execution_policy": {"requested_mode": "ASYNC_REQUIRED"},
+                            "task_type": "backend",
+                            "owner": "agent-executor",
+                            "write_scope": [],
+                        }
+                    ],
+                },
+            )
+
+            result = run_script("resolve_runnable_tasks.py", "--input", str(queue))
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            output = json.loads(result.stdout)
+            self.assertEqual(output["runnable"], [])
+            self.assertEqual(output["blocked_task_ids"], ["REQUIRED"])
+            self.assertTrue(output["reasons"]["REQUIRED"].startswith("EXECUTION_MODE_BLOCKED:"))
+
     def test_mode_forces_sync_for_repairs_conflicts_and_pending_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             for name, task, flags in (

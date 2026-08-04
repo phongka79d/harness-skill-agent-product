@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import sys
 from pathlib import Path
 
-from append_event import append_event, append_event_for_root
 from calculate_rubric_score import calculate, validate_rubric_identity
+from rebuild_state import rebuild_state_for_root
 from render_checklist import render_checklist
 from review_contract import validate_rubric_against_contract
 from runtime_utils import (
@@ -17,6 +19,7 @@ from runtime_utils import (
     assert_terminal_cleanup_safe,
     cleanup_task_runtime,
     inspect_terminal_cleanup,
+    prepare_event_log,
     read_object,
     read_payload,
     runtime_lock,
@@ -25,20 +28,93 @@ from runtime_utils import (
     validate_identifier,
 )
 from validate_transition import is_allowed_transition
-from write_artifact import write_validated
+from runtime_transaction import RuntimeTransaction, TransactionError
 
 
-def append_cleanup_events(root, task_id: str, cleanup: dict) -> None:
-    for lease in cleanup["leases"]:
-        append_event_for_root(
-            root,
-            {"type": "LEASE_RELEASED", "actor": "agentic-state-tools", "task_id": task_id, "run_id": lease.get("run_id"), "data": {"reason": "terminal_task"}},
+class CleanupRecoveryError(RuntimeError):
+    """A terminal cleanup event could not be durably published."""
+
+    def __init__(self, evidence: dict) -> None:
+        self.evidence = evidence
+        super().__init__(evidence.get("error", "terminal cleanup recovery is pending"))
+
+
+def append_cleanup_events(root, project_root: str | Path, task_id: str, cleanup: dict) -> None:
+    events = [
+        {
+            "type": "LEASE_RELEASED",
+            "actor": "agentic-state-tools",
+            "task_id": task_id,
+            "run_id": lease.get("run_id"),
+            "data": {"reason": "terminal_task"},
+        }
+        for lease in cleanup["leases"]
+    ]
+    events.extend(
+        {
+            "type": "LOCK_RELEASED",
+            "actor": "agentic-state-tools",
+            "task_id": task_id,
+            "run_id": lock.get("run_id"),
+            "data": {
+                "lock_id": lock.get("lock_id"),
+                "kind": lock.get("kind"),
+                "key": lock.get("key"),
+                "reason": "terminal_task",
+            },
+        }
+        for lock in cleanup["locks"]
+    )
+    if not events:
+        return
+
+    event_relative = "runtime/events.jsonl"
+    idempotency_digest = hashlib.sha256(
+        json.dumps(
+            {"task_id": task_id, "events": events},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    idempotency_key = f"terminal-cleanup:{task_id}:{idempotency_digest}"
+    transaction = None
+    try:
+        prior_events = []
+        event_revision = 0
+        event_content = ""
+        for event in events:
+            event_relative, event_revision, event_content, validated_event = prepare_event_log(
+                root,
+                event,
+                prior_events=prior_events,
+            )
+            prior_events.append(validated_event)
+        transaction = RuntimeTransaction(
+            project_root,
+            operation_type="TERMINAL_CLEANUP",
+            idempotency_key=idempotency_key,
+            expected_revisions={event_relative: event_revision},
         )
-    for lock in cleanup["locks"]:
-        append_event_for_root(
-            root,
-            {"type": "LOCK_RELEASED", "actor": "agentic-state-tools", "task_id": task_id, "run_id": lock.get("run_id"), "data": {"lock_id": lock.get("lock_id"), "kind": lock.get("kind"), "key": lock.get("key"), "reason": "terminal_task"}},
-        )
+        transaction.prepare([event_relative])
+        transaction.stage_text(event_relative, event_content)
+        transaction.commit()
+    except Exception as exc:
+        evidence = {
+            "schema_version": 1,
+            "classification": "RECOVERY_PENDING",
+            "operation_type": "TERMINAL_CLEANUP",
+            "operation_id": transaction.operation_id if transaction is not None else None,
+            "idempotency_key": idempotency_key,
+            "target_paths": [event_relative],
+            "expected_revisions": ({event_relative: event_revision} if "event_revision" in locals() else {}),
+            "task_id": task_id,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+        if transaction is not None:
+            evidence["manifest_path"] = str(transaction.manifest_path)
+        raise CleanupRecoveryError(evidence) from exc
 
 
 def main() -> int:
@@ -107,12 +183,6 @@ def main() -> int:
             if next_status in {"ACCEPTED", "CANCELLED", "SUPERSEDED"}:
                 assert_terminal_cleanup_safe(root, task_id)
 
-            review_target = write_validated(
-                args.project_root,
-                f"work/{task_id}/review.json",
-                payload,
-                Path(__file__).resolve().parents[1] / "schemas/review.schema.json",
-            )
             next_task_state = dict(task_state)
             previous_revision = int(next_task_state.get("revision", 0))
             next_task_state.update(
@@ -129,35 +199,62 @@ def main() -> int:
                 next_task_state["next_action"] = "none"
             elif "next_action" not in task_state:
                 next_task_state.pop("next_action", None)
-            task_target = write_validated(
-                args.project_root,
-                f"work/{task_id}/task-state.json",
-                next_task_state,
-                Path(__file__).resolve().parents[1] / "schemas/task-state.schema.json",
+            review_relative = f"work/{task_id}/review.json"
+            task_relative = f"work/{task_id}/task-state.json"
+            event_overrides = {review_relative: payload, task_relative: next_task_state}
+            review_event_relative, event_revision, event_content, review_event = prepare_event_log(
+                root,
+                {
+                    "type": "REVIEW_CREATED",
+                    "actor": args.actor,
+                    "task_id": task_id,
+                    "data": {"review_id": payload["review_id"]},
+                },
+                artifact_overrides=event_overrides,
             )
+            _, event_revision, event_content, _ = prepare_event_log(
+                root,
+                {
+                    "type": STATUS_TO_EVENT_TYPE[next_status],
+                    "actor": args.actor,
+                    "task_id": task_id,
+                    "data": {"review_id": payload["review_id"]},
+                },
+                artifact_overrides=event_overrides,
+                prior_events=[review_event],
+            )
+            transaction = RuntimeTransaction(
+                args.project_root,
+                operation_type="REVIEW",
+                idempotency_key=f"review:{task_id}:{payload['review_id']}:{payload['revision']}",
+                expected_revisions={
+                    review_relative: existing_revision,
+                    task_relative: previous_revision,
+                    review_event_relative: event_revision,
+                },
+            )
+            transaction.prepare([review_relative, task_relative, review_event_relative])
+            transaction.stage_json(review_relative, payload, Path(__file__).resolve().parents[1] / "schemas/review.schema.json")
+            transaction.stage_json(task_relative, next_task_state, Path(__file__).resolve().parents[1] / "schemas/task-state.schema.json")
+            transaction.stage_text(review_event_relative, event_content)
+            transaction.commit()
+            review_target = root / "work" / task_id / "review.json"
+            task_target = root / "work" / task_id / "task-state.json"
             cleanup = cleanup_task_runtime(root, task_id) if next_status in {"ACCEPTED", "CANCELLED", "SUPERSEDED"} else {"leases": [], "locks": []}
             if next_status in {"ACCEPTED", "CANCELLED", "SUPERSEDED"}:
                 post_cleanup = inspect_terminal_cleanup(root, task_id)
                 if not post_cleanup["valid"]:
                     raise ValueError("terminal cleanup could not be verified: " + "; ".join(post_cleanup["reasons"]))
-            append_event(
-                args.project_root,
-                {"type": "REVIEW_CREATED", "actor": args.actor, "task_id": task_id, "data": {"review_id": payload["review_id"]}},
-                acquire_lock=False,
-                refresh_checklist=False,
-            )
-            append_cleanup_events(root, task_id, cleanup)
-            append_event(
-                args.project_root,
-                {"type": STATUS_TO_EVENT_TYPE[next_status], "actor": args.actor, "task_id": task_id, "data": {"review_id": payload["review_id"]}},
-                acquire_lock=False,
-                refresh_checklist=False,
-            )
+            append_cleanup_events(root, args.project_root, task_id, cleanup)
+            rebuild_state_for_root(root)
             render_checklist(args.project_root, acquire_lock=False)
     except RuntimeNotInitializedError as exc:
         print(f"REVIEW_BLOCKED: {exc}", file=sys.stderr)
         return 2
-    except (RuntimeLockedError, OSError, ValueError, TypeError) as exc:
+    except CleanupRecoveryError as exc:
+        print(json.dumps(exc.evidence, ensure_ascii=False, sort_keys=True), file=sys.stderr)
+        return 1
+    except (RuntimeLockedError, TransactionError, OSError, ValueError, TypeError) as exc:
         print(f"REVIEW_REJECTED: {exc}", file=sys.stderr)
         return 1
     print(f"REVIEW_WRITTEN: {review_target}; TASK_STATE_WRITTEN: {task_target}")

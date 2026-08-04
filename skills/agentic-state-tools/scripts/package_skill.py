@@ -23,7 +23,7 @@ def _is_allowed(path: Path, root: Path) -> bool:
     relative = path.relative_to(root)
     if not relative.parts or relative.parts[0] not in ALLOWED_ROOTS:
         return False
-    if any(part in BLOCKED_PARTS for part in relative.parts):
+    if any(part.lower() in BLOCKED_PARTS for part in relative.parts):
         return False
     name = path.name.lower()
     if name in BLOCKED_NAMES or any(name.endswith(suffix) for suffix in BLOCKED_SUFFIXES):

@@ -6,11 +6,13 @@ import argparse
 import copy
 import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
-from runtime_utils import read_object, read_payload, utc_now, write_json_atomic
+from runtime_utils import read_object, read_payload, utc_now
+from runtime_transaction import RuntimeTransaction
 from validate_change_request import validate_change_request, validate_operations
 
 
@@ -79,6 +81,80 @@ def artifact_hash(value: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+def _initialized_project_for(path: Path) -> Path | None:
+    for candidate in (path, *path.parents):
+        if (candidate / ".agent" / "runtime" / "state.json").is_file():
+            return candidate
+    return None
+
+
+def _initialize_project_runtime(project_root: Path) -> Path:
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("init_runtime.py")), "--project-root", str(project_root)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown initialization failure"
+        raise ValueError(f"runtime initialization failed: {detail}")
+    return project_root.resolve()
+
+
+def _write_plan_transactionally(
+    output_path: Path,
+    new_plan: dict[str, Any],
+    *,
+    project_root: Path | None = None,
+) -> None:
+    output_path = Path(output_path).expanduser()
+    try:
+        resolved_output = output_path.resolve(strict=False)
+    except OSError as exc:
+        raise ValueError("output must be inside an initialized project .agent root") from exc
+    project_root = project_root.resolve() if project_root is not None else _initialized_project_for(resolved_output.parent)
+    if project_root is None:
+        raise ValueError("output must be inside an initialized project .agent root")
+    resolved_project = project_root.resolve()
+    agent_root = (resolved_project / ".agent").resolve()
+    try:
+        agent_root.relative_to(resolved_project)
+    except ValueError as exc:
+        raise ValueError("initialized project .agent root escapes the project root") from exc
+    try:
+        relative_path = resolved_output.relative_to(agent_root)
+        target_relative = relative_path.as_posix()
+    except ValueError as exc:
+        try:
+            relative_path = resolved_output.relative_to(resolved_project)
+        except ValueError:
+            raise ValueError("output must remain inside the project root") from exc
+        if not relative_path.parts or relative_path.parts[0] == ".agent":
+            raise ValueError("output must be inside an initialized project .agent root") from exc
+        target_relative = f"project/{relative_path.as_posix()}"
+    if not relative_path.parts:
+        raise ValueError("output must identify a file inside the project root")
+    current_revision = 0
+    current: dict[str, Any] = {}
+    if resolved_output.is_file():
+        try:
+            current = read_object(resolved_output)
+        except (OSError, ValueError, json.JSONDecodeError):
+            current = {}
+    if isinstance(current.get("revision"), int) and not isinstance(current.get("revision"), bool):
+        current_revision = current["revision"]
+    content_hash = artifact_hash(new_plan)
+    transaction = RuntimeTransaction(
+        project_root,
+        operation_type="PLAN_CHANGE",
+        idempotency_key=f"plan-change:{new_plan['change_request_id']}:{new_plan['version']}:{content_hash}",
+        expected_revisions={target_relative: current_revision},
+    )
+    transaction.prepare([target_relative])
+    transaction.stage_text(target_relative, json.dumps(new_plan, ensure_ascii=False, indent=2) + "\n")
+    transaction.commit()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--request", required=True)
@@ -115,7 +191,15 @@ def main() -> int:
             new_plan.pop(stale_field, None)
         new_plan["invalidated_artifacts"] = ["approvals", "reviews", "batch_contracts", "dispatches"]
         new_plan["artifact_hash"] = artifact_hash(new_plan)
-        write_json_atomic(output_path, new_plan)
+        project_root = _initialized_project_for(output_path.parent) or _initialized_project_for(target_path.parent)
+        if project_root is None:
+            project_root = target_path.parent
+            try:
+                output_path.relative_to(project_root)
+            except ValueError as exc:
+                raise ValueError("target and output must remain inside one project root") from exc
+            project_root = _initialize_project_runtime(project_root)
+        _write_plan_transactionally(output_path, new_plan, project_root=project_root)
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         print(f"CHANGE_APPLY_REJECTED: {exc}", file=sys.stderr)
         return 1

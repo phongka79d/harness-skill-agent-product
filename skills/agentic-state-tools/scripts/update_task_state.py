@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import sys
 from pathlib import Path
 
-from append_event import append_event, append_event_for_root
+from rebuild_state import rebuild_state_for_root
 from render_checklist import render_checklist
 from review_contract import validate_contract
 from task_state_contract import merge_task_state, validate_execution_identity
@@ -18,62 +20,21 @@ from runtime_utils import (
     assert_terminal_cleanup_safe,
     cleanup_task_runtime,
     inspect_terminal_cleanup,
+    prepare_event_log,
     read_object,
     read_payload,
     runtime_lock,
     utc_now,
     validate_identifier,
-    write_text_atomic,
 )
 from validate_transition import is_allowed_transition
-from write_artifact import write_validated
+from runtime_transaction import RuntimeTransaction, TransactionError
 
 
 INITIAL_STATUSES = {"PENDING", "READY", "QUEUED", "QUEUED_ASYNC", "QUEUED_SYNC"}
 QUEUE_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/queue.schema.json"
 LEASE_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/lease.schema.json"
 QUEUE_STATE_BY_STATUS = {"QUEUED": "DISPATCHED", "QUEUED_ASYNC": "DISPATCHED", "QUEUED_SYNC": "DISPATCHED"}
-
-
-def _snapshot_file(path: Path) -> bytes | None:
-    return path.read_bytes() if path.is_file() else None
-
-
-def _restore_file(path: Path, content: bytes | None) -> None:
-    if content is None:
-        if path.is_file():
-            path.unlink()
-        return
-    write_text_atomic(path, content.decode("utf-8"))
-
-
-def _snapshot_task_runtime(root: Path, task_id: str) -> tuple[dict[Path, bytes | None], dict[Path, bytes]]:
-    paths = (
-        root / "work" / task_id / "task-state.json",
-        root / "work" / task_id / "lease.json",
-        root / "runtime" / "queue.json",
-        root / "runtime" / "events.jsonl",
-        root / "runtime" / "state.json",
-        root / "checklist.md",
-    )
-    files = {path: _snapshot_file(path) for path in paths}
-    locks = {
-        path: path.read_bytes()
-        for path in (root / "locks").glob("**/*.json")
-        if path.is_file()
-    }
-    return files, locks
-
-
-def _restore_task_runtime(root: Path, files: dict[Path, bytes | None], locks: dict[Path, bytes]) -> None:
-    lock_root = (root / "locks").resolve()
-    for path in (root / "locks").glob("**/*.json"):
-        if path.is_file() and path.resolve().is_relative_to(lock_root) and path not in locks:
-            path.unlink()
-    for path, content in locks.items():
-        _restore_file(path, content)
-    for path, content in files.items():
-        _restore_file(path, content)
 
 
 def synchronize_queue(queue: dict, next_state: dict) -> dict:
@@ -119,17 +80,90 @@ def synchronize_queue(queue: dict, next_state: dict) -> dict:
     return queue
 
 
-def append_cleanup_events(root, task_id: str, cleanup: dict) -> None:
-    for lease in cleanup["leases"]:
-        append_event_for_root(
-            root,
-            {"type": "LEASE_RELEASED", "actor": "agentic-state-tools", "task_id": task_id, "run_id": lease.get("run_id"), "data": {"reason": "terminal_task"}},
+class CleanupRecoveryError(RuntimeError):
+    """A terminal cleanup event could not be durably published."""
+
+    def __init__(self, evidence: dict) -> None:
+        self.evidence = evidence
+        super().__init__(evidence.get("error", "terminal cleanup recovery is pending"))
+
+
+def append_cleanup_events(root, project_root: str | Path, task_id: str, cleanup: dict) -> None:
+    events = [
+        {
+            "type": "LEASE_RELEASED",
+            "actor": "agentic-state-tools",
+            "task_id": task_id,
+            "run_id": lease.get("run_id"),
+            "data": {"reason": "terminal_task"},
+        }
+        for lease in cleanup["leases"]
+    ]
+    events.extend(
+        {
+            "type": "LOCK_RELEASED",
+            "actor": "agentic-state-tools",
+            "task_id": task_id,
+            "run_id": lock.get("run_id"),
+            "data": {
+                "lock_id": lock.get("lock_id"),
+                "kind": lock.get("kind"),
+                "key": lock.get("key"),
+                "reason": "terminal_task",
+            },
+        }
+        for lock in cleanup["locks"]
+    )
+    if not events:
+        return
+
+    event_relative = "runtime/events.jsonl"
+    idempotency_digest = hashlib.sha256(
+        json.dumps(
+            {"task_id": task_id, "events": events},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    idempotency_key = f"terminal-cleanup:{task_id}:{idempotency_digest}"
+    transaction = None
+    try:
+        prior_events = []
+        event_revision = 0
+        event_content = ""
+        for event in events:
+            event_relative, event_revision, event_content, validated_event = prepare_event_log(
+                root,
+                event,
+                prior_events=prior_events,
+            )
+            prior_events.append(validated_event)
+        transaction = RuntimeTransaction(
+            project_root,
+            operation_type="TERMINAL_CLEANUP",
+            idempotency_key=idempotency_key,
+            expected_revisions={event_relative: event_revision},
         )
-    for lock in cleanup["locks"]:
-        append_event_for_root(
-            root,
-            {"type": "LOCK_RELEASED", "actor": "agentic-state-tools", "task_id": task_id, "run_id": lock.get("run_id"), "data": {"lock_id": lock.get("lock_id"), "kind": lock.get("kind"), "key": lock.get("key"), "reason": "terminal_task"}},
-        )
+        transaction.prepare([event_relative])
+        transaction.stage_text(event_relative, event_content)
+        transaction.commit()
+    except Exception as exc:
+        evidence = {
+            "schema_version": 1,
+            "classification": "RECOVERY_PENDING",
+            "operation_type": "TERMINAL_CLEANUP",
+            "operation_id": transaction.operation_id if transaction is not None else None,
+            "idempotency_key": idempotency_key,
+            "target_paths": [event_relative],
+            "expected_revisions": ({event_relative: event_revision} if "event_revision" in locals() else {}),
+            "task_id": task_id,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+        if transaction is not None:
+            evidence["manifest_path"] = str(transaction.manifest_path)
+        raise CleanupRecoveryError(evidence) from exc
 
 
 def main() -> int:
@@ -187,6 +221,7 @@ def main() -> int:
             queue_path = root / "runtime" / "queue.json"
             lease = read_object(lease_path) if lease_path.is_file() else None
             queue = read_object(queue_path) if queue_path.is_file() else None
+            queue_revision = int(queue.get("revision", 0)) if queue is not None else 0
             validate_execution_identity(next_state, lease, queue)
             if lease is not None:
                 lease["task_revision"] = next_state["revision"]
@@ -194,18 +229,45 @@ def main() -> int:
             if queue is not None:
                 queue = synchronize_queue(queue, next_state)
                 validate_execution_identity(next_state, lease, queue)
-            original_files, original_locks = _snapshot_task_runtime(root, task_id)
+            transaction_targets = [f"work/{task_id}/task-state.json"]
+            transaction_revisions = {f"work/{task_id}/task-state.json": current_revision}
+            if lease is not None:
+                transaction_targets.append(f"work/{task_id}/lease.json")
+                transaction_revisions[f"work/{task_id}/lease.json"] = 0
+            if queue is not None:
+                transaction_targets.append("runtime/queue.json")
+                transaction_revisions["runtime/queue.json"] = queue_revision
+            event_relative, event_revision, event_content, _ = prepare_event_log(
+                root,
+                {
+                    "type": STATUS_TO_EVENT_TYPE[requested_status],
+                    "actor": args.actor,
+                    "task_id": task_id,
+                    "data": {"task_revision": next_state["revision"]},
+                },
+            )
+            transaction_targets.append(event_relative)
+            transaction_revisions[event_relative] = event_revision
+            transaction = RuntimeTransaction(
+                args.project_root,
+                operation_type="TASK_STATE",
+                idempotency_key=f"task-state:{task_id}:{next_state['revision']}",
+                expected_revisions=transaction_revisions,
+            )
+            transaction.prepare(transaction_targets)
+            transaction.stage_json(
+                f"work/{task_id}/task-state.json",
+                next_state,
+                Path(__file__).resolve().parents[1] / "schemas/task-state.schema.json",
+            )
+            if lease is not None:
+                transaction.stage_json(f"work/{task_id}/lease.json", lease, LEASE_SCHEMA)
+            if queue is not None:
+                transaction.stage_json("runtime/queue.json", queue, QUEUE_SCHEMA)
+            transaction.stage_text(event_relative, event_content)
+            target = root / "work" / task_id / "task-state.json"
+            transaction.commit()
             try:
-                target = write_validated(
-                    args.project_root,
-                    f"work/{task_id}/task-state.json",
-                    next_state,
-                    Path(__file__).resolve().parents[1] / "schemas/task-state.schema.json",
-                )
-                if lease is not None:
-                    write_validated(args.project_root, f"work/{task_id}/lease.json", lease, LEASE_SCHEMA)
-                if queue is not None:
-                    write_validated(args.project_root, "runtime/queue.json", queue, QUEUE_SCHEMA)
                 cleanup = cleanup_task_runtime(root, task_id) if requested_status in TERMINAL_STATUSES else {"leases": [], "locks": []}
                 if requested_status in TERMINAL_STATUSES:
                     post_cleanup = inspect_terminal_cleanup(root, task_id)
@@ -214,26 +276,18 @@ def main() -> int:
                 post_lease = read_object(lease_path) if lease_path.is_file() else None
                 post_queue = read_object(queue_path) if queue_path.is_file() else None
                 validate_execution_identity(next_state, post_lease, post_queue)
-                append_event(
-                    args.project_root,
-                    {
-                        "type": STATUS_TO_EVENT_TYPE[requested_status],
-                        "actor": args.actor,
-                        "task_id": task_id,
-                        "data": {"task_revision": next_state["revision"]},
-                    },
-                    acquire_lock=False,
-                    refresh_checklist=False,
-                )
-                append_cleanup_events(root, task_id, cleanup)
+                append_cleanup_events(root, args.project_root, task_id, cleanup)
+                rebuild_state_for_root(root)
                 render_checklist(args.project_root, acquire_lock=False)
             except Exception:
-                _restore_task_runtime(root, original_files, original_locks)
                 raise
     except RuntimeNotInitializedError as exc:
         print(f"TASK_STATE_BLOCKED: {exc}", file=sys.stderr)
         return 2
-    except (RuntimeLockedError, OSError, ValueError, TypeError) as exc:
+    except CleanupRecoveryError as exc:
+        print(json.dumps(exc.evidence, ensure_ascii=False, sort_keys=True), file=sys.stderr)
+        return 1
+    except (RuntimeLockedError, TransactionError, OSError, ValueError, TypeError) as exc:
         print(f"TASK_STATE_REJECTED: {exc}", file=sys.stderr)
         return 1
     print(f"TASK_STATE_WRITTEN: {target}")

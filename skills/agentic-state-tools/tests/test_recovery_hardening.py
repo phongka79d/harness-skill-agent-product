@@ -16,6 +16,8 @@ sys.path.insert(0, str(SCRIPTS))
 
 from worktree_manager import CleanupBlocked, WorktreeError, WorktreeManager  # noqa: E402
 from merge_worktree import build_merge_authorization_target, merge_worktree  # noqa: E402
+from capture_workspace import capture_workspace  # noqa: E402
+from inspect_recovery import inspect_task  # noqa: E402
 
 
 def run_script(name: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -231,6 +233,66 @@ class RecoveryHardeningTests(unittest.TestCase):
             self.assertIn("unstaged.py", snapshot["unstaged_paths"])
             self.assertIn("untracked.py", snapshot["untracked_paths"])
             self.assertTrue(snapshot["base_commit"])
+
+    def test_workspace_capture_marks_deleted_expected_file_as_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            init_git_project(project)
+            base_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=project,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            (project / "value.txt").unlink()
+
+            snapshot = capture_workspace(project, expected_files=["value.txt"], expected_base=base_commit)
+
+            self.assertTrue(snapshot["mismatch"])
+            self.assertIn("value.txt", snapshot["missing_files"])
+            self.assertTrue(any("missing on filesystem" in reason for reason in snapshot["reasons"]))
+
+    def test_runtime_mismatch_preserves_checkpoint_workspace_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            init_git_project(project)
+            init_project(project)
+            root = project / ".agent"
+            base_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=project,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            (project / "value.txt").write_text("checkpoint-change\n", encoding="utf-8")
+            write_json(
+                root / "work/T-001/task-state.json",
+                {"task_id": "T-001", "status": "RUNNING", "revision": 1},
+            )
+            write_json(
+                root / "work/T-001/checkpoint.json",
+                {
+                    "checkpoint_id": "CP-T-001-1",
+                    "task_id": "T-001",
+                    "current_step": "inspect",
+                    "pending_steps": ["repair"],
+                    "files_modified": ["value.txt"],
+                    "base_commit": base_commit,
+                },
+            )
+            runtime_state = json.loads((root / "runtime/state.json").read_text(encoding="utf-8"))
+            runtime_state["task_statuses"] = {"T-001": "COMPLETED"}
+            (root / "runtime/state.json").write_text(json.dumps(runtime_state), encoding="utf-8")
+
+            result = inspect_task(root, "T-001")
+
+            self.assertEqual(result["classification"], "NEEDS_RECONCILIATION")
+            self.assertEqual(result["workspace"]["expected_files"], ["value.txt"])
+            self.assertEqual(result["workspace"]["base_commit"], base_commit)
 
     def test_checkpoint_persists_workspace_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

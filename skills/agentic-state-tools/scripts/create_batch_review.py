@@ -9,23 +9,24 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from append_event import append_event_for_root
 from authorization import require_persisted_approval, validate_approval
 from calculate_rubric_score import calculate, validate_findings, validate_rubric_identity
+from rebuild_state import rebuild_state_for_root
 from render_checklist import render_checklist_for_root
 from review_contract import validate_contract, validate_rubric_against_contract
 from runtime_utils import (
     RuntimeLockedError,
     RuntimeNotInitializedError,
     next_revision,
+    prepare_event_log,
     read_object,
     read_payload,
     runtime_lock,
     utc_now,
     validate_identifier,
 )
-from write_artifact import write_validated
 from validate_payload import validate
+from runtime_transaction import RuntimeTransaction, TransactionError
 
 
 SCHEMA = Path(__file__).resolve().parents[1] / "schemas/batch-review.schema.json"
@@ -328,20 +329,37 @@ def main() -> int:
                 record["batch_contract_hash"] = batch_contract["contract_hash"]
             record["verdict"], record["blocking_reasons"] = derive_verdict(root, record)
             record["artifact_hash"] = artifact_hash(record)
-            target = write_validated(args.project_root, f"work/{record['batch_id']}/review.json", record, SCHEMA)
-            append_event_for_root(
+            target = root / "work" / record["batch_id"] / "review.json"
+            relative = f"work/{record['batch_id']}/review.json"
+            event_relative, event_revision, event_content, _ = prepare_event_log(
                 root,
                 {
                     "type": "BATCH_REVIEW_CREATED",
                     "actor": args.actor,
-                    "data": {"batch_id": record["batch_id"], "review_id": record["review_id"], "verdict": record["verdict"]},
+                    "data": {
+                        "batch_id": record["batch_id"],
+                        "review_id": record["review_id"],
+                        "verdict": record["verdict"],
+                    },
                 },
+                artifact_overrides={relative: record},
             )
+            transaction = RuntimeTransaction(
+                args.project_root,
+                operation_type="BATCH_REVIEW",
+                idempotency_key=f"batch-review:{record['batch_id']}:{record['review_id']}:{record['revision']}",
+                expected_revisions={relative: existing_revision, event_relative: event_revision},
+            )
+            transaction.prepare([relative, event_relative])
+            transaction.stage_json(relative, record, SCHEMA)
+            transaction.stage_text(event_relative, event_content)
+            transaction.commit()
+            rebuild_state_for_root(root)
             render_checklist_for_root(root)
     except RuntimeNotInitializedError as exc:
         print(f"BATCH_REVIEW_BLOCKED: {exc}", file=sys.stderr)
         return 2
-    except (RuntimeLockedError, OSError, ValueError, TypeError) as exc:
+    except (RuntimeLockedError, TransactionError, OSError, ValueError, TypeError) as exc:
         print(f"BATCH_REVIEW_REJECTED: {exc}", file=sys.stderr)
         return 1
     print(f"BATCH_REVIEW_WRITTEN: {target}")

@@ -153,6 +153,8 @@ class V1WorkflowTests(unittest.TestCase):
 
             init = run_script("init_runtime.py", "--project-root", str(project))
             self.assertEqual(init.returncode, 0, init.stderr)
+            self.assertTrue((project / ".agent/runtime/staging").is_dir())
+            self.assertTrue((project / ".agent/runtime/transactions").is_dir())
             plan_hash = hashlib.sha256(
                 json.dumps(planning_value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
             ).hexdigest()

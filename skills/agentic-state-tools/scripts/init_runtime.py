@@ -29,6 +29,8 @@ def main() -> int:
         runtime = staging / "runtime"
         for relative in (
             "runtime",
+            "runtime/staging",
+            "runtime/transactions",
             "work",
             "checkpoints/global",
             "checkpoints/agents",

@@ -25,6 +25,7 @@ from validate_payload import validate
 
 ROOT = Path(__file__).resolve().parents[1]
 TRANSACTION_SCHEMA = ROOT / "schemas/transaction.schema.json"
+OPERATION_ID_PATTERN = re.compile(r"^OP-[0-9a-f]{32}$")
 TERMINAL_STATUSES = {"COMMITTED", "ROLLED_BACK"}
 NON_TERMINAL_STATUSES = {"PREPARED", "APPLYING", "RECOVERY_PENDING"}
 EXTERNAL_OPERATION_TYPES = {
@@ -126,12 +127,7 @@ def _canonical_target(project: Path, value: str, *, field: str = "target path") 
     agent = (project / ".agent").resolve()
     candidate = Path(value).expanduser()
     if candidate.is_absolute():
-        resolved = candidate.resolve(strict=False)
-        if _contained(resolved, agent) and resolved != agent:
-            return resolved.relative_to(agent).as_posix(), resolved
-        if _contained(resolved, project) and resolved != project:
-            return f"project/{resolved.relative_to(project).as_posix()}", resolved
-        raise ValueError(f"{field} must remain inside the project root")
+        raise ValueError(f"{field} must use a relative canonical path")
 
     normalized = _normalize_relative(value, field=field)
     if normalized == ".agent" or normalized.startswith(".agent/"):
@@ -142,6 +138,8 @@ def _canonical_target(project: Path, value: str, *, field: str = "target path") 
         resolved = (project / relative).resolve(strict=False)
         if not _contained(resolved, project) or resolved == project:
             raise ValueError(f"{field} must remain inside the project root")
+        if _contained(resolved, agent):
+            raise ValueError(f"{field} must use an .agent-relative path")
         return f"project/{relative}", resolved
 
     resolved = (agent / normalized).resolve(strict=False)
@@ -166,11 +164,20 @@ def _safe_agent_path(root: Path, value: str, *, field: str) -> Path:
 
 
 def _staging_relative(operation_id: str, target_path: str) -> str:
+    _validate_operation_id(operation_id)
     return (Path("runtime") / "staging" / operation_id / target_path).as_posix()
 
 
 def _manifest_path(root: Path, operation_id: str) -> Path:
-    return root / "runtime" / "transactions" / f"{operation_id}.json"
+    _validate_operation_id(operation_id)
+    runtime_root = root.resolve()
+    transactions = (root / "runtime" / "transactions").resolve()
+    if not _contained(transactions, runtime_root) or transactions == runtime_root:
+        raise TransactionError("transaction directory escapes project/.agent")
+    manifest = (transactions / f"{operation_id}.json").resolve()
+    if manifest.parent != transactions:
+        raise TransactionError("transaction manifest path escapes runtime/transactions")
+    return manifest
 
 
 def _transaction_ledger_path(root: Path) -> Path:
@@ -178,13 +185,26 @@ def _transaction_ledger_path(root: Path) -> Path:
 
 
 def _marker_path(root: Path, operation_id: str, suffix: str = "commit") -> Path:
-    return root / "runtime" / "transactions" / f"{operation_id}.{suffix}.json"
+    _validate_operation_id(operation_id)
+    if not isinstance(suffix, str) or not re.fullmatch(r"[a-z]+", suffix):
+        raise TransactionError("transaction marker suffix is invalid")
+    runtime_root = root.resolve()
+    transactions = (root / "runtime" / "transactions").resolve()
+    if not _contained(transactions, runtime_root) or transactions == runtime_root:
+        raise TransactionError("transaction directory escapes project/.agent")
+    marker = (transactions / f"{operation_id}.{suffix}.json").resolve()
+    if marker.parent != transactions:
+        raise TransactionError("transaction marker path escapes runtime/transactions")
+    return marker
 
 
 def _validate_manifest(record: dict[str, Any]) -> None:
     errors = validate(record, read_object(TRANSACTION_SCHEMA), base_path=TRANSACTION_SCHEMA.parent)
     if errors:
         raise TransactionError("invalid transaction record: " + "; ".join(errors))
+    operation_id = _validate_operation_id(record["operation_id"])
+    if _derive_operation_id(record["idempotency_key"]) != operation_id:
+        raise TransactionError("transaction operation_id is not derived from idempotency_key")
 
 
 def _read_manifest(path: Path) -> dict[str, Any]:
@@ -244,38 +264,14 @@ def _derive_operation_id(idempotency_key: str) -> str:
     return "OP-" + hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()[:32]
 
 
-class _RuntimeTransactionMeta(type):
-    """Private compatibility adapter for pre-Task-5 positional callers."""
-
-    def __call__(cls, project_root: str | Path, *args: Any, **kwargs: Any) -> Any:
-        if len(args) == 5 and not kwargs:
-            operation_id, operation_type, idempotency_key, expected_revisions, target_files = args
-            instance = super().__call__(
-                project_root,
-                operation_type=operation_type,
-                idempotency_key=idempotency_key,
-                expected_revisions=expected_revisions,
-            )
-            instance.operation_id = operation_id
-            instance._legacy_mode = True
-            instance._legacy_target_files = list(target_files)
-            instance.manifest_path = _manifest_path(instance.root, operation_id)
-            return instance
-        return super().__call__(project_root, *args, **kwargs)
+def _validate_operation_id(value: Any) -> str:
+    if not isinstance(value, str) or OPERATION_ID_PATTERN.fullmatch(value) is None:
+        raise TransactionError("transaction operation_id is invalid")
+    return value
 
 
-class RuntimeTransaction(metaclass=_RuntimeTransactionMeta):
+class RuntimeTransaction:
     """Publish JSON files with durable preparation, commit, and recovery evidence."""
-
-    def __getattribute__(self, name: str) -> Any:
-        if name in {"prepare", "stage_json"}:
-            try:
-                legacy_mode = object.__getattribute__(self, "_legacy_mode")
-            except AttributeError:
-                legacy_mode = False
-            if legacy_mode:
-                return object.__getattribute__(self, f"_legacy_{name}")
-        return object.__getattribute__(self, name)
 
     def __init__(
         self,
@@ -303,16 +299,13 @@ class RuntimeTransaction(metaclass=_RuntimeTransactionMeta):
                 raise ValueError(f"expected revision for {canonical} must be a non-negative integer")
             self.expected_revisions[canonical] = revision
         self._target_files: list[str] = []
-        self._legacy_mode = False
-        self._legacy_target_files: list[str] = []
+        self.operation_id = _validate_operation_id(self.operation_id)
         self.manifest_path = _manifest_path(self.root, self.operation_id)
 
     def _canonical_targets(self, target_files: list[str]) -> list[str]:
         if not isinstance(target_files, list) or not target_files:
             raise ValueError("target_files must be a non-empty list")
         targets = [_canonical_target(self.project_root, item)[0] for item in target_files]
-        if not self._legacy_mode and any(target.startswith("project/") for target in targets):
-            raise ValueError("target_files must remain inside project/.agent")
         if len(set(targets)) != len(targets):
             raise ValueError("target_files must not contain duplicates")
         missing = [path for path in targets if path not in self.expected_revisions]
@@ -406,9 +399,6 @@ class RuntimeTransaction(metaclass=_RuntimeTransactionMeta):
         self._identity_matches(record)
         return record
 
-    def _legacy_prepare(self) -> dict[str, Any]:
-        return type(self).prepare(self, self._legacy_target_files)
-
     def prepare(self, target_files: list[str]) -> dict[str, Any]:
         self._target_files = self._canonical_targets(target_files)
         with runtime_lock(self.project_root) as root:
@@ -467,8 +457,6 @@ class RuntimeTransaction(metaclass=_RuntimeTransactionMeta):
 
     def _stage_content(self, relative_path: str, content: bytes, *, allow_content_change: bool = False) -> dict[str, Any]:
         canonical, _ = _canonical_target(self.project_root, relative_path)
-        if not self._legacy_mode and canonical.startswith("project/"):
-            raise ValueError("staged target must remain inside project/.agent")
         with runtime_lock(self.project_root) as root:
             record = self._load_required()
             if canonical not in record["target_files"]:
@@ -504,15 +492,6 @@ class RuntimeTransaction(metaclass=_RuntimeTransactionMeta):
             record["evidence"]["phase"] = "PREPARE"
             self._save(record)
             return record
-
-    def _legacy_stage_json(self, relative_path: str, value: Any, schema_path: str | Path | None = None) -> dict[str, Any]:
-        if schema_path is None:
-            return self._stage_content(
-                relative_path,
-                _json_bytes(value),
-                allow_content_change=self.operation_type == "MERGE_WORKTREE",
-            )
-        return type(self).stage_json(self, relative_path, value, schema_path)
 
     def stage_json(self, relative_path: str, value: Any, schema_path: str | Path) -> dict[str, Any]:
         content = self._validated_json_bytes(value, schema_path)
@@ -750,14 +729,27 @@ class RuntimeTransaction(metaclass=_RuntimeTransactionMeta):
 
 
 def _transaction_for_record(project: Path, record: dict[str, Any], manifest_path: Path) -> RuntimeTransaction:
+    operation_id = _validate_operation_id(record.get("operation_id"))
+    idempotency_key = record.get("idempotency_key")
+    if not isinstance(idempotency_key, str) or not idempotency_key.strip():
+        raise TransactionError("transaction idempotency_key is invalid")
+    if _derive_operation_id(idempotency_key) != operation_id:
+        raise TransactionError("transaction operation_id is not derived from idempotency_key")
     transaction = RuntimeTransaction(
         project,
         operation_type=record["operation_type"],
-        idempotency_key=record["idempotency_key"],
+        idempotency_key=idempotency_key,
         expected_revisions=record["expected_revisions"],
     )
-    transaction.operation_id = record["operation_id"]
-    transaction.manifest_path = manifest_path
+    expected_manifest = _manifest_path(transaction.root, operation_id)
+    try:
+        supplied_manifest = Path(manifest_path).resolve(strict=False)
+    except OSError as exc:
+        raise TransactionError(f"transaction manifest path is unreadable: {manifest_path}") from exc
+    if supplied_manifest != expected_manifest:
+        raise TransactionError("transaction manifest path is not canonical")
+    if transaction.operation_id != operation_id or transaction.manifest_path != expected_manifest:
+        raise TransactionError("transaction identity does not match manifest")
     transaction._target_files = list(record["target_files"])
     return transaction
 

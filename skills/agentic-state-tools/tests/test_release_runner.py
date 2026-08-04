@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -47,6 +49,19 @@ class ReleaseRunnerTests(unittest.TestCase):
         assignments = getattr(run_tests, "GROUP_ASSIGNMENTS", {})
         missing = sorted(set(assignments) - discovered)
         self.assertEqual(missing, [], f"group assignments reference missing test files: {missing}")
+
+    def test_release_preflight_forwards_timeout_to_every_child_process(self) -> None:
+        timeouts: list[int | None] = []
+
+        def fake_run(command, **kwargs):
+            timeouts.append(kwargs.get("timeout"))
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        with patch.object(run_tests.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(run_tests.validate_release_examples(timeout_seconds=7), [])
+
+        self.assertTrue(timeouts)
+        self.assertEqual(set(timeouts), {7})
 
 
 if __name__ == "__main__":

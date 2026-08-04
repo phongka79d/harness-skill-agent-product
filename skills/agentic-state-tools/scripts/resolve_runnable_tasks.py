@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from resolve_execution_mode import resolve_execution_mode
+from load_config import load_config
 from validate_planning import normalize_scope, scopes_overlap
 from runtime_utils import read_object, task_dependencies, task_write_scopes
 
@@ -23,6 +25,14 @@ def resolve_tasks(queue: dict[str, Any]) -> dict[str, Any]:
     active_scopes = [normalize_scope(scope) for scope in queue.get("active_write_scopes", []) if isinstance(scope, str) and scope.strip()]
     accepted = {task.get("task_id") for task in tasks if str(task.get("status", "")).upper() == "ACCEPTED"}
     accepted.update(item for item in queue.get("accepted_task_ids", []) if isinstance(item, str))
+    config = load_config()
+    active_tasks = queue.get("active_tasks")
+    if not isinstance(active_tasks, list):
+        active_tasks = [
+            item
+            for item in tasks
+            if isinstance(item, dict) and str(item.get("status", item.get("queue_state", ""))).upper() in {"RUNNING", "DISPATCHED", "QUEUED_ASYNC", "QUEUED_SYNC"}
+        ]
     runnable: list[dict[str, Any]] = []
     blocked: dict[str, str] = {}
     conflicted: dict[str, str] = {}
@@ -40,9 +50,24 @@ def resolve_tasks(queue: dict[str, Any]) -> dict[str, Any]:
         if conflicts:
             conflicted[task_id] = f"SCOPE_CONFLICT:{','.join(sorted(set(conflicts)))}"
             continue
+        execution_policy = resolve_execution_mode(
+            task,
+            config=config,
+            active_tasks=active_tasks,
+            queue=queue,
+            lease=task.get("lease") if isinstance(task.get("lease"), dict) else None,
+            isolation_proof=task.get("isolation_proof"),
+            now=datetime.now(timezone.utc),
+        )
+        execution_mode = execution_policy["resolved_mode"] if isinstance(execution_policy, dict) else execution_policy
+        if execution_mode == "BLOCKED":
+            reason = execution_policy.get("resolution_reason", "UNSAFE_EXECUTION_MODE") if isinstance(execution_policy, dict) else "UNSAFE_EXECUTION_MODE"
+            blocked[task_id] = f"EXECUTION_MODE_BLOCKED:{reason}"
+            continue
         runnable.append({
             "task_id": task_id,
-            "execution_mode": resolve_execution_mode(task),
+            "execution_mode": execution_mode,
+            "execution_policy": execution_policy,
             "status": status,
             "depends_on": task_dependencies(task),
         })

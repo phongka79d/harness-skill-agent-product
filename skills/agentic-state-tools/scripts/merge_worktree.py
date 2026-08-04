@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from authorization import AuthorizationError, authorize, require_persisted_approval
-from runtime_utils import read_object, read_payload
+from runtime_utils import RuntimeLockedError, read_object, read_payload, runtime_lock
+from runtime_transaction import RuntimeTransaction, _append_ledger
 from worktree_manager import WorktreeError, WorktreeManager, _now, _run_git, _timestamp, _write_atomic
 
 
@@ -272,12 +273,236 @@ def _actor_identity(actor: str | dict[str, str], actor_type: str | None) -> dict
     return {"actor_id": actor, "actor_type": actor_type}
 
 
-def _conflict_record(manager: WorktreeManager, entry: dict[str, Any], target_branch: str, output: str) -> dict[str, Any]:
-    manager.recovery_root.mkdir(parents=True, exist_ok=True)
-    artifact = manager.recovery_root / f"RECOVERY_PENDING-{entry['task_id']}-{entry['revision']}.json"
-    record = {
+class _MergeRuntimeTransaction(RuntimeTransaction):
+    """Publish local merge evidence and update the external registry in the commit phase.
+
+    WorktreeManager deliberately keeps its registry outside the project.  The
+    transaction therefore publishes a project-local registry snapshot first;
+    its target hook applies the corresponding registry update before the
+    transaction writes its commit marker.  A failed pre-commit publication
+    restores the exact registry snapshot.
+    """
+
+    def __init__(
+        self,
+        project_root: str | Path,
+        *,
+        operation_type: str,
+        idempotency_key: str,
+        expected_revisions: dict[str, int],
+        manager: WorktreeManager,
+        metadata_target: Path,
+        metadata_before: dict[str, Any],
+        metadata_updates: dict[str, Any],
+        metadata_record: dict[str, Any],
+    ) -> None:
+        super().__init__(
+            project_root,
+            operation_type=operation_type,
+            idempotency_key=idempotency_key,
+            expected_revisions=expected_revisions,
+        )
+        self._manager = manager
+        self._metadata_target = metadata_target.resolve()
+        self._metadata_relative = self._metadata_target.relative_to(self.root).as_posix()
+        self._metadata_before = metadata_before
+        self._metadata_before_hash = _canonical_hash(metadata_before)
+        self._metadata_updates = dict(metadata_updates)
+        self._metadata_task_id = self._metadata_updates.pop("task_id")
+        self._metadata_revision = self._metadata_updates.pop("revision")
+        self._metadata_record = dict(metadata_record)
+        self._registry_update_attempted = False
+        self._registry_update_succeeded = False
+        self._git_merge_completed = False
+        self.published_entry: dict[str, Any] | None = None
+
+    def restage_merge_payloads(
+        self,
+        artifact_relative: str,
+        artifact: dict[str, Any],
+        metadata_updates: dict[str, Any],
+    ) -> None:
+        """Replace staged recovery payloads after Git reports an unexpected conflict."""
+
+        if artifact_relative not in self._target_files:
+            raise WorktreeError(f"merge artifact was not prepared: {artifact_relative}")
+        self._metadata_updates = dict(metadata_updates)
+        self._metadata_task_id = self._metadata_updates.pop("task_id")
+        self._metadata_revision = self._metadata_updates.pop("revision")
+        metadata_record = dict(self._metadata_record)
+        metadata_record.update(
+            {
+                "classification": artifact.get("classification"),
+                "status": artifact.get("status"),
+                "artifact_path": str(self.project_root / ".agent" / artifact_relative),
+                "updated_entry": {
+                    **metadata_record.get("previous_entry", {}),
+                    **self._metadata_updates,
+                },
+            }
+        )
+        self._metadata_record = metadata_record
+        self._stage_content(
+            artifact_relative,
+            (json.dumps(artifact, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+            allow_content_change=True,
+        )
+        self._stage_content(
+            self._metadata_relative,
+            (json.dumps(metadata_record, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+            allow_content_change=True,
+        )
+
+    def _publish_target(self, staged_path: Path, target_path: Path) -> None:
+        super()._publish_target(staged_path, target_path)
+        if target_path.resolve() != self._metadata_target:
+            return
+        self._registry_update_attempted = True
+        try:
+            self.published_entry = self._manager._set_entry_locked(
+                self._metadata_task_id,
+                self._metadata_revision,
+                self._metadata_updates,
+            )
+        except Exception:
+            raise
+        else:
+            self._registry_update_succeeded = True
+
+    def _restore_registry(self) -> None:
+        # The external registry is outside the project transaction, so it cannot
+        # be atomically replaced with the project-local merge artifacts.
+        _write_atomic(self._manager.metadata_path, self._metadata_before)
+
+    def mark_git_merge_completed(self) -> None:
+        self._git_merge_completed = True
+
+    def _commit_marker_present(self) -> bool:
+        marker = self.root / "runtime" / "transactions" / f"{self.operation_id}.commit.json"
+        try:
+            return marker.is_file() and read_object(marker).get("status") == "COMMITTED"
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return False
+
+    def _recovery_evidence(
+        self,
+        error: Exception,
+        *,
+        restored: bool,
+        restore_error: Exception | None,
+        commit_marker_present: bool,
+    ) -> dict[str, Any]:
+        evidence: dict[str, Any] = {
+            "git_merge_completed": self._git_merge_completed,
+            "registry_update_attempted": self._registry_update_attempted,
+            "registry_update_succeeded": self._registry_update_succeeded,
+            "registry_restored": restored,
+            "registry_before_hash": self._metadata_before_hash,
+            "commit_marker_present": commit_marker_present,
+            "error_type": type(error).__name__,
+            "error": str(error),
+        }
+        if restore_error is not None:
+            evidence["registry_restore_error"] = {
+                "error_type": type(restore_error).__name__,
+                "error": str(restore_error),
+            }
+        return evidence
+
+    def _write_recovery_metadata(self, recovery_evidence: dict[str, Any]) -> None:
+        record = dict(self._metadata_record)
+        if self._metadata_target.is_file():
+            try:
+                record = read_object(self._metadata_target)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+        record["status"] = "RECOVERY_PENDING"
+        record["classification"] = "POST_GIT_FAILURE"
+        record["registry_snapshot"] = {
+            "before": self._metadata_before,
+            "before_hash": self._metadata_before_hash,
+        }
+        record["recovery"] = recovery_evidence
+        _write_atomic(self._metadata_target, record)
+
+    def _persist_recovery(self, error: Exception, *, restored: bool, restore_error: Exception | None) -> None:
+        commit_marker_present = self._commit_marker_present()
+        recovery_evidence = self._recovery_evidence(
+            error,
+            restored=restored,
+            restore_error=restore_error,
+            commit_marker_present=commit_marker_present,
+        )
+        with runtime_lock(self.project_root):
+            record = self._load_required()
+            record["evidence"]["merge_recovery"] = recovery_evidence
+            if record["status"] != "COMMITTED":
+                self._mark_recovery_pending(record, f"merge transaction failed after Git: {error}", "POST_GIT_FAILURE")
+            else:
+                self._save(record)
+        self._write_recovery_metadata(recovery_evidence)
+        if restore_error is not None:
+            # This fallback runs only after the transaction manifest is durable;
+            # the external registry has no atomic commit boundary with Git.
+            try:
+                self._manager._set_entry_locked(
+                    self._metadata_task_id,
+                    self._metadata_revision,
+                    {
+                        "status": "RECOVERY_PENDING",
+                        "merge_recovery_manifest": str(self.manifest_path),
+                        "merge_metadata_artifact": str(self._metadata_target),
+                    },
+                )
+            except Exception as fallback_error:
+                with runtime_lock(self.project_root):
+                    record = self._load_required()
+                    record["evidence"]["merge_recovery"]["registry_pending_fallback_error"] = {
+                        "error_type": type(fallback_error).__name__,
+                        "error": str(fallback_error),
+                    }
+                    self._save(record)
+                    _append_ledger(self.root, record)
+
+    def recover_after_git_failure(self, error: Exception) -> None:
+        self.mark_git_merge_completed()
+        restored = False
+        restore_error: Exception | None = None
+        if self._registry_update_attempted and not self._commit_marker_present():
+            try:
+                self._restore_registry()
+                restored = True
+            except Exception as exc:
+                restore_error = exc
+        self._persist_recovery(error, restored=restored, restore_error=restore_error)
+
+    def commit(self) -> dict[str, Any]:
+        try:
+            return super().commit()
+        except Exception as error:
+            committed = self._commit_marker_present()
+            restored = False
+            restore_error: Exception | None = None
+            if self._registry_update_attempted and not committed:
+                try:
+                    self._restore_registry()
+                    restored = True
+                except Exception as exc:
+                    restore_error = exc
+            try:
+                self._persist_recovery(error, restored=restored, restore_error=restore_error)
+            except Exception as recovery_error:
+                raise WorktreeError(
+                    f"merge transaction failed and recovery evidence could not be persisted: {recovery_error}"
+                ) from recovery_error
+            raise
+
+
+def _conflict_record(entry: dict[str, Any], target_branch: str, output: str) -> dict[str, Any]:
+    return {
         "schema_version": 1,
         "status": "RECOVERY_PENDING",
+        "classification": "CONFLICTED",
         "task_id": entry["task_id"],
         "revision": entry["revision"],
         "source_branch": entry["branch"],
@@ -286,12 +511,72 @@ def _conflict_record(manager: WorktreeManager, entry: dict[str, Any], target_bra
         "batch_blocked": True,
         "created_at": _timestamp(_now()),
     }
-    _write_atomic(artifact, record)
-    return manager._set_entry_locked(
-        entry["task_id"],
-        entry["revision"],
-        {"status": "RECOVERY_PENDING", "conflict_artifact": str(artifact)},
+
+
+def _artifact_revision(path: Path) -> int:
+    if not path.is_file():
+        return 0
+    try:
+        value = read_object(path)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return 0
+    revision = value.get("revision")
+    return revision if isinstance(revision, int) and not isinstance(revision, bool) and revision >= 0 else 0
+
+
+def _prepare_merge_transaction(
+    project_root: str | Path,
+    task_id: str,
+    revision: int,
+    approval_id: str,
+    target: dict[str, Any],
+    manager: WorktreeManager,
+    entry: dict[str, Any],
+    artifact_relative: str,
+    artifact: dict[str, Any],
+    metadata_updates: dict[str, Any],
+) -> tuple[_MergeRuntimeTransaction, str]:
+    project = Path(project_root).expanduser().resolve()
+    root = project / ".agent"
+    metadata_relative = f"recovery/merge-metadata-{task_id}-{revision}.json"
+    artifact_path = root / artifact_relative
+    metadata_path = root / metadata_relative
+    metadata_before = read_object(manager.metadata_path)
+    metadata_record = {
+        "schema_version": 1,
+        "task_id": task_id,
+        "revision": revision,
+        "classification": artifact.get("classification"),
+        "status": artifact.get("status"),
+        "registry_path": str(manager.metadata_path),
+        "previous_entry": entry,
+        "updated_entry": {**entry, **{key: value for key, value in metadata_updates.items() if key not in {"task_id", "revision"}}},
+        "artifact_path": str(artifact_path),
+        "registry_snapshot": {
+            "before": metadata_before,
+            "before_hash": _canonical_hash(metadata_before),
+        },
+        "created_at": _timestamp(_now()),
+    }
+    expected_revisions = {
+        artifact_relative: _artifact_revision(artifact_path),
+        metadata_relative: _artifact_revision(metadata_path),
+    }
+    transaction = _MergeRuntimeTransaction(
+        project,
+        operation_type="MERGE_WORKTREE",
+        idempotency_key=f"merge:{task_id}:{revision}:{approval_id}:{target['target_hash']}",
+        expected_revisions=expected_revisions,
+        manager=manager,
+        metadata_target=metadata_path,
+        metadata_before=metadata_before,
+        metadata_updates=metadata_updates,
+        metadata_record=metadata_record,
     )
+    transaction.prepare([artifact_relative, metadata_relative])
+    transaction.stage_text(artifact_relative, json.dumps(artifact, ensure_ascii=False, indent=2) + "\n")
+    transaction.stage_text(metadata_relative, json.dumps(metadata_record, ensure_ascii=False, indent=2) + "\n")
+    return transaction, artifact_relative
 
 
 def merge_worktree(
@@ -313,7 +598,7 @@ def merge_worktree(
         raise AuthorizationError("merge approval must be an object")
     manager = WorktreeManager(project_root, worktree_root)
     actor_identity = _actor_identity(actor, actor_type)
-    with manager.workspace_lock():
+    with manager.workspace_lock(), runtime_lock(project_root):
         entry = manager.get(task_id, revision)
         if entry.get("status") in {"STALE", "RECOVERY_PENDING", "ACCEPTED", "CANCELLED", "MERGED"}:
             raise WorktreeError(f"worktree is not mergeable in status {entry.get('status')}")
@@ -341,16 +626,109 @@ def merge_worktree(
         preview = _run_git(manager.project_root, "merge-tree", "--write-tree", target["snapshot"]["target_commit"], entry["branch"])
         if preview.returncode:
             output = (preview.stdout + "\n" + preview.stderr).strip()
-            result = _conflict_record(manager, entry, target_branch, output)
+            artifact = _conflict_record(entry, target_branch, output)
+            artifact.update({"approval_id": approval_id, "target_hash": target["target_hash"]})
+            artifact_relative = f"recovery/RECOVERY_PENDING-{task_id}-{revision}.json"
+            artifact_path = Path(project_root).expanduser().resolve() / ".agent" / artifact_relative
+            metadata_updates = {
+                "task_id": task_id,
+                "revision": revision,
+                "status": "RECOVERY_PENDING",
+                "conflict_artifact": str(artifact_path),
+            }
+            merge_transaction, _ = _prepare_merge_transaction(
+                project_root,
+                task_id,
+                revision,
+                approval_id,
+                target,
+                manager,
+                entry,
+                artifact_relative,
+                artifact,
+                metadata_updates,
+            )
+            merge_transaction.commit()
+            result = dict(merge_transaction.published_entry or manager.get(task_id, revision))
             result.update({"approval_id": approval_id, "target_hash": target_commit, "classification": "CONFLICTED"})
             return result
-        merge = _run_git(manager.project_root, "merge", "--no-ff", "--no-edit", entry["branch"])
+
+        artifact_relative = f"recovery/MERGED-{task_id}-{revision}.json"
+        artifact_path = Path(project_root).expanduser().resolve() / ".agent" / artifact_relative
+        artifact = {
+            "schema_version": 1,
+            "task_id": task_id,
+            "revision": revision,
+            "approval_id": approval_id,
+            "target_hash": target["target_hash"],
+            "classification": "MERGED",
+            "status": "COMMITTED",
+            "source_commit": target["snapshot"]["source_commit"],
+            "target_commit": target["snapshot"]["target_commit"],
+            "merged_into": target_branch,
+            "created_at": _timestamp(_now()),
+        }
+        metadata_updates = {
+            "task_id": task_id,
+            "revision": revision,
+            "status": "MERGED",
+            "merged_into": target_branch,
+        }
+        try:
+            merge_transaction, _ = _prepare_merge_transaction(
+                project_root,
+                task_id,
+                revision,
+                approval_id,
+                target,
+                manager,
+                entry,
+                artifact_relative,
+                artifact,
+                metadata_updates,
+            )
+            merge = _run_git(manager.project_root, "merge", "--no-ff", "--no-edit", entry["branch"])
+        except Exception as exc:
+            if "merge_transaction" not in locals():
+                raise
+            merge_transaction.recover_after_git_failure(exc)
+            result = dict(manager.get(task_id, revision))
+            result.update(
+                {
+                    "approval_id": approval_id,
+                    "target_hash": target_commit,
+                    "classification": "RECOVERY_PENDING",
+                    "conflict_artifact": str(merge_transaction._metadata_target),
+                }
+            )
+            return result
+
+        merge_transaction.mark_git_merge_completed()
         if merge.returncode:
             output = (merge.stdout + "\n" + merge.stderr).strip()
-            result = _conflict_record(manager, entry, target_branch, output)
-            result.update({"approval_id": approval_id, "target_hash": target_commit, "classification": "CONFLICTED"})
+            conflict_artifact = _conflict_record(entry, target_branch, output)
+            conflict_artifact.update({"approval_id": approval_id, "target_hash": target["target_hash"]})
+            conflict_metadata_updates = {
+                "task_id": task_id,
+                "revision": revision,
+                "status": "RECOVERY_PENDING",
+                "conflict_artifact": str(artifact_path),
+            }
+            merge_transaction.restage_merge_payloads(artifact_relative, conflict_artifact, conflict_metadata_updates)
+            merge_transaction.commit()
+            result = dict(merge_transaction.published_entry or manager.get(task_id, revision))
+            result.update(
+                {
+                    "approval_id": approval_id,
+                    "target_hash": target_commit,
+                    "classification": "CONFLICTED",
+                    "conflict_artifact": str(artifact_path),
+                }
+            )
             return result
-        result = manager._set_entry_locked(task_id, revision, {"status": "MERGED", "merged_into": target_branch})
+
+        merge_transaction.commit()
+        result = dict(merge_transaction.published_entry or manager.get(task_id, revision))
         result.update({
             "approval_id": approval_id,
             "target_hash": target_commit,
@@ -382,7 +760,7 @@ def main() -> int:
             actor=args.actor,
             actor_type=args.actor_type,
         )
-    except (OSError, ValueError, TypeError, WorktreeError, PermissionError) as exc:
+    except (RuntimeLockedError, OSError, ValueError, TypeError, WorktreeError, PermissionError) as exc:
         print(f"MERGE_FAILED: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

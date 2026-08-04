@@ -85,7 +85,17 @@ def capture_workspace(root: str | Path, *, expected_files: list[str] | None = No
         raise ValueError(f"malformed Git HEAD output: {head_error.strip() or head_output!r}")
     changed = sorted(set(parsed["staged_paths"] + parsed["unstaged_paths"] + parsed["untracked_paths"]))
     unexpected = sorted(set(changed) - set(expected)) if expected else []
-    missing = sorted(set(expected) - set(changed))
+    filesystem_missing = sorted(
+        path
+        for path in expected
+        if not (project / path).is_file() or (project / path).is_symlink()
+    )
+    missing = sorted(
+        {
+            *set(expected) - set(changed),
+            *filesystem_missing,
+        }
+    )
     reasons: list[str] = []
     base = expected_base or head
     if expected_base and head != expected_base:
@@ -94,6 +104,8 @@ def capture_workspace(root: str | Path, *, expected_files: list[str] | None = No
         reasons.append(f"workspace has unrecorded changed files: {', '.join(unexpected)}")
     if missing:
         reasons.append(f"checkpoint files are not changed in workspace: {', '.join(missing)}")
+    if filesystem_missing:
+        reasons.append(f"checkpoint files are missing on filesystem: {', '.join(filesystem_missing)}")
     return {
         "workspace_status": "CHANGED" if changed else "CLEAN",
         "base_commit": base,

@@ -3,25 +3,28 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import uuid
 from pathlib import Path
 from typing import Any
 
-from append_event import append_event_for_root
+from append_event import append_event_for_root  # compatibility seam; required events are staged below
 from operation_ledger import read_operation_ledger
+from rebuild_state import rebuild_state_for_root
 from render_checklist import render_checklist_for_root
 from runtime_utils import (
     RuntimeLockedError,
     RuntimeNotInitializedError,
-    append_jsonl,
     read_json,
     read_payload,
+    prepare_event_log,
     runtime_lock,
     utc_now,
     validate_identifier,
 )
 from validate_payload import validate
+from runtime_transaction import RuntimeTransaction, TransactionError
 
 
 SCHEMA = Path(__file__).resolve().parents[1] / "schemas/operation.schema.json"
@@ -113,7 +116,9 @@ def main() -> int:
             errors = validate(record, read_json(SCHEMA))
             if errors:
                 raise ValueError("; ".join(errors))
-            append_jsonl(operations_path, record)
+            existing_content = operations_path.read_text(encoding="utf-8") if operations_path.is_file() else ""
+            next_content = existing_content + json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+            relative_operations_path = f"work/{payload['task_id']}/operations.jsonl"
             event = {
                 "type": "OPERATION_RECORDED",
                 "actor": args.actor,
@@ -122,12 +127,26 @@ def main() -> int:
             }
             if record.get("run_id"):
                 event["run_id"] = record["run_id"]
-            append_event_for_root(root, event)
+            event_relative, event_revision, event_content, _ = prepare_event_log(root, event)
+            transaction = RuntimeTransaction(
+                args.project_root,
+                operation_type=record["type"],
+                idempotency_key=f"{record['idempotency_key']}:r{record['revision']}",
+                expected_revisions={
+                    relative_operations_path: len(existing_content.splitlines()),
+                    event_relative: event_revision,
+                },
+            )
+            transaction.prepare([relative_operations_path, event_relative])
+            transaction.stage_text(relative_operations_path, next_content)
+            transaction.stage_text(event_relative, event_content)
+            transaction.commit()
+            rebuild_state_for_root(root)
             render_checklist_for_root(root)
     except RuntimeNotInitializedError as exc:
         print(f"OPERATION_BLOCKED: {exc}", file=sys.stderr)
         return 2
-    except (RuntimeLockedError, OSError, ValueError, TypeError) as exc:
+    except (RuntimeLockedError, TransactionError, OSError, ValueError, TypeError) as exc:
         print(f"OPERATION_REJECTED: {exc}", file=sys.stderr)
         return 1
     print(f"OPERATION_RECORDED: {record['operation_id']} status={record['status']} revision={record['revision']}")

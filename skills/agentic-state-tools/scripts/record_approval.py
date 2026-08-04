@@ -8,9 +8,20 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from authorization import ACTOR_TYPES, POLICY_VERSION, required_actor_type
-from append_event import append_event_for_root
-from runtime_utils import RuntimeLockedError, RuntimeNotInitializedError, next_revision, read_object, read_payload, runtime_lock, utc_now, validate_identifier
-from write_artifact import write_validated
+from append_event import append_event_for_root  # compatibility seam; required events are staged below
+from rebuild_state import rebuild_state_for_root
+from runtime_utils import (
+    RuntimeLockedError,
+    RuntimeNotInitializedError,
+    next_revision,
+    prepare_event_log,
+    read_object,
+    read_payload,
+    runtime_lock,
+    utc_now,
+    validate_identifier,
+)
+from runtime_transaction import RuntimeTransaction, TransactionError
 
 
 SCHEMA = Path(__file__).resolve().parents[1] / "schemas/approval.schema.json"
@@ -73,12 +84,37 @@ def main() -> int:
             payload.setdefault("approval_id", f"APR-{target_type}-{target_id}-{existing_revision + 1}")
             payload["created_at"] = utc_now()
             payload["revision"] = next_revision(payload, existing_revision)
-            output = write_validated(args.project_root, relative, payload, SCHEMA)
-            append_event_for_root(root, {"type": "APPROVAL_RECORDED", "actor": args.actor, "data": {"approval_id": payload["approval_id"], "target_type": target_type, "target_id": target_id, "decision": payload["decision"]}})
+            output = target
+            event = {
+                "type": "APPROVAL_RECORDED",
+                "actor": args.actor,
+                "data": {
+                    "approval_id": payload["approval_id"],
+                    "target_type": target_type,
+                    "target_id": target_id,
+                    "decision": payload["decision"],
+                },
+            }
+            event_relative, event_revision, event_content, _ = prepare_event_log(
+                root,
+                event,
+                artifact_overrides={relative: payload},
+            )
+            transaction = RuntimeTransaction(
+                args.project_root,
+                operation_type="APPROVAL",
+                idempotency_key=f"approval:{target_type}:{target_id}:{payload['revision']}",
+                expected_revisions={relative: existing_revision, event_relative: event_revision},
+            )
+            transaction.prepare([relative, event_relative])
+            transaction.stage_json(relative, payload, SCHEMA)
+            transaction.stage_text(event_relative, event_content)
+            transaction.commit()
+            rebuild_state_for_root(root)
     except RuntimeNotInitializedError as exc:
         print(f"APPROVAL_BLOCKED: {exc}", file=sys.stderr)
         return 2
-    except (RuntimeLockedError, OSError, ValueError, TypeError) as exc:
+    except (RuntimeLockedError, TransactionError, OSError, ValueError, TypeError) as exc:
         print(f"APPROVAL_REJECTED: {exc}", file=sys.stderr)
         return 1
     print(f"APPROVAL_WRITTEN: {output}")
