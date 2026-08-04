@@ -7,6 +7,7 @@ import hashlib
 import os
 import re
 import tempfile
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,6 +35,9 @@ LOCK_DIRECTORIES = {
     "file": "files",
     "resource": "resources",
 }
+
+_RUNTIME_LOCK_DEPTH: dict[str, int] = {}
+_RUNTIME_LOCK_OWNER: dict[str, int] = {}
 
 
 def utc_now() -> str:
@@ -152,6 +156,20 @@ def runtime_lock(project_root: str | Path) -> Iterator[Path]:
     """Acquire a short-lived exclusive lock for one runtime mutation."""
 
     root = ensure_runtime_initialized(project_root)
+    lock_key = str(root.resolve())
+    thread_id = threading.get_ident()
+    nested_depth = _RUNTIME_LOCK_DEPTH.get(lock_key, 0)
+    if nested_depth and _RUNTIME_LOCK_OWNER.get(lock_key) == thread_id:
+        _RUNTIME_LOCK_DEPTH[lock_key] = nested_depth + 1
+        try:
+            yield root
+        finally:
+            if _RUNTIME_LOCK_DEPTH.get(lock_key, 0) <= 1:
+                _RUNTIME_LOCK_DEPTH.pop(lock_key, None)
+            else:
+                _RUNTIME_LOCK_DEPTH[lock_key] -= 1
+        return
+
     lock_path = root / "locks" / "runtime-state.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     descriptor: int | None = None
@@ -166,6 +184,8 @@ def runtime_lock(project_root: str | Path) -> Iterator[Path]:
             raise RuntimeLockedError(f"runtime is busy: {lock_path}") from retry_exc
 
     try:
+        _RUNTIME_LOCK_DEPTH[lock_key] = 1
+        _RUNTIME_LOCK_OWNER[lock_key] = thread_id
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
             descriptor = None
             json.dump({"pid": os.getpid(), "acquired_at": utc_now()}, handle)
@@ -174,6 +194,8 @@ def runtime_lock(project_root: str | Path) -> Iterator[Path]:
             os.fsync(handle.fileno())
         yield root
     finally:
+        _RUNTIME_LOCK_DEPTH.pop(lock_key, None)
+        _RUNTIME_LOCK_OWNER.pop(lock_key, None)
         if descriptor is not None:
             os.close(descriptor)
         try:
@@ -321,6 +343,12 @@ def write_json_exclusive(path: str | Path, value: Any) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def stage_validated_json(transaction: Any, relative_path: str, payload: dict[str, Any], schema_path: str | Path) -> Any:
+    """Adapt legacy callers to RuntimeTransaction's internal schema validation."""
+
+    return transaction.stage_json(relative_path, payload, schema_path)
 
 
 def lock_artifact_path(root: Path, kind: str, key: str) -> Path:
