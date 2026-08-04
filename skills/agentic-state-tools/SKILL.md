@@ -64,7 +64,7 @@ python scripts/compute_critical_path.py --input <graph.json>
 python scripts/reconcile_queue.py --input <queue.json>
 python scripts/dispatch_task.py --project-root <project> --input <dispatch.json>
 python scripts/worktree_manager.py --project-root <git-project> --worktree-root <external-root> --task-id <id> --revision <n>
-python scripts/merge_worktree.py --project-root <git-project> --worktree-root <external-root> --task-id <id> --revision <n> --target-branch <branch> --authorized
+python scripts/merge_worktree.py --project-root <git-project> --worktree-root <external-root> --task-id <id> --revision <n> --target-branch <branch> --approval <approval.json> --actor <actor-id> --actor-type user
 python scripts/commit_batch.py --project-root <project> --batch-id <id> --approval <approval.json> --actor <id> --actor-type user --message <message> --path <path>
 python scripts/next_batch.py --project-root <project> --current-batch-id <id> --next-batch-id <id> --approval <approval.json> --actor <id> --actor-type user
 python scripts/validate_examples.py --examples-root examples --deployment <deployment.json>

@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from append_event import append_event
 from capture_workspace import capture_workspace
@@ -184,6 +186,167 @@ def reconcile_runtime_artifacts(root: Path, task_id: str, task_status: str) -> l
             reasons.append(f"execution graph is unreadable: {exc}")
     return sorted(set(reasons))
 
+
+ASYNC_RECOVERY_CLASSIFICATIONS = {
+    "RESUMABLE",
+    "MERGE_PENDING",
+    "CONFLICTED",
+    "STALE_SAFE_TO_CLEAN",
+    "STALE_REQUIRES_REVIEW",
+    "ABORTED_UNSAFE",
+}
+
+
+def _git_output(path: Path, *arguments: str) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=path,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False, ""
+    return result.returncode == 0, result.stdout.strip()
+
+
+def _queue_entry_for_task(project_root: Path, task_id: str) -> dict[str, Any]:
+    try:
+        queue = read_object(project_root / ".agent/runtime/queue.json")
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    if not isinstance(queue, dict):
+        return {}
+    entries = queue.get("tasks", [])
+    if not isinstance(entries, list):
+        return {}
+    return next((item for item in entries if isinstance(item, dict) and item.get("task_id") == task_id), {})
+
+
+def _async_worktree_fields(project_root: Path, task: dict[str, Any]) -> tuple[str | None, str | None, str | None, dict[str, Any]]:
+    queue_entry = _queue_entry_for_task(project_root, str(task.get("task_id", "")))
+    policy = task.get("execution_policy")
+    proof = policy.get("isolation_proof") if isinstance(policy, dict) else None
+    proof = proof if isinstance(proof, dict) else {}
+    worktree_path = task.get("worktree_path") or proof.get("worktree_path") or proof.get("path") or queue_entry.get("worktree_path")
+    branch_name = task.get("branch_name") or proof.get("branch_name") or proof.get("branch") or queue_entry.get("branch_name")
+    base_commit = task.get("base_commit") or proof.get("base_commit") or queue_entry.get("base_commit")
+    return (
+        str(worktree_path) if isinstance(worktree_path, str) and worktree_path.strip() else None,
+        str(branch_name) if isinstance(branch_name, str) and branch_name.strip() else None,
+        str(base_commit) if isinstance(base_commit, str) and base_commit.strip() else None,
+        queue_entry,
+    )
+
+
+def _async_mode(task: dict[str, Any], queue_entry: dict[str, Any]) -> bool:
+    policy = task.get("execution_policy")
+    if isinstance(policy, dict) and str(policy.get("resolved_mode", "")).upper() == "ASYNC":
+        return True
+    return str(task.get("execution_mode", "")).upper() == "ASYNC" or str(queue_entry.get("execution_mode", "")).upper() == "ASYNC" or str(task.get("status", "")).upper() == "QUEUED_ASYNC"
+
+
+def _has_conflict_artifact(project_root: Path, task_id: str, task: dict[str, Any]) -> bool:
+    if str(task.get("status", "")).upper() in {"RECOVERY_PENDING", "ABORTED_UNSAFE"}:
+        return True
+    recovery_root = project_root / ".agent/recovery"
+    return any(recovery_root.glob(f"RECOVERY_PENDING-{task_id}-*.json"))
+
+
+def _plan_is_superseded(task: dict[str, Any], queue_entry: dict[str, Any]) -> bool:
+    task_revision = task.get("plan_revision")
+    for value in (task.get("superseded_by_plan_revision"), queue_entry.get("superseding_plan_revision")):
+        if isinstance(value, int) and isinstance(task_revision, int) and value > task_revision:
+            return True
+    return str(task.get("status", "")).upper() == "SUPERSEDED"
+
+
+def classify_async_worktree(project_root: str | Path, task: dict[str, Any], *, now: datetime | None = None) -> str | None:
+    """Classify async worktree safety using durable lease, Git, and task evidence."""
+
+    if not isinstance(task, dict):
+        return "ABORTED_UNSAFE"
+    project = Path(project_root).expanduser().resolve()
+    task_id = task.get("task_id")
+    if not isinstance(task_id, str) or not task_id.strip():
+        return "ABORTED_UNSAFE"
+    queue_entry = _queue_entry_for_task(project, task_id)
+    if not _async_mode(task, queue_entry):
+        return None
+    worktree_path, branch_name, base_commit, queue_entry = _async_worktree_fields(project, task)
+    if not worktree_path or not branch_name or not base_commit:
+        return "ABORTED_UNSAFE"
+    worktree = Path(worktree_path).expanduser().resolve()
+    if not worktree.is_dir():
+        return "ABORTED_UNSAFE"
+    ok, current_branch = _git_output(worktree, "branch", "--show-current")
+    if not ok or current_branch != branch_name:
+        return "ABORTED_UNSAFE"
+    ok, status = _git_output(worktree, "status", "--porcelain", "--untracked-files=all")
+    if not ok:
+        return "ABORTED_UNSAFE"
+    if status:
+        return "STALE_REQUIRES_REVIEW"
+    if _has_conflict_artifact(project, task_id, task):
+        return "CONFLICTED"
+    ok, source_head = _git_output(worktree, "rev-parse", "HEAD")
+    if not ok:
+        return "ABORTED_UNSAFE"
+    ok, target_branch = _git_output(project, "branch", "--show-current")
+    if not ok or not target_branch:
+        target_branch = str(task.get("target_branch") or queue_entry.get("target_branch") or "")
+    ok, target_head = _git_output(project, "rev-parse", "HEAD")
+    if not ok:
+        return "ABORTED_UNSAFE"
+
+    lease_path = project / ".agent/work" / task_id / "lease.json"
+    lease = _read_optional_for_recovery(lease_path)
+    current = now or datetime.now(timezone.utc)
+    lease_active = False
+    if lease is not None:
+        for field in ("run_id", "attempt_id", "dispatch_id"):
+            if task.get(field) is not None and lease.get(field) != task.get(field):
+                return "ABORTED_UNSAFE"
+        try:
+            lease_active = parse_timestamp(lease.get("expires_at")) > current.astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            return "ABORTED_UNSAFE"
+
+    if _plan_is_superseded(task, queue_entry):
+        return "STALE_REQUIRES_REVIEW"
+
+    source_advanced = source_head != base_commit
+    target_changed = target_head != base_commit
+    review_pass = str(task.get("review_verdict", "")).upper() == "PASS"
+    reconciled_commit = task.get("merged_commit") or task.get("reconciled_commit") or task.get("output_commit")
+    reconciled = source_head == target_head or (isinstance(reconciled_commit, str) and reconciled_commit == source_head)
+
+    if source_advanced and target_changed and not reconciled:
+        return "STALE_REQUIRES_REVIEW"
+    if source_advanced and review_pass and not reconciled:
+        return "MERGE_PENDING"
+    if source_advanced and not reconciled:
+        return "STALE_REQUIRES_REVIEW"
+    if not lease_active:
+        if str(task.get("status", "")).upper() in {"STALE", "CANCELLED", "SUPERSEDED", "ACCEPTED"} and not source_advanced:
+            return "STALE_SAFE_TO_CLEAN"
+        return "STALE_REQUIRES_REVIEW"
+    if str(task.get("status", "")).upper() in {"COMPLETED", "ACCEPTED"} and review_pass:
+        return "MERGE_PENDING" if source_advanced and not reconciled else "RESUMABLE"
+    return "RESUMABLE"
+
+
+def _read_optional_for_recovery(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        value = read_object(path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
 def persist_reconciliation(root: Path, result: dict) -> dict:
     task_id = result["task_id"]
     created_at = utc_now()
@@ -220,6 +383,25 @@ def inspect_task(root: Path, task_id: str) -> dict:
         return {"task_id": task_id, "classification": "UNSAFE_TO_RESUME", "reasons": [f"task state is unreadable: {exc}"]}
 
     status = str(task.get("status", "")).upper()
+    async_classification = classify_async_worktree(root.parent, task)
+    if async_classification in ASYNC_RECOVERY_CLASSIFICATIONS:
+        next_actions = {
+            "RESUMABLE": "resume after lease validation",
+            "MERGE_PENDING": "obtain merge approval and merge sequentially",
+            "CONFLICTED": "resolve merge conflict through recovery",
+            "STALE_SAFE_TO_CLEAN": "clean only after explicit cleanup operation",
+            "STALE_REQUIRES_REVIEW": "primary review required before resume or cleanup",
+            "ABORTED_UNSAFE": "abort and reconcile external worktree state",
+        }
+        return {
+            "task_id": task_id,
+            "classification": async_classification,
+            "status": status,
+            "next_action": next_actions[async_classification],
+            "inspected_at": utc_now(),
+            "workspace": {"status": "ASYNC_WORKTREE_INSPECTED", "mismatch": async_classification in {"STALE_REQUIRES_REVIEW", "ABORTED_UNSAFE", "CONFLICTED"}, "reasons": []},
+            "reasons": [f"async worktree classified as {async_classification}"],
+        }
     policy = recovery_policy(status)
     if policy["unsupported"]:
         return {

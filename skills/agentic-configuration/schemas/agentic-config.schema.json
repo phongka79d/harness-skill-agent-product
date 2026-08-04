@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["schema_version", "config_id", "version", "agents", "planning", "model_policy", "execution", "approval_matrix", "runtime", "checkpoint", "locking", "recovery", "version_control", "documentation", "context_budget", "security", "retention"],
+  "required": ["schema_version", "config_id", "version", "agents", "planning", "model_policy", "execution", "async_execution", "approval_matrix", "runtime", "checkpoint", "locking", "recovery", "version_control", "documentation", "context_budget", "security", "retention"],
   "properties": {
     "schema_version": {"type": "integer", "enum": [1]},
     "config_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
@@ -53,9 +53,29 @@
         "async_requires_isolated_worktree": {"type": "boolean"}
       }
     },
+    "async_execution": {
+      "type": "object",
+      "required": ["capability_enabled", "default_mode", "allow_task_opt_in", "max_parallel_tasks", "require_isolated_worktree", "require_separate_branch", "require_disjoint_write_scope", "require_dependency_clearance", "require_pinned_plan_revision", "require_pinned_input_hashes", "require_authorized_merge", "fallback_to_sync", "automatic_merge"],
+      "properties": {
+        "capability_enabled": {"type": "boolean"},
+        "default_mode": {"type": "string", "enum": ["sync", "async"]},
+        "allow_task_opt_in": {"type": "boolean"},
+        "max_parallel_tasks": {"type": "integer", "minimum": 1},
+        "require_isolated_worktree": {"type": "boolean"},
+        "require_separate_branch": {"type": "boolean"},
+        "require_disjoint_write_scope": {"type": "boolean"},
+        "require_dependency_clearance": {"type": "boolean"},
+        "require_pinned_plan_revision": {"type": "boolean"},
+        "require_pinned_input_hashes": {"type": "boolean"},
+        "require_authorized_merge": {"type": "boolean"},
+        "fallback_to_sync": {"type": "boolean"},
+        "automatic_merge": {"const": false}
+      },
+      "additionalProperties": false
+    },
     "approval_matrix": {
       "type": "object",
-      "required": ["normal_code_change", "new_dependency", "schema_migration", "destructive_operation", "architecture_change", "production_deployment", "batch_commit", "plan_approval", "batch_approval", "next_batch", "rollback"],
+      "required": ["normal_code_change", "new_dependency", "schema_migration", "destructive_operation", "architecture_change", "production_deployment", "batch_commit", "plan_approval", "batch_approval", "worktree_merge", "next_batch", "rollback"],
       "properties": {
         "normal_code_change": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
         "new_dependency": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
@@ -66,6 +86,7 @@
         "batch_commit": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
         "plan_approval": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
         "batch_approval": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
+        "worktree_merge": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
         "next_batch": {"type": "string", "enum": ["automatic", "primary_agent", "user"]},
         "rollback": {"type": "string", "enum": ["automatic", "primary_agent", "user"]}
       },

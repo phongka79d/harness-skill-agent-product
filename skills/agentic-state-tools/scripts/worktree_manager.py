@@ -407,10 +407,14 @@ class WorktreeManager:
             entry = state["entries"].get(self._key(task_id, revision))
             if not isinstance(entry, dict):
                 raise WorktreeError(f"worktree mapping does not exist: {task_id}@{revision}")
-            if entry.get("status") not in {"ACCEPTED", "CANCELLED"}:
+            if entry.get("status") not in {"ACCEPTED", "CANCELLED", "MERGED"}:
                 raise CleanupBlocked("cleanup requires an accepted or cancelled task")
             if self._lease_live(entry):
                 raise CleanupBlocked("cleanup is blocked by an active lease")
+            plan_revision = entry.get("plan_revision")
+            superseding_revision = entry.get("superseding_plan_revision") or entry.get("superseded_by_plan_revision") or entry.get("current_plan_revision")
+            if isinstance(plan_revision, int) and isinstance(superseding_revision, int) and superseding_revision > plan_revision:
+                raise CleanupBlocked("cleanup is blocked by a superseding plan revision")
             path = Path(str(entry["path"])).expanduser().resolve()
             try:
                 path.relative_to(self.worktree_root)
@@ -421,6 +425,10 @@ class WorktreeManager:
                 unmerged = _require_git(path, "ls-files", "-u")
                 if changes or unmerged:
                     raise CleanupBlocked("cleanup would discard uncommitted or unmerged changes")
+                branch_head = _require_git(path, "rev-parse", "HEAD")
+                reconciled = _run_git(self.project_root, "merge-base", "--is-ancestor", branch_head, "HEAD")
+                if reconciled.returncode:
+                    raise CleanupBlocked("cleanup is blocked by a branch commit not reconciled into the target")
                 result = _run_git(self.project_root, "worktree", "remove", str(path))
                 if result.returncode:
                     detail = result.stderr.strip() or result.stdout.strip() or "unknown git error"

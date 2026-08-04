@@ -33,6 +33,8 @@ REQUIRED_ACTOR_TYPES = {
     "DESTRUCTIVE_OPERATION": "user",
     "PRODUCTION_DEPLOYMENT": "user",
     "BATCH_COMMIT": "user",
+    "WORKTREE_MERGE": "user",
+    "MERGE_WORKTREE": "user",
     "NEXT_BATCH": "user",
     "ROLLBACK": "primary_agent",
 }
@@ -47,6 +49,8 @@ ACTION_POLICY_KEYS = {
     "DESTRUCTIVE_OPERATION": "destructive_operation",
     "PRODUCTION_DEPLOYMENT": "production_deployment",
     "BATCH_COMMIT": "batch_commit",
+    "WORKTREE_MERGE": "worktree_merge",
+    "MERGE_WORKTREE": "worktree_merge",
     "NEXT_BATCH": "next_batch",
     "ROLLBACK": "rollback",
 }

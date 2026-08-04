@@ -15,7 +15,7 @@ SCHEMAS = SKILL_ROOT / "schemas"
 sys.path.insert(0, str(SCRIPTS))
 
 from worktree_manager import CleanupBlocked, WorktreeError, WorktreeManager  # noqa: E402
-from merge_worktree import merge_worktree  # noqa: E402
+from merge_worktree import build_merge_authorization_target, merge_worktree  # noqa: E402
 
 
 def run_script(name: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -29,6 +29,7 @@ def run_script(name: str, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def write_json(path: Path, value: object) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value), encoding="utf-8")
     return path
 
@@ -49,6 +50,25 @@ def init_git_project(path: Path) -> None:
 
 
 class RecoveryHardeningTests(unittest.TestCase):
+    def test_merge_requires_persisted_typed_approval_instead_of_boolean_authorization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            project.mkdir()
+            init_git_project(project)
+            manager = WorktreeManager(project, Path(directory) / "worktrees")
+            manager.create("TASK-APPROVAL", 1)
+            with self.assertRaises(PermissionError):
+                merge_worktree(
+                    project,
+                    Path(directory) / "worktrees",
+                    "TASK-APPROVAL",
+                    1,
+                    "main",
+                    approval=None,
+                    actor="primary-agent",
+                    actor_type="primary_agent",
+                )
+
     def test_stale_metadata_requires_expired_lease_and_authorized_reclaim(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory) / "project"
@@ -74,9 +94,32 @@ class RecoveryHardeningTests(unittest.TestCase):
             project = Path(directory) / "project"
             project.mkdir()
             init_git_project(project)
+            init_project(project)
             root = Path(directory) / "worktrees"
             manager = WorktreeManager(project, root)
             entry = manager.create("TASK-1", 1)
+            base_commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, check=True, capture_output=True, text=True).stdout.strip()
+            task = {
+                "task_id": "TASK-1",
+                "plan_id": "MP-1",
+                "plan_revision": 1,
+                "batch_id": "B-1",
+                "status": "ACCEPTED",
+                "revision": 3,
+                "run_id": "RUN-TASK-1",
+                "attempt_id": "ATTEMPT-TASK-1",
+                "dispatch_id": "DISPATCH-TASK-1",
+                "worktree_path": entry["path"],
+                "branch_name": entry["branch"],
+                "base_commit": base_commit,
+                "input_artifact_hashes": {"plan": "a" * 64},
+                "review_verdict": "PASS",
+            }
+            write_json(project / ".agent/work/TASK-1/task-state.json", task)
+            write_json(project / ".agent/work/TASK-1/review.json", {"task_id": "TASK-1", "verdict": "PASS"})
+            write_json(project / ".agent/work/B-1/batch-contract.json", {"batch_id": "B-1", "revision": 1, "contract_hash": "b" * 64, "tasks": [{"task_id": "TASK-1", "task_revision": 3}]})
+            write_json(project / ".agent/work/TASK-1/lease.json", {"task_id": "TASK-1", "task_revision": 3, "run_id": "RUN-TASK-1", "attempt_id": "ATTEMPT-TASK-1", "dispatch_id": "DISPATCH-TASK-1", "owner": "agent-executor", "owner_identity": "agent-executor", "expires_at": "2099-01-01T00:00:00Z"})
+            write_json(project / ".agent/runtime/queue.json", {"tasks": [{"task_id": "TASK-1", "run_id": "RUN-TASK-1", "attempt_id": "ATTEMPT-TASK-1", "dispatch_id": "DISPATCH-TASK-1", "execution_mode": "ASYNC", "worktree_path": entry["path"], "branch_name": entry["branch"], "base_commit": base_commit, "plan_revision": 1, "input_hashes": {"plan": "a" * 64}}], "dispatches": [{"task_id": "TASK-1", "run_id": "RUN-TASK-1", "attempt_id": "ATTEMPT-TASK-1", "dispatch_id": "DISPATCH-TASK-1", "task_revision": 3, "worktree_path": entry["path"], "branch_name": entry["branch"], "base_commit": base_commit, "plan_revision": 1, "input_artifact_hashes": {"plan": "a" * 64}}]})
             with self.assertRaises(CleanupBlocked):
                 manager.cleanup("TASK-1", 1)
             source = Path(entry["path"])
@@ -86,7 +129,10 @@ class RecoveryHardeningTests(unittest.TestCase):
             (project / "value.txt").write_text("from-target\n", encoding="utf-8")
             subprocess.run(["git", "add", "value.txt"], cwd=project, check=True)
             subprocess.run(["git", "commit", "-m", "target-change"], cwd=project, check=True, capture_output=True, text=True)
-            result = merge_worktree(project, root, "TASK-1", 1, "main", authorized=True)
+            target = build_merge_authorization_target(project, root, "TASK-1", 1, "main")
+            approval = {"approval_id": "APR-WORKTREE-TASK-1-1", "target_type": "WORKTREE", "target_id": "TASK-1", "decision": "APPROVED", "approver": "user-1", "actor_type": "user", "actor_id": "user-1", "action": "WORKTREE_MERGE", "target_revision": 1, "target_hash": target["target_hash"], "policy_version": "1", "expires_at": "2099-01-01T00:00:00Z", "evidence": "conflict review", "created_at": "2026-08-04T00:00:00Z", "revision": 1}
+            write_json(project / ".agent/approvals/WORKTREE-TASK-1.json", approval)
+            result = merge_worktree(project, root, "TASK-1", 1, "main", approval=approval, actor="user-1", actor_type="user")
             self.assertEqual(result["status"], "RECOVERY_PENDING")
             self.assertTrue(Path(result["conflict_artifact"]).is_file())
             self.assertEqual(manager.get("TASK-1", 1)["status"], "RECOVERY_PENDING")

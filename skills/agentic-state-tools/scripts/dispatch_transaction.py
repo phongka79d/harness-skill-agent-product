@@ -82,7 +82,7 @@ def _async_binding_metadata(proof: dict[str, Any], dispatch: dict[str, Any], tas
 
 
 def _validate_async_record(record: dict[str, Any], expected: dict[str, Any]) -> None:
-    for field in ("task_id", "run_id", "attempt_id", "dispatch_id", *ASYNC_BINDING_FIELDS):
+    for field in ("task_id", "run_id", "attempt_id", "dispatch_id", "lease_id", *ASYNC_BINDING_FIELDS):
         if record.get(field) != expected.get(field):
             raise ValueError(f"async dispatch {field} does not match persisted identity")
 
@@ -164,7 +164,7 @@ def _validate_idempotent_retry(
     for field in immutable_fields:
         if existing.get(field) != dispatch.get(field):
             raise ValueError(f"idempotency key conflicts with existing dispatch field: {field}")
-    binding_fields = (*EXECUTION_IDENTITY_FIELDS, "plan_revision", "worktree_path", "branch_name", "base_commit", "write_scope_hash", "active_conflicts_checked_at", "isolation_status", "isolation_proof", "input_artifact_hashes")
+    binding_fields = (*EXECUTION_IDENTITY_FIELDS, "lease_id", "plan_revision", "worktree_path", "branch_name", "base_commit", "write_scope_hash", "active_conflicts_checked_at", "isolation_status", "isolation_proof", "input_artifact_hashes")
     for field in binding_fields:
         submitted = dispatch.get(field)
         effective = submitted if submitted is not None else task.get(field)
@@ -245,6 +245,8 @@ def persist_dispatch(
                     value = existing.get(field, existing_task.get(field))
                     if value is not None:
                         repair_lease[field] = copy.deepcopy(value)
+                if existing.get("lease_id") is not None:
+                    repair_lease["lease_id"] = existing["lease_id"]
                 validate_execution_identity(existing_task, repair_lease, None)
                 write_validated(project_root, f"work/{task_id}/lease.json", repair_lease, LEASE_SCHEMA)
             return existing
@@ -290,6 +292,7 @@ def persist_dispatch(
 
         run_id = str(dispatch.get("run_id") or (proof["run_id"] if mode == "ASYNC" and proof is not None else f"RUN-{task_id}-{uuid.uuid4().hex[:12].upper()}"))
         attempt_id = str(dispatch.get("attempt_id") or f"ATTEMPT-{task_id}-{uuid.uuid4().hex[:12].upper()}")
+        lease_id = str(dispatch.get("lease_id") or f"LEASE-{task_id}-{attempt_id}")
         operation_id = f"OP-{task_id}-DISPATCH-{uuid.uuid4().hex[:12].upper()}"
         next_status = "QUEUED_ASYNC" if mode == "ASYNC" else "QUEUED_SYNC"
         next_revision = current_revision + 1
@@ -303,6 +306,8 @@ def persist_dispatch(
                 if dispatch.get(field, current_task.get(field)) is not None
             }
         )
+        if mode == "ASYNC":
+            binding_metadata["lease_id"] = lease_id
         for field, value in {"run_id": run_id, "attempt_id": attempt_id, "dispatch_id": envelope["dispatch_id"], **binding_metadata}.items():
             if current_task.get(field) is not None and current_task.get(field) != value:
                 raise ValueError(f"dispatch {field} does not match existing task identity")
@@ -346,6 +351,7 @@ def persist_dispatch(
                 "run_id": run_id,
                 "attempt_id": attempt_id,
                 "dispatch_id": envelope["dispatch_id"],
+                **({"lease_id": lease_id} if mode == "ASYNC" else {}),
                 **binding_metadata,
             }
             tasks = [item for item in queue.get("tasks", []) if not isinstance(item, dict) or item.get("task_id") != task_id]
@@ -353,7 +359,7 @@ def persist_dispatch(
             queue["tasks"] = tasks
             queue["dispatches"] = [*queue.get("dispatches", []), envelope]
             queue["task_states"] = [item for item in queue.get("task_states", []) if not isinstance(item, dict) or item.get("task_id") != task_id] + [
-                {"task_id": task_id, "status": next_status, "revision": next_revision, "run_id": run_id, "attempt_id": attempt_id, "dispatch_id": envelope["dispatch_id"], **binding_metadata}
+                {"task_id": task_id, "status": next_status, "revision": next_revision, "run_id": run_id, "attempt_id": attempt_id, "dispatch_id": envelope["dispatch_id"], **({"lease_id": lease_id} if mode == "ASYNC" else {}), **binding_metadata}
             ]
             queue["revision"] = int(queue.get("revision", 0)) + 1
             _validated_write(queue_path, queue, QUEUE_SCHEMA)
@@ -430,6 +436,7 @@ def persist_dispatch(
                 "run_id": run_id,
                 "attempt_id": attempt_id,
                 "dispatch_id": envelope["dispatch_id"],
+                **({"lease_id": lease_id} if mode == "ASYNC" else {}),
                 "task_revision": next_revision,
                 "acquired_at": utc_now(),
                 "last_heartbeat": utc_now(),

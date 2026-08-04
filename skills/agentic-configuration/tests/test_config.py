@@ -84,6 +84,27 @@ class AgenticConfigurationTests(unittest.TestCase):
             self.assertIn(agent_id, config["agents"])
             self.assertIn(config["agents"][agent_id]["model_ref"], allowed)
 
+    def test_async_execution_policy_is_safe_by_default_and_exactly_shaped(self) -> None:
+        config = load_config()
+        self.assertEqual(
+            config["async_execution"],
+            {
+                "capability_enabled": False,
+                "default_mode": "sync",
+                "allow_task_opt_in": True,
+                "max_parallel_tasks": 2,
+                "require_isolated_worktree": True,
+                "require_separate_branch": True,
+                "require_disjoint_write_scope": True,
+                "require_dependency_clearance": True,
+                "require_pinned_plan_revision": True,
+                "require_pinned_input_hashes": True,
+                "require_authorized_merge": True,
+                "fallback_to_sync": True,
+                "automatic_merge": False,
+            },
+        )
+
     def test_environment_override_is_loaded_and_invalid_policy_is_rejected(self) -> None:
         config = load_config()
         configured_review_ref = config["agents"]["agent-review"]["model_ref"]

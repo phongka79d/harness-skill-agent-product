@@ -153,6 +153,8 @@ class OrchestrationHarnessTests(unittest.TestCase):
                 self.assertEqual(artifact["worktree_path"], proof["worktree_path"])
                 self.assertEqual(artifact["branch_name"], proof["branch_name"])
                 self.assertEqual(artifact["isolation_proof"], proof)
+            for artifact in (envelope, queue["dispatches"][0], queue["tasks"][0], queue["task_states"][0], lease):
+                self.assertEqual(artifact["lease_id"], "LEASE-T-ASYNC-PERSIST-ATTEMPT-ASYNC-PERSIST")
             node = next(item for item in graph["nodes"] if isinstance(item, dict) and item.get("task_id") == proof["task_id"])
             self.assertEqual(node["run_id"], proof["run_id"])
             self.assertEqual(node["worktree_path"], proof["worktree_path"])
@@ -471,7 +473,10 @@ class OrchestrationHarnessTests(unittest.TestCase):
                 input_path = write_json(directory, name, task)
                 result = run_script("resolve_execution_mode.py", "--input", str(input_path), *flags)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(json.loads(result.stdout)["execution_mode"], "SYNC")
+                output = json.loads(result.stdout)
+                self.assertEqual(output["execution_mode"], "SYNC")
+                self.assertEqual(output["execution_policy"]["resolved_mode"], "SYNC")
+                self.assertTrue(output["execution_policy"]["resolution_reason"])
 
     def test_mode_reads_default_from_central_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -44,6 +44,9 @@
         "reclaimed_from": {"type": ["string", "null"]},
         "stale_at": {"type": "string"},
         "stale_reason": {"type": "string"},
+        "superseding_plan_revision": {"type": "integer", "minimum": 1},
+        "superseded_by_plan_revision": {"type": "integer", "minimum": 1},
+        "current_plan_revision": {"type": "integer", "minimum": 1},
         "conflict_artifact": {"type": "string"},
         "merged_into": {"type": "string"},
         "cleaned_at": {"type": "string"}

@@ -125,12 +125,27 @@
     "selection_mode": "role_configured_only"
   },
   "execution": {
-    "default_mode": "auto",
+    "default_mode": "sync",
     "async_execution_enabled": false,
-    "max_parallel_tasks": 3,
+    "max_parallel_tasks": 2,
     "max_execution_attempts": 2,
     "max_repair_cycles": 3,
     "async_requires_isolated_worktree": true
+  },
+  "async_execution": {
+    "capability_enabled": false,
+    "default_mode": "sync",
+    "allow_task_opt_in": true,
+    "max_parallel_tasks": 2,
+    "require_isolated_worktree": true,
+    "require_separate_branch": true,
+    "require_disjoint_write_scope": true,
+    "require_dependency_clearance": true,
+    "require_pinned_plan_revision": true,
+    "require_pinned_input_hashes": true,
+    "require_authorized_merge": true,
+    "fallback_to_sync": true,
+    "automatic_merge": false
   },
   "approval_matrix": {
     "normal_code_change": "automatic",
@@ -142,6 +157,7 @@
     "batch_commit": "user",
     "plan_approval": "primary_agent",
     "batch_approval": "primary_agent",
+    "worktree_merge": "user",
     "next_batch": "user",
     "rollback": "primary_agent"
   },

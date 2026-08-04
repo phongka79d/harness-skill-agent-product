@@ -4,6 +4,7 @@
   "required": ["dispatch_id", "task_id", "agent_role", "selected_mode", "selected_owner", "selected_model", "input_revisions", "approval_references", "evidence"],
   "properties": {
     "dispatch_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "lease_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
     "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
     "agent_role": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
     "selected_mode": {"type": "string", "enum": ["ASYNC", "SYNC"]},
