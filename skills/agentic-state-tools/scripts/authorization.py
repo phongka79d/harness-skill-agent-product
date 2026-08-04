@@ -37,6 +37,12 @@ REQUIRED_ACTOR_TYPES = {
     "MERGE_WORKTREE": "user",
     "NEXT_BATCH": "user",
     "ROLLBACK": "primary_agent",
+    "MERGE": "user",
+    "CHANGE_REQUEST": "primary_agent",
+    "SCHEMA_MIGRATION": "user",
+    "DESTRUCTIVE_ACTION": "user",
+    "DEPLOYMENT": "user",
+    "REVIEW_OVERRIDE": "primary_agent",
 }
 ACTION_POLICY_KEYS = {
     "MASTER_PLAN": "plan_approval",
@@ -53,6 +59,12 @@ ACTION_POLICY_KEYS = {
     "MERGE_WORKTREE": "worktree_merge",
     "NEXT_BATCH": "next_batch",
     "ROLLBACK": "rollback",
+    "MERGE": "worktree_merge",
+    "CHANGE_REQUEST": "change_request",
+    "SCHEMA_MIGRATION": "schema_migration",
+    "DESTRUCTIVE_ACTION": "destructive_operation",
+    "DEPLOYMENT": "production_deployment",
+    "REVIEW_OVERRIDE": "review_override",
 }
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -119,12 +131,18 @@ def validate_approval(
         raise ValueError("approval policy version is stale")
     if approval.get("target_revision") != target_revision or approval.get("target_hash") != target_hash:
         raise ValueError("approval is bound to a different artifact revision or hash")
-    for field in ("actor_type", "actor_id", "expires_at", "approval_id"):
+    for field in ("actor_type", "actor_id", "issued_at", "expires_at", "approval_id", "evidence"):
         if not isinstance(approval.get(field), str) or not approval[field].strip():
             raise ValueError(f"approval.{field} is required")
+    try:
+        issued_at = parse_timestamp(approval["issued_at"])
+        expiry = parse_timestamp(approval["expires_at"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("approval issued_at and expires_at must be valid timestamps") from exc
+    if issued_at > expiry:
+        raise ValueError("approval issued_at must not be later than expires_at")
     if actor_id is not None and approval["actor_id"] != actor_id:
         raise ValueError("approval actor identity does not match the executing actor")
-    expiry = parse_timestamp(approval["expires_at"])
     current = now or datetime.now(timezone.utc)
     if expiry <= current.astimezone(timezone.utc):
         raise ValueError("approval has expired")
@@ -161,6 +179,8 @@ def authorize(
         raise AuthorizationError(f"{normalized_action} requires actor_type={required_type}")
     if not isinstance(approval, dict) or approval.get("actor_type") != actor_type:
         raise AuthorizationError("approval actor_type does not match the executing actor")
+    if approval.get("actor_type") not in ACTOR_TYPES:
+        raise AuthorizationError("approval actor_type is unsupported")
     try:
         return validate_approval(
             approval,
@@ -181,7 +201,16 @@ def require_persisted_approval(approval_root: str | Path, approval: Any, *, targ
 
     _validate_target_identifier(target_type, "target_type")
     _validate_target_identifier(target_id, "target_id")
-    path = Path(approval_root).resolve() / "approvals" / f"{target_type}-{target_id}.json"
+    root = Path(approval_root)
+    if root.is_symlink():
+        raise AuthorizationError("approval root must not be a symlink")
+    root = root.resolve()
+    approvals = root / "approvals"
+    if approvals.is_symlink():
+        raise AuthorizationError("approval directory must not be a symlink")
+    path = approvals / f"{target_type}-{target_id}.json"
+    if path.is_symlink():
+        raise AuthorizationError("approval artifact must not be a symlink")
     try:
         persisted = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:

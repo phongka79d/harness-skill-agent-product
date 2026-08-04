@@ -20,7 +20,29 @@ def canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def validate_rubric_identity(rubric: Any) -> None:
+IMMUTABLE_RUBRIC_FIELDS = (
+    "rubric_id",
+    "rubric_version",
+    "review_type",
+    "task_type",
+    "profile_id",
+    "profile_version",
+    "profile_hash",
+    "risk_flags",
+    "review_policy_version",
+    "hard_fail_rules",
+    "extension_ids",
+    "extension_versions",
+)
+MUTABLE_OVERRIDE_FIELDS = (
+    "pass_threshold_percent",
+    "criteria",
+    "applicability",
+    "resolved_weights",
+)
+
+
+def validate_rubric_identity(rubric: Any, allow_approved_override: bool = False) -> None:
     if not isinstance(rubric, dict):
         raise ValueError("resolved_rubric must be an object")
     for field in (
@@ -51,7 +73,10 @@ def validate_rubric_identity(rubric: Any) -> None:
     calculated_hash = hashlib.sha256(canonical(without_hash).encode("utf-8")).hexdigest()
     if supplied_hash != calculated_hash:
         raise ValueError("resolved_rubric.rubric_hash does not match its contents")
-    if rubric.get("override_approval_id") is not None:
+    override_approval_id = rubric.get("override_approval_id")
+    if override_approval_id is not None and (not isinstance(override_approval_id, str) or not override_approval_id.strip()):
+        raise ValueError("resolved_rubric.override_approval_id must be a non-empty string")
+    if override_approval_id is not None and not allow_approved_override:
         raise ValueError("rubric overrides require a separately approved canonical contract")
     try:
         canonical_rubric = resolve_rubric(
@@ -62,35 +87,20 @@ def validate_rubric_identity(rubric: Any) -> None:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"resolved_rubric cannot be resolved from the canonical rubric source: {exc}") from exc
-    policy_fields = (
-        "rubric_id",
-        "rubric_version",
-        "review_type",
-        "task_type",
-        "profile_id",
-        "profile_version",
-        "profile_hash",
-        "risk_flags",
-        "review_policy_version",
-        "pass_threshold_percent",
-        "hard_fail_rules",
-        "criteria",
-        "applicability",
-        "resolved_weights",
-        "extension_ids",
-        "extension_versions",
-        "override_approval_id",
-    )
-    for field in policy_fields:
+    for field in IMMUTABLE_RUBRIC_FIELDS:
         if rubric.get(field) != canonical_rubric.get(field):
             raise ValueError(f"resolved_rubric.{field} does not match the canonical rubric source")
+    if override_approval_id is None or not allow_approved_override:
+        for field in MUTABLE_OVERRIDE_FIELDS:
+            if rubric.get(field) != canonical_rubric.get(field):
+                raise ValueError(f"resolved_rubric.{field} does not match the canonical rubric source")
 
 
-def validate_resolved_rubric(review: dict[str, Any]) -> None:
+def validate_resolved_rubric(review: dict[str, Any], allow_approved_override: bool = False) -> None:
     rubric = review.get("resolved_rubric")
     if rubric is None:
         return
-    validate_rubric_identity(rubric)
+    validate_rubric_identity(rubric, allow_approved_override=allow_approved_override)
     if any(not isinstance(item, dict) for item in rubric["criteria"]):
         raise ValueError("resolved_rubric.criteria must contain objects")
     definitions = {item.get("id"): item for item in rubric["criteria"]}
@@ -222,10 +232,10 @@ def validate_hard_fail_checks(checks: Any, rules: list[Any]) -> bool:
     return any(check["triggered"] for check in submitted.values())
 
 
-def calculate(review: dict[str, Any]) -> dict[str, Any]:
+def calculate(review: dict[str, Any], *, allow_approved_override: bool = False) -> dict[str, Any]:
     if not isinstance(review, dict):
         raise ValueError("review must be a JSON object")
-    validate_resolved_rubric(review)
+    validate_resolved_rubric(review, allow_approved_override=allow_approved_override)
     criteria = review.get("criteria")
     if not isinstance(criteria, list) or not criteria:
         raise ValueError("review requires at least one criterion")

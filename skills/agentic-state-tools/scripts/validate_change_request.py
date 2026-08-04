@@ -13,8 +13,27 @@ from risk_flags import normalize_risk_flags
 from validate_payload import validate
 
 
-PLAN_TARGETS = {"MASTER_PLAN", "SUB_PLAN", "BATCH", "TASK", "DECISION", "RISK", "RUBRIC", "PROFILE"}
-CHANGE_OPERATIONS = {"add", "replace", "remove"}
+TARGET_ID_FIELDS = {
+    "MASTER_PLAN": "plan_id",
+    "SUB_PLAN": "sub_plan_id",
+    "BATCH": "batch_id",
+    "TASK": "task_id",
+    "DECISION": "decision_id",
+    "RISK": "risk_id",
+    "RUBRIC": "rubric_id",
+    "PROFILE": "profile_id",
+    "CONFIGURATION": "configuration_id",
+}
+PLAN_TARGETS = set(TARGET_ID_FIELDS)
+CHANGE_OPERATIONS = {"add", "replace", "remove", "move", "copy", "test"}
+PATCH_FIELDS = {
+    "add": frozenset({"op", "path", "value"}),
+    "replace": frozenset({"op", "path", "value"}),
+    "test": frozenset({"op", "path", "value"}),
+    "remove": frozenset({"op", "path"}),
+    "move": frozenset({"op", "path", "from"}),
+    "copy": frozenset({"op", "path", "from"}),
+}
 SCHEMA = Path(__file__).resolve().parents[1] / "schemas/change-request.schema.json"
 
 
@@ -45,38 +64,68 @@ def _normalize_operation_risk_flags(operation: dict[str, Any]) -> dict[str, Any]
     return normalized
 
 
+def _validate_json_pointer(value: Any, field: str) -> None:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a JSON Pointer")
+    if value and not value.startswith("/"):
+        raise ValueError(f"{field} must be a JSON Pointer")
+    for token in value[1:].split("/") if value else ():
+        index = 0
+        while index < len(token):
+            if token[index] == "~":
+                if index + 1 >= len(token) or token[index + 1] not in {"0", "1"}:
+                    raise ValueError(f"{field} must be a JSON Pointer")
+                index += 2
+            else:
+                index += 1
+
+
 def validate_operations(value: Any, *, applying: bool) -> list[dict[str, Any]]:
     if not isinstance(value, list) or not value:
         raise ValueError("change_request.requested_changes must be a non-empty array")
-    if any(isinstance(item, str) for item in value):
-        if applying:
-            raise ValueError("applying a change request requires structured JSON operations")
-        if any(not isinstance(item, str) or not item.strip() for item in value):
-            raise ValueError("change request descriptions must be non-empty strings")
-        return []
     operations: list[dict[str, Any]] = []
     for index, item in enumerate(value):
         if not isinstance(item, dict):
             raise ValueError(f"requested_changes[{index}] must be a JSON operation object")
         operation = dict(item)
-        if operation.get("op") not in CHANGE_OPERATIONS:
-            raise ValueError(f"requested_changes[{index}].op must be add, replace, or remove")
-        path = operation.get("path")
-        if not isinstance(path, str) or (path and not path.startswith("/")):
-            raise ValueError(f"requested_changes[{index}].path must be a JSON Pointer")
-        if operation["op"] in {"add", "replace"} and "value" not in operation:
-            raise ValueError(f"requested_changes[{index}] requires value for {operation['op']}")
+        op = operation.get("op")
+        if not isinstance(op, str) or op not in CHANGE_OPERATIONS:
+            raise ValueError(f"requested_changes[{index}].op must be add, replace, remove, move, copy, or test")
+        expected_fields = PATCH_FIELDS[op]
+        actual_fields = frozenset(operation)
+        if actual_fields != expected_fields:
+            missing = sorted(expected_fields - actual_fields)
+            extra = sorted(actual_fields - expected_fields)
+            details = []
+            if missing:
+                details.append("missing=" + ",".join(missing))
+            if extra:
+                details.append("extra=" + ",".join(extra))
+            raise ValueError(f"requested_changes[{index}] has invalid fields for {op}: " + "; ".join(details))
+        _validate_json_pointer(operation["path"], f"requested_changes[{index}].path")
+        if op in {"move", "copy"}:
+            _validate_json_pointer(operation["from"], f"requested_changes[{index}].from")
         operations.append(_normalize_operation_risk_flags(operation))
     return operations
 
 
-def validate_change_request(value: object, approval: dict[str, Any] | None = None, *, applying: bool = False) -> dict[str, Any]:
+def validate_change_request(
+    value: object,
+    approval: dict[str, Any] | None = None,
+    *,
+    applying: bool = False,
+    target: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("change request must be an object")
     record = dict(value)
     target_type = str(record.get("target_type", "")).upper()
     if target_type not in PLAN_TARGETS:
         raise ValueError("change_request.target_type is invalid")
+    if target is not None:
+        target_id_field = TARGET_ID_FIELDS[target_type]
+        if target.get(target_id_field) != record.get("target_id"):
+            raise ValueError(f"target {target_type} {target_id_field} does not match target_id")
     for field in ("change_request_id", "target_id", "target_version", "new_version", "reason", "requested_by", "supersedes_id"):
         if not isinstance(record.get(field), str) or not str(record[field]).strip():
             raise ValueError(f"change_request.{field} is required")

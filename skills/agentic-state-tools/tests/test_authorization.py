@@ -42,12 +42,20 @@ def approval(*, actor_type: str, actor_id: str) -> dict[str, object]:
         "target_revision": 3,
         "target_hash": "a" * 64,
         "policy_version": "1",
+        "issued_at": "2026-08-03T00:00:00Z",
         "expires_at": "2026-08-04T12:00:00Z",
         "evidence": "batch review passed",
     }
 
 
 class AuthorizationTests(unittest.TestCase):
+    def test_task6_protected_actions_have_explicit_policy_routes(self) -> None:
+        for action in (
+            "PLAN_APPROVE", "BATCH_APPROVE", "MERGE", "CHANGE_REQUEST", "SCHEMA_MIGRATION",
+            "DESTRUCTIVE_ACTION", "DEPLOYMENT", "BATCH_COMMIT", "ROLLBACK", "REVIEW_OVERRIDE", "NEXT_BATCH",
+        ):
+            self.assertIsNotNone(authorization.required_actor_type(action), action)
+
     def require_authorize(self):
         candidate = getattr(authorization, "authorize", None)
         if not callable(candidate):
@@ -79,6 +87,45 @@ class AuthorizationTests(unittest.TestCase):
             now=NOW,
         )
         self.assertEqual(result, "APR-B-1-3")
+
+    def test_review_override_requires_complete_approval_binding(self) -> None:
+        override_target = {
+            "target_type": "RUBRIC_OVERRIDE",
+            "target_id": "T-OVERRIDE",
+            "revision": 2,
+            "target_hash": "c" * 64,
+        }
+        override_approval = {
+            "approval_id": "APR-REVIEW-OVERRIDE",
+            "target_type": "RUBRIC_OVERRIDE",
+            "target_id": "T-OVERRIDE",
+            "decision": "APPROVED",
+            "approver": "primary-agent",
+            "actor_type": "primary_agent",
+            "actor_id": "primary-agent",
+            "action": "REVIEW_OVERRIDE",
+            "target_revision": 2,
+            "target_hash": "c" * 64,
+            "policy_version": "1",
+            "issued_at": "2026-08-03T00:00:00Z",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "evidence": "approved review override",
+        }
+        self.assertEqual(
+            self.require_authorize()(
+                "REVIEW_OVERRIDE", override_target, override_approval,
+                actor={"actor_type": "primary_agent", "actor_id": "primary-agent"}, now=NOW,
+            ),
+            "APR-REVIEW-OVERRIDE",
+        )
+        for field in ("issued_at", "expires_at", "evidence"):
+            incomplete = dict(override_approval)
+            incomplete.pop(field)
+            with self.subTest(field=field), self.assertRaises(self.require_error()):
+                self.require_authorize()(
+                    "REVIEW_OVERRIDE", override_target, incomplete,
+                    actor={"actor_type": "primary_agent", "actor_id": "primary-agent"}, now=NOW,
+                )
 
     def test_string_actor_is_not_an_authenticated_identity(self) -> None:
         with self.assertRaises(self.require_error()):

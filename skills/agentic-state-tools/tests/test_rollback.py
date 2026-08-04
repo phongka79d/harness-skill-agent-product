@@ -94,6 +94,7 @@ def approval(plan_id: str = "RB-T-001-001", plan: dict[str, object] | None = Non
         "target_revision": bound_plan["revision"],
         "target_hash": bound_plan["plan_hash"],
         "policy_version": "1",
+        "issued_at": "2026-08-02T12:00:00Z",
         "expires_at": "2026-08-03T12:00:00Z",
         "evidence": "explicit compensation approval",
     }
@@ -109,6 +110,12 @@ def write_json(path: Path, value: object) -> Path:
 
 
 class RollbackTests(unittest.TestCase):
+    def test_rollback_approval_carries_issued_at_and_evidence_contract(self) -> None:
+        schema = json.loads((SCHEMAS / "approval.schema.json").read_text(encoding="utf-8"))
+        self.assertIn("issued_at", schema["properties"])
+        self.assertIn("issued_at", schema["required"])
+        self.assertIn("evidence", schema["required"])
+
     def test_rollback_contracts_and_event_types_exist(self) -> None:
         for name in (
             "compensation-action.schema.json",

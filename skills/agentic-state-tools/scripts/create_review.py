@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from calculate_rubric_score import calculate, validate_rubric_identity
+from authorization import authorize, require_persisted_approval
 from rebuild_state import rebuild_state_for_root
 from render_checklist import render_checklist
 from review_contract import validate_rubric_against_contract
@@ -27,7 +28,7 @@ from runtime_utils import (
     utc_now,
     validate_identifier,
 )
-from validate_transition import is_allowed_transition
+from validate_transition import is_allowed_transition, validate_transition
 from runtime_transaction import RuntimeTransaction, TransactionError
 
 
@@ -37,6 +38,71 @@ class CleanupRecoveryError(RuntimeError):
     def __init__(self, evidence: dict) -> None:
         self.evidence = evidence
         super().__init__(evidence.get("error", "terminal cleanup recovery is pending"))
+
+
+def _authorize_review_override(
+    root: Path,
+    approval_id: str,
+    *,
+    expected_target_type: str | None = None,
+    expected_target_id: str | None = None,
+    expected_target_revision: int | None = None,
+    expected_target_hash: str | None = None,
+) -> dict:
+    if not isinstance(approval_id, str) or not approval_id.strip():
+        raise ValueError("resolved rubric override approval_id is required")
+    approvals_root = root / "approvals"
+    matches: list[dict] = []
+    for approval_path in sorted(approvals_root.glob("*.json")):
+        if approval_path.is_symlink():
+            raise ValueError(f"review override approval scan encountered symlink: {approval_path}")
+        try:
+            approval = read_object(approval_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(approval, dict) and approval.get("approval_id") == approval_id:
+            matches.append(approval)
+    if len(matches) != 1:
+        raise ValueError("resolved rubric override requires one exact persisted approval artifact")
+    approval = matches[0]
+    required_fields = (
+        "target_type", "target_id", "target_revision", "target_hash", "policy_version",
+        "issued_at", "expires_at", "evidence", "actor_type", "actor_id",
+    )
+    for field in required_fields:
+        value = approval.get(field)
+        if field == "target_revision":
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError("review override approval.target_revision is required")
+        elif not isinstance(value, str) or not value.strip():
+            raise ValueError(f"review override approval.{field} is required")
+    if str(approval.get("decision", "")).upper() != "APPROVED":
+        raise ValueError("resolved rubric override requires an APPROVED approval artifact")
+    if approval.get("action") != "REVIEW_OVERRIDE":
+        raise ValueError("review override approval action must be REVIEW_OVERRIDE")
+    if expected_target_type is not None and approval["target_type"] != expected_target_type:
+        raise ValueError("review override approval target type does not match")
+    if expected_target_id is not None and approval["target_id"] != expected_target_id:
+        raise ValueError("review override approval target id does not match")
+    if expected_target_revision is not None and approval["target_revision"] != expected_target_revision:
+        raise ValueError("review override approval target revision does not match")
+    if expected_target_hash is not None and approval["target_hash"] != expected_target_hash:
+        raise ValueError("review override approval target hash does not match")
+    target_type = approval["target_type"]
+    target_id = approval["target_id"]
+    require_persisted_approval(root, approval, target_type=target_type, target_id=target_id)
+    authorize(
+        "REVIEW_OVERRIDE",
+        {
+            "target_type": target_type,
+            "target_id": target_id,
+            "revision": approval["target_revision"],
+            "target_hash": approval["target_hash"],
+        },
+        approval,
+        actor={"actor_type": approval["actor_type"], "actor_id": approval["actor_id"]},
+    )
+    return approval
 
 
 def append_cleanup_events(root, project_root: str | Path, task_id: str, cleanup: dict) -> None:
@@ -149,37 +215,81 @@ def main() -> int:
             current_status = str(task_state.get("status", "")).upper()
             existing_review_path = root / "work" / task_id / "review.json"
             existing_revision = int(read_object(existing_review_path).get("revision", 0)) if existing_review_path.is_file() else 0
+            current_task_revision = int(task_state.get("revision", 0))
+            lease_path = root / "work" / task_id / "lease.json"
+            queue_path = root / "runtime" / "queue.json"
+            lease = read_object(lease_path) if lease_path.is_file() else None
+            queue = read_object(queue_path) if queue_path.is_file() else None
 
+            allow_approved_override = (
+                isinstance(resolved_rubric, dict)
+                and resolved_rubric.get("override_approval_id") is not None
+            )
             if isinstance(resolved_rubric, dict):
+                approval_id = resolved_rubric.get("override_approval_id")
+                if allow_approved_override:
+                    # Mutable rubric policy fields require prior approval bound to this task snapshot and hash.
+                    _authorize_review_override(
+                        root,
+                        approval_id,
+                        expected_target_type="RUBRIC_OVERRIDE",
+                        expected_target_id=task_id,
+                        expected_target_revision=current_task_revision,
+                        expected_target_hash=resolved_rubric.get("rubric_hash"),
+                    )
                 if payload.get("legacy_migration") is not True:
                     task_contract = task_state.get("review_contract")
                     if not isinstance(task_contract, dict):
                         raise ValueError("new reviews require a pinned task review_contract")
-                    validate_rubric_against_contract(resolved_rubric, task_contract, review_type="task")
+                    validate_rubric_against_contract(
+                        resolved_rubric,
+                        task_contract,
+                        review_type="task",
+                        allow_approved_override=allow_approved_override,
+                    )
                     payload["review_contract"] = task_contract
-                validate_rubric_identity(resolved_rubric)
-                approval_id = resolved_rubric.get("override_approval_id")
-                if approval_id:
-                    matching: list[dict] = []
-                    for approval_path in sorted((root / "approvals").glob("*.json")):
-                        try:
-                            approval = read_object(approval_path)
-                        except (OSError, ValueError):
-                            continue
-                        if approval.get("approval_id") == approval_id:
-                            matching.append(approval)
-                    if not matching or str(matching[0].get("decision", "")).upper() != "APPROVED":
-                        raise ValueError("resolved rubric override requires an APPROVED approval artifact")
+                validate_rubric_identity(resolved_rubric, allow_approved_override=allow_approved_override)
 
             payload.setdefault("review_id", f"REV-{task_id}-{existing_revision + 1}")
             payload["revision"] = next_revision(payload, existing_revision)
             payload["created_at"] = utc_now()
             payload["reviewer"] = args.actor
-            payload.update(calculate(payload))
+            payload.update(calculate(payload, allow_approved_override=allow_approved_override))
+            guard_evidence = {
+                "task_state": task_state,
+                "review": payload,
+                "lease": lease,
+                "queue": queue,
+            }
+            if payload.get("legacy_migration") is not True:
+                for identity_field in ("run_id", "attempt_id", "dispatch_id"):
+                    expected = task_state.get(identity_field)
+                    supplied = payload.get(identity_field)
+                    if not isinstance(expected, str) or not expected.strip():
+                        raise ValueError(f"review transition identity is missing task_state.{identity_field}")
+                    if supplied is not None and supplied != expected:
+                        raise ValueError(f"review {identity_field} does not match task identity")
+                    payload[identity_field] = expected
+                guard_evidence["review"] = payload
             verdict = payload["verdict"]
             next_status = "ACCEPTED" if verdict == "PASS" else "BLOCKED" if verdict == "BLOCKED" else "REPAIR_REQUIRED"
-            if not is_allowed_transition(current_status, next_status, actor="reviewer"):
-                raise ValueError(f"invalid reviewer transition: {current_status} -> {next_status}")
+            review_status = current_status
+            if current_status == "COMPLETED":
+                if payload.get("legacy_migration") is True:
+                    allowed = is_allowed_transition(current_status, "REVIEWING", actor="reviewer")
+                else:
+                    validate_transition(current_status, "REVIEWING", actor="reviewer", evidence=guard_evidence)
+                    allowed = True
+                if not allowed:
+                    raise ValueError(f"invalid reviewer transition: {current_status} -> REVIEWING")
+                review_status = "REVIEWING"
+            if payload.get("legacy_migration") is True:
+                allowed = is_allowed_transition(review_status, next_status, actor="reviewer")
+            else:
+                validate_transition(review_status, next_status, actor="reviewer", evidence=guard_evidence)
+                allowed = True
+            if not allowed:
+                raise ValueError(f"invalid reviewer transition: {review_status} -> {next_status}")
             if next_status in {"ACCEPTED", "CANCELLED", "SUPERSEDED"}:
                 assert_terminal_cleanup_safe(root, task_id)
 
@@ -202,6 +312,19 @@ def main() -> int:
             review_relative = f"work/{task_id}/review.json"
             task_relative = f"work/{task_id}/task-state.json"
             event_overrides = {review_relative: payload, task_relative: next_task_state}
+            prior_events = []
+            if current_status == "COMPLETED":
+                _, _, _, reviewing_event = prepare_event_log(
+                    root,
+                    {
+                        "type": STATUS_TO_EVENT_TYPE["REVIEWING"],
+                        "actor": args.actor,
+                        "task_id": task_id,
+                        "data": {"review_id": payload["review_id"]},
+                    },
+                    artifact_overrides=event_overrides,
+                )
+                prior_events.append(reviewing_event)
             review_event_relative, event_revision, event_content, review_event = prepare_event_log(
                 root,
                 {
@@ -211,7 +334,9 @@ def main() -> int:
                     "data": {"review_id": payload["review_id"]},
                 },
                 artifact_overrides=event_overrides,
+                prior_events=prior_events,
             )
+            prior_events.append(review_event)
             _, event_revision, event_content, _ = prepare_event_log(
                 root,
                 {
@@ -221,7 +346,7 @@ def main() -> int:
                     "data": {"review_id": payload["review_id"]},
                 },
                 artifact_overrides=event_overrides,
-                prior_events=[review_event],
+                prior_events=prior_events,
             )
             transaction = RuntimeTransaction(
                 args.project_root,

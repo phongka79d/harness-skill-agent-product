@@ -91,13 +91,23 @@ def validate_contract(contract: Any, *, review_type: str | None = None) -> dict[
     return canonical
 
 
-def validate_rubric_against_contract(rubric: Any, contract: Any, *, review_type: str) -> None:
+def validate_rubric_against_contract(
+    rubric: Any,
+    contract: Any,
+    *,
+    review_type: str,
+    allow_approved_override: bool = False,
+) -> None:
     canonical = validate_contract(contract, review_type=review_type)
     if not isinstance(rubric, dict):
         raise ValueError("resolved_rubric must be an object")
-    if rubric.get("override_approval_id") is not None:
+    override_approval_id = rubric.get("override_approval_id")
+    if override_approval_id is not None and not allow_approved_override:
         raise ValueError("rubric overrides are not valid for an unmodified review contract")
     for field in RUBRIC_PIN_FIELDS:
+        # An authorized override gets a new self-consistent hash; every other contract pin stays immutable.
+        if field == "rubric_hash" and override_approval_id is not None and allow_approved_override:
+            continue
         expected = canonical["profile_id"] if field == "profile_id" else canonical.get(field)
         if rubric.get(field) != expected:
             raise ValueError(f"resolved_rubric.{field} does not match the pinned review contract")

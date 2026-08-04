@@ -567,15 +567,15 @@ Expected: every injected interruption leaves a recoverable ledger, no duplicate 
 - Modify: `skills/agentic-state-tools/tests/test_authorization.py`
 - Modify: `skills/agentic-state-tools/tests/test_rollback.py`
 
-- [ ] **Step 1: Add failing transition-registry tests.**
+- [x] **Step 1: Add failing transition-registry tests.**
 
 Test that the registry generates the task-state enum, event mapping, and runtime transition map without drift; executor `COMPLETED -> ACCEPTED` is rejected; the reviewer-only path is `COMPLETED -> REVIEWING -> ACCEPTED`; repair is `COMPLETED -> REVIEWING -> REPAIR_REQUIRED -> RUNNING`; and cleanup can reach `ARCHIVED` from `ACCEPTED`, `CANCELLED`, and `SUPERSEDED`. Every transition record must validate `from`, `to`, `allowed_roles`, `required_artifacts`, and `required_guards`, including `same_run` and `same_attempt` for review/acceptance.
 
-- [ ] **Step 2: Make `state_transition_registry.py` authoritative.**
+- [x] **Step 2: Make `state_transition_registry.py` authoritative.**
 
 Define a `TRANSITIONS` tuple in the registry and make `state_machine.py` expose maps derived from it. `generate_state_artifacts.py` must generate `schemas/state-machine.json`; `validate_state_machine.py` must compare the checked-in generated artifact to the registry and report every missing/extra status, event, role, artifact, and guard. Runtime scripts must import the registry-derived maps and stop declaring local transition lists.
 
-- [ ] **Step 3: Add target-type-aware structured change operations.**
+- [x] **Step 3: Add target-type-aware structured change operations.**
 
 Set this exact mapping in `validate_change_request.py`:
 
@@ -595,11 +595,11 @@ TARGET_ID_FIELDS = {
 
 Allow only JSON operations `add`, `replace`, `remove`, `move`, `copy`, and `test`. Implement JSON Pointer resolution for object keys, array indexes, and `-` append; execute all `test` operations before publishing; reject a target whose type-specific ID field does not equal `target_id`. Do not copy an old artifact into a new file with an unvalidated `requested_changes` description.
 
-- [ ] **Step 4: Enforce invalidation and common approval fencing.**
+- [x] **Step 4: Enforce invalidation and common approval fencing.**
 
 After an approved change, increment revision, recompute hash, mark the prior task revision `SUPERSEDED`, invalidate approvals/reviews/review contracts/batch contracts/dispatches bound to the old revision or hash, and append a typed invalidation event for each affected artifact. Route plan approval, batch approval, merge, change request, schema migration, destructive action, deployment, batch commit, rollback, review override, and next-batch actions through `authorization.py` with `actor`, `action`, `target_type`, `target_id`, `target_revision`, `target_hash`, `policy_version`, `issued_at`, `expires_at`, and `evidence`. Reject stale revision/hash/policy/expiry/actor permissions and require the exact persisted approval artifact.
 
-- [ ] **Step 5: Run the contract consistency gate.**
+- [x] **Step 5: Run the contract consistency gate.**
 
 Run:
 

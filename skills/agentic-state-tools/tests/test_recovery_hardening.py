@@ -132,7 +132,7 @@ class RecoveryHardeningTests(unittest.TestCase):
             subprocess.run(["git", "add", "value.txt"], cwd=project, check=True)
             subprocess.run(["git", "commit", "-m", "target-change"], cwd=project, check=True, capture_output=True, text=True)
             target = build_merge_authorization_target(project, root, "TASK-1", 1, "main")
-            approval = {"approval_id": "APR-WORKTREE-TASK-1-1", "target_type": "WORKTREE", "target_id": "TASK-1", "decision": "APPROVED", "approver": "user-1", "actor_type": "user", "actor_id": "user-1", "action": "WORKTREE_MERGE", "target_revision": 1, "target_hash": target["target_hash"], "policy_version": "1", "expires_at": "2099-01-01T00:00:00Z", "evidence": "conflict review", "created_at": "2026-08-04T00:00:00Z", "revision": 1}
+            approval = {"approval_id": "APR-WORKTREE-TASK-1-1", "target_type": "WORKTREE", "target_id": "TASK-1", "decision": "APPROVED", "approver": "user-1", "actor_type": "user", "actor_id": "user-1", "action": "WORKTREE_MERGE", "target_revision": 1, "target_hash": target["target_hash"], "policy_version": "1", "issued_at": "2026-08-04T00:00:00Z", "expires_at": "2099-01-01T00:00:00Z", "evidence": "conflict review", "created_at": "2026-08-04T00:00:00Z", "revision": 1}
             write_json(project / ".agent/approvals/WORKTREE-TASK-1.json", approval)
             result = merge_worktree(project, root, "TASK-1", 1, "main", approval=approval, actor="user-1", actor_type="user")
             self.assertEqual(result["status"], "RECOVERY_PENDING")

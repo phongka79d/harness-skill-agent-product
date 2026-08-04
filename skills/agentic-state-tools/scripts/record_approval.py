@@ -83,6 +83,7 @@ def main() -> int:
             existing_revision = int(read_object(target).get("revision", 0)) if target.is_file() else 0
             payload.setdefault("approval_id", f"APR-{target_type}-{target_id}-{existing_revision + 1}")
             payload["created_at"] = utc_now()
+            payload.setdefault("issued_at", payload["created_at"])
             payload["revision"] = next_revision(payload, existing_revision)
             output = target
             event = {

@@ -51,6 +51,8 @@ class ContractHardeningTests(unittest.TestCase):
     def test_apply_change_request_synchronizes_master_plan_revision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            init_result = run_script("init_runtime.py", "--project-root", str(root))
+            self.assertEqual(init_result.returncode, 0, init_result.stderr)
             request = self.write_json(root / "change.json", {
                 "change_request_id": "CR-1",
                 "target_type": "MASTER_PLAN",
@@ -65,18 +67,36 @@ class ContractHardeningTests(unittest.TestCase):
                 "supersedes_id": "MP-1@1.0",
                 "new_version": "1.1",
             })
-            approval = self.write_json(root / "approval.json", {
-                "approval_id": "APR-1",
-                "target_type": "CHANGE_REQUEST",
-                "target_id": "CR-1",
-                "decision": "APPROVED",
-            })
-            target = self.write_json(root / "plan.json", {
+            target_value = {
                 "plan_id": "MP-1",
                 "version": "1.0",
                 "revision": 4,
                 "title": "Original",
                 "master_plan": {"plan_id": "MP-1", "revision": 4, "title": "Original"},
+            }
+            target = self.write_json(root / "plan.json", target_value)
+            target_hash = hashlib.sha256(
+                json.dumps(target_value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            approval_path = root / ".agent" / "approvals" / "MASTER_PLAN-MP-1.json"
+            approval_path.parent.mkdir(parents=True)
+            approval = self.write_json(approval_path, {
+                "approval_id": "APR-1",
+                "target_type": "MASTER_PLAN",
+                "target_id": "MP-1",
+                "decision": "APPROVED",
+                "approver": "primary-agent",
+                "actor_type": "primary_agent",
+                "actor_id": "primary-agent",
+                "action": "CHANGE_REQUEST",
+                "target_revision": 4,
+                "target_hash": target_hash,
+                "policy_version": "1",
+                "issued_at": "2026-08-03T00:00:00Z",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "evidence": "approved master plan change request",
+                "created_at": "2026-08-03T00:00:00Z",
+                "revision": 1,
             })
             output = root / "changed-plan.json"
 
@@ -86,6 +106,8 @@ class ContractHardeningTests(unittest.TestCase):
                 "--target", str(target),
                 "--approval", str(approval),
                 "--output", str(output),
+                "--actor", "primary-agent",
+                "--actor-type", "primary_agent",
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -112,6 +134,7 @@ class ContractHardeningTests(unittest.TestCase):
             "target_revision": 1,
             "target_hash": "a" * 64,
             "policy_version": "1",
+            "issued_at": "2026-08-03T00:00:00Z",
             "expires_at": "2099-01-01T00:00:00Z",
             "evidence": "forged plan approval",
         }
@@ -138,6 +161,7 @@ class ContractHardeningTests(unittest.TestCase):
                 "target_revision": 1,
                 "target_hash": "a" * 64,
                 "policy_version": "1",
+                "issued_at": "2026-08-03T00:00:00Z",
                 "expires_at": "2099-01-01T00:00:00Z",
                 "evidence": "approved plan",
             }
@@ -281,7 +305,7 @@ class ContractHardeningTests(unittest.TestCase):
                 "target_type": "MASTER_PLAN", "target_id": "MP-1", "decision": "APPROVED",
                 "approver": "primary-agent", "actor_type": "primary_agent", "actor_id": "primary-agent",
                 "action": "MASTER_PLAN", "target_revision": 1, "target_hash": plan_hash,
-                "policy_version": "1", "expires_at": "2099-01-01T00:00:00Z", "evidence": "approved",
+                "policy_version": "1", "issued_at": "2026-08-03T00:00:00Z", "expires_at": "2099-01-01T00:00:00Z", "evidence": "approved",
             })
             self.assertEqual(run_script("record_approval.py", "--project-root", str(project), "--input", str(approval)).returncode, 0)
             rubric_path = project / "task-rubric.json"
@@ -448,6 +472,7 @@ class ContractHardeningTests(unittest.TestCase):
                 "target_revision": 1,
                 "target_hash": review_value["artifact_hash"],
                 "policy_version": "1",
+                "issued_at": "2026-08-03T00:00:00Z",
                 "expires_at": "2099-01-01T00:00:00Z",
                 "evidence": "batch review approved",
             }
@@ -552,6 +577,7 @@ class ContractHardeningTests(unittest.TestCase):
                 "target_revision": 1,
                 "target_hash": review["artifact_hash"],
                 "policy_version": "1",
+                "issued_at": "2026-08-03T00:00:00Z",
                 "expires_at": "2099-01-01T00:00:00Z",
                 "evidence": "batch review approved",
             }
@@ -649,7 +675,7 @@ class ContractHardeningTests(unittest.TestCase):
                 "target_type": "MASTER_PLAN", "target_id": "MP-1", "decision": "APPROVED",
                 "approver": "primary-agent", "actor_type": "primary_agent", "actor_id": "primary-agent",
                 "action": "MASTER_PLAN", "target_revision": 1, "target_hash": plan_hash,
-                "policy_version": "1", "expires_at": "2099-01-01T00:00:00Z", "evidence": "approved",
+                "policy_version": "1", "issued_at": "2026-08-03T00:00:00Z", "expires_at": "2099-01-01T00:00:00Z", "evidence": "approved",
             })
             self.assertEqual(run_script("record_approval.py", "--project-root", str(project), "--input", str(approval)).returncode, 0)
             rubric_path = project / "task-rubric.json"
@@ -1391,6 +1417,7 @@ class PlanningIntegrityTests(unittest.TestCase):
                 "expires_at": "2099-01-01T00:00:00Z",
                 "evidence": "approved shared write group",
                 "created_at": "2026-08-03T00:00:00Z",
+                "issued_at": "2026-08-03T00:00:00Z",
                 "revision": 1,
             })
             self.assertFalse(validate_manifest(persisted, approval_root), validate_manifest(persisted, approval_root))
@@ -1439,6 +1466,7 @@ class PlanningIntegrityTests(unittest.TestCase):
                 "target_revision": 1,
                 "target_hash": "a" * 64,
                 "policy_version": "1",
+                "issued_at": "2026-08-03T00:00:00Z",
                 "expires_at": "2099-01-01T00:00:00Z",
                 "evidence": "approved shared write group",
             })

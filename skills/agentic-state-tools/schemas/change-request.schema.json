@@ -4,7 +4,7 @@
   "required": ["change_request_id", "target_type", "target_id", "reason", "requested_changes", "status", "requested_by"],
   "properties": {
     "change_request_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
-    "target_type": {"type": "string", "enum": ["MASTER_PLAN", "SUB_PLAN", "BATCH", "TASK", "DECISION", "RISK", "RUBRIC", "PROFILE"]},
+    "target_type": {"type": "string", "enum": ["MASTER_PLAN", "SUB_PLAN", "BATCH", "TASK", "DECISION", "RISK", "RUBRIC", "PROFILE", "CONFIGURATION"]},
     "target_id": {"type": "string", "minLength": 1},
     "reason": {"type": "string", "minLength": 1},
     "requested_changes": {
@@ -12,15 +12,40 @@
       "minItems": 1,
       "items": {
         "oneOf": [
-          {"type": "string", "minLength": 1},
+          {
+            "type": "object",
+            "required": ["op", "path", "value"],
+            "properties": {"op": {"const": "add"}, "path": {"type": "string", "pattern": "^($|/.*)"}, "value": {}},
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["op", "path", "value"],
+            "properties": {"op": {"const": "replace"}, "path": {"type": "string", "pattern": "^($|/.*)"}, "value": {}},
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["op", "path", "value"],
+            "properties": {"op": {"const": "test"}, "path": {"type": "string", "pattern": "^($|/.*)"}, "value": {}},
+            "additionalProperties": false
+          },
           {
             "type": "object",
             "required": ["op", "path"],
-            "properties": {
-              "op": {"type": "string", "enum": ["add", "replace", "remove"]},
-              "path": {"type": "string", "pattern": "^($|/.*)"},
-              "value": {}
-            },
+            "properties": {"op": {"const": "remove"}, "path": {"type": "string", "pattern": "^($|/.*)"}},
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["op", "path", "from"],
+            "properties": {"op": {"const": "move"}, "path": {"type": "string", "pattern": "^($|/.*)"}, "from": {"type": "string", "pattern": "^($|/.*)"}},
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["op", "path", "from"],
+            "properties": {"op": {"const": "copy"}, "path": {"type": "string", "pattern": "^($|/.*)"}, "from": {"type": "string", "pattern": "^($|/.*)"}},
             "additionalProperties": false
           }
         ]
