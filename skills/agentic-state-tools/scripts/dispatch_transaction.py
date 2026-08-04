@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import os
 import uuid
 from datetime import datetime, timezone
@@ -12,7 +14,7 @@ from typing import Any
 from append_event import append_event_for_root
 from operation_ledger import read_operation_ledger
 from render_checklist import render_checklist_for_root
-from worktree_manager import validate_isolation_proof
+from worktree_manager import validate_canonical_isolation_proof, validate_isolation_proof
 from runtime_utils import (
     RuntimeNotInitializedError,
     STATUS_TO_EVENT_TYPE,
@@ -38,6 +40,63 @@ GRAPH_SCHEMA = ROOT / "schemas/graph.schema.json"
 LEASE_SCHEMA = ROOT / "schemas/lease.schema.json"
 TASK_STATE_SCHEMA = ROOT / "schemas/task-state.schema.json"
 OPERATION_SCHEMA = ROOT / "schemas/operation.schema.json"
+ASYNC_PROOF_FIELDS = (
+    "worktree_path",
+    "branch_name",
+    "base_commit",
+    "plan_revision",
+    "write_scope_hash",
+    "active_conflicts_checked_at",
+    "isolation_status",
+)
+ASYNC_BINDING_FIELDS = (*ASYNC_PROOF_FIELDS, "isolation_proof")
+
+
+def _require_async_proof(task_id: str, dispatch: dict[str, Any], task: dict[str, Any] | None = None) -> dict[str, Any]:
+    proof = dispatch.get("isolation_proof")
+    if not validate_isolation_proof({"task_id": task_id}, proof) or not validate_canonical_isolation_proof(
+        {"task_id": task_id}, proof
+    ):
+        raise ValueError("async dispatch requires a verified canonical isolation proof")
+    assert isinstance(proof, dict)
+    for field in ("run_id", *ASYNC_PROOF_FIELDS):
+        if dispatch.get(field) is not None and dispatch.get(field) != proof.get(field):
+            raise ValueError(f"async dispatch {field} does not match isolation proof")
+    if task is not None:
+        task_identity = {"task_id": task_id}
+        for field in ("run_id", *ASYNC_PROOF_FIELDS):
+            if task.get(field) is not None:
+                task_identity[field] = task[field]
+        if not validate_canonical_isolation_proof(task_identity, proof):
+            raise ValueError("async dispatch isolation proof does not match task identity")
+    return copy.deepcopy(proof)
+
+
+def _async_binding_metadata(proof: dict[str, Any], dispatch: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
+    metadata = {field: copy.deepcopy(proof[field]) for field in ASYNC_PROOF_FIELDS}
+    metadata["isolation_proof"] = copy.deepcopy(proof)
+    input_hashes = dispatch.get("input_artifact_hashes", task.get("input_artifact_hashes"))
+    if input_hashes is not None:
+        metadata["input_artifact_hashes"] = copy.deepcopy(input_hashes)
+    return metadata
+
+
+def _validate_async_record(record: dict[str, Any], expected: dict[str, Any]) -> None:
+    for field in ("task_id", "run_id", "attempt_id", "dispatch_id", *ASYNC_BINDING_FIELDS):
+        if record.get(field) != expected.get(field):
+            raise ValueError(f"async dispatch {field} does not match persisted identity")
+
+
+def _typed_dependency_edge(source: str, target: str, expected: dict[str, Any]) -> dict[str, Any]:
+    edge = {
+        "from": source,
+        "to": target,
+        "kind": "DEPENDENCY",
+        "edge_id": f"EDGE-{source}-{target}-DEPENDENCY",
+        **{field: copy.deepcopy(expected[field]) for field in (*ASYNC_PROOF_FIELDS, "run_id", "attempt_id", "dispatch_id", "isolation_proof")},
+    }
+    edge["edge_hash"] = hashlib.sha256(json.dumps(edge, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return edge
 
 
 def _validated_write(path: Path, value: dict[str, Any], schema_path: Path) -> None:
@@ -105,7 +164,7 @@ def _validate_idempotent_retry(
     for field in immutable_fields:
         if existing.get(field) != dispatch.get(field):
             raise ValueError(f"idempotency key conflicts with existing dispatch field: {field}")
-    binding_fields = (*EXECUTION_IDENTITY_FIELDS, "plan_revision", "worktree_path", "branch_name", "input_artifact_hashes")
+    binding_fields = (*EXECUTION_IDENTITY_FIELDS, "plan_revision", "worktree_path", "branch_name", "base_commit", "write_scope_hash", "active_conflicts_checked_at", "isolation_status", "isolation_proof", "input_artifact_hashes")
     for field in binding_fields:
         submitted = dispatch.get(field)
         effective = submitted if submitted is not None else task.get(field)
@@ -133,7 +192,7 @@ def persist_dispatch(
 
     task_id = str(dispatch["task_id"])
     mode = str(dispatch["selected_mode"]).upper()
-    if mode == "ASYNC" and not config["execution"].get("async_execution_enabled", False):
+    if mode == "ASYNC" and not config.get("execution", {}).get("async_execution_enabled", False):
         raise ValueError("async execution is disabled until isolated worktree support is enabled")
     input_revisions = dispatch.get("input_revisions")
     if not isinstance(input_revisions, dict):
@@ -144,11 +203,7 @@ def persist_dispatch(
         raise ValueError("dispatch.input_revisions.task must be a non-negative integer")
     if isinstance(expected_queue_revision, bool) or not isinstance(expected_queue_revision, int) or expected_queue_revision < 0:
         raise ValueError("dispatch.input_revisions.queue must be a non-negative integer")
-    if mode == "ASYNC" and not validate_isolation_proof(
-        {"task_id": task_id, "revision": expected_task_revision},
-        dispatch.get("isolation_proof"),
-    ):
-        raise ValueError("async dispatch requires a valid worktree isolation proof")
+    proof = _require_async_proof(task_id, dispatch) if mode == "ASYNC" else None
     idempotency_key = str(dispatch.get("idempotency_key") or f"{task_id}:r{expected_task_revision}")
 
     with runtime_lock(project_root) as root:
@@ -186,6 +241,10 @@ def persist_dispatch(
                     value = existing.get(field, existing_task.get(field))
                     if value is not None:
                         repair_lease[field] = str(value)
+                for field in ASYNC_BINDING_FIELDS:
+                    value = existing.get(field, existing_task.get(field))
+                    if value is not None:
+                        repair_lease[field] = copy.deepcopy(value)
                 validate_execution_identity(existing_task, repair_lease, None)
                 write_validated(project_root, f"work/{task_id}/lease.json", repair_lease, LEASE_SCHEMA)
             return existing
@@ -197,6 +256,8 @@ def persist_dispatch(
         current_revision = current_task.get("revision", 0)
         if current_revision != expected_task_revision:
             raise ValueError(f"stale task revision: expected {expected_task_revision}, current {current_revision}")
+        if mode == "ASYNC":
+            proof = _require_async_proof(task_id, dispatch, current_task)
         try:
             current_review_contract = validate_contract(current_task.get("review_contract"), review_type="task")
         except (TypeError, ValueError) as exc:
@@ -227,17 +288,24 @@ def persist_dispatch(
         if _active_lease_count(root, task_id) >= int(config["execution"]["max_parallel_tasks"]):
             raise ValueError("configured max_parallel_tasks has been reached")
 
-        run_id = str(dispatch.get("run_id") or f"RUN-{task_id}-{uuid.uuid4().hex[:12].upper()}")
+        run_id = str(dispatch.get("run_id") or (proof["run_id"] if mode == "ASYNC" and proof is not None else f"RUN-{task_id}-{uuid.uuid4().hex[:12].upper()}"))
         attempt_id = str(dispatch.get("attempt_id") or f"ATTEMPT-{task_id}-{uuid.uuid4().hex[:12].upper()}")
         operation_id = f"OP-{task_id}-DISPATCH-{uuid.uuid4().hex[:12].upper()}"
         next_status = "QUEUED_ASYNC" if mode == "ASYNC" else "QUEUED_SYNC"
         next_revision = current_revision + 1
         envelope = dict(dispatch)
-        binding_metadata = {
-            field: dispatch.get(field, current_task.get(field))
-            for field in ("plan_revision", "worktree_path", "branch_name", "input_artifact_hashes")
-            if dispatch.get(field, current_task.get(field)) is not None
-        }
+        binding_metadata = (
+            _async_binding_metadata(proof, dispatch, current_task)
+            if mode == "ASYNC" and proof is not None
+            else {
+                field: dispatch.get(field, current_task.get(field))
+                for field in ("plan_revision", "worktree_path", "branch_name", "input_artifact_hashes")
+                if dispatch.get(field, current_task.get(field)) is not None
+            }
+        )
+        for field, value in {"run_id": run_id, "attempt_id": attempt_id, "dispatch_id": envelope["dispatch_id"], **binding_metadata}.items():
+            if current_task.get(field) is not None and current_task.get(field) != value:
+                raise ValueError(f"dispatch {field} does not match existing task identity")
         envelope.update(
             {
                 "status": "RECORDED",
@@ -291,13 +359,49 @@ def persist_dispatch(
             _validated_write(queue_path, queue, QUEUE_SCHEMA)
 
             nodes = list(graph.get("nodes", []))
-            if task_id not in nodes:
+            graph_node: dict[str, Any] | None = None
+            if mode == "ASYNC":
+                graph_node = {
+                    "task_id": task_id,
+                    "execution_mode": mode,
+                    "run_id": run_id,
+                    "attempt_id": attempt_id,
+                    "dispatch_id": envelope["dispatch_id"],
+                    **binding_metadata,
+                }
+                for index, node in enumerate(nodes):
+                    node_id = node.get("task_id", node.get("id")) if isinstance(node, dict) else node
+                    if node_id == task_id:
+                        if isinstance(node, dict):
+                            node.update(graph_node)
+                            graph_node = node
+                        else:
+                            nodes[index] = graph_node
+                        break
+                else:
+                    nodes.append(graph_node)
+            elif task_id not in nodes:
                 nodes.append(task_id)
             edges = list(graph.get("edges", []))
             for dependency in dependencies:
-                edge = {"from": dependency, "to": task_id}
-                if edge not in edges:
-                    edges.append(edge)
+                if mode == "ASYNC":
+                    expected_identity = {
+                        "run_id": run_id,
+                        "attempt_id": attempt_id,
+                        "dispatch_id": envelope["dispatch_id"],
+                        **binding_metadata,
+                    }
+                    edge = _typed_dependency_edge(dependency, task_id, expected_identity)
+                    for index, existing_edge in enumerate(edges):
+                        if isinstance(existing_edge, dict) and existing_edge.get("from") == dependency and existing_edge.get("to") == task_id:
+                            edges[index] = edge
+                            break
+                    else:
+                        edges.append(edge)
+                else:
+                    edge = {"from": dependency, "to": task_id}
+                    if edge not in edges:
+                        edges.append(edge)
             graph["nodes"] = nodes
             graph["edges"] = edges
             graph["revision"] = int(graph.get("revision", 0)) + 1
@@ -336,6 +440,21 @@ def persist_dispatch(
             }
             write_validated(project_root, f"work/{task_id}/lease.json", lease, LEASE_SCHEMA)
             validate_execution_identity(next_task, lease, queue)
+            if mode == "ASYNC":
+                expected_identity = {
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "attempt_id": attempt_id,
+                    "dispatch_id": envelope["dispatch_id"],
+                    **binding_metadata,
+                }
+                _validate_async_record(envelope, expected_identity)
+                _validate_async_record(task_entry, expected_identity)
+                _validate_async_record(queue["task_states"][-1], expected_identity)
+                _validate_async_record(next_task, expected_identity)
+                _validate_async_record(lease, expected_identity)
+                if graph_node is not None:
+                    _validate_async_record(graph_node, expected_identity)
 
             append_event_for_root(
                 root,

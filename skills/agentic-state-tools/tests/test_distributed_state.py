@@ -27,7 +27,12 @@ from distributed_store import (  # noqa: E402
 from runtime_utils import apply_event, empty_state  # noqa: E402
 from resolve_execution_mode import resolve_execution_mode  # noqa: E402
 from validate_payload import validate  # noqa: E402
-from worktree_manager import WorktreeError, WorkspaceBusy, WorktreeManager  # noqa: E402
+from worktree_manager import (  # noqa: E402
+    WorktreeError,
+    WorkspaceBusy,
+    WorktreeManager,
+    validate_canonical_isolation_proof,
+)
 
 
 BASE_TIME = datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc)
@@ -68,6 +73,167 @@ class ErrorTransport:
 
 
 class DistributedStateTests(unittest.TestCase):
+    def test_canonical_isolation_proof_requires_exact_verified_identity(self) -> None:
+        task = {
+            "task_id": "TASK-CANONICAL",
+            "run_id": "RUN-CANONICAL",
+            "plan_revision": 3,
+            "worktree_path": "C:/worktrees/task-canonical",
+            "branch_name": "async/task-canonical",
+        }
+        proof = {
+            "task_id": "TASK-CANONICAL",
+            "run_id": "RUN-CANONICAL",
+            "worktree_path": "C:/worktrees/task-canonical",
+            "branch_name": "async/task-canonical",
+            "base_commit": "b" * 40,
+            "plan_revision": 3,
+            "write_scope_hash": "c" * 64,
+            "active_conflicts_checked_at": "2026-08-02T12:00:00Z",
+            "isolation_status": "VERIFIED",
+        }
+        self.assertTrue(validate_canonical_isolation_proof(task, proof))
+        self.assertFalse(validate_canonical_isolation_proof(task, {**proof, "isolation_status": "PENDING"}))
+        self.assertFalse(validate_canonical_isolation_proof(task, {**proof, "task_id": "OTHER"}))
+        self.assertFalse(validate_canonical_isolation_proof(task, {**proof, "unexpected": True}))
+
+    def test_execution_policy_accepts_canonical_proof_without_legacy_manager_envelope(self) -> None:
+        task = {
+            "task_id": "TASK-CANONICAL-RESOLVE",
+            "status": "READY",
+            "owner": "agent-executor",
+            "task_type": "backend",
+            "depends_on": [],
+            "write_scope": ["src/policy.py"],
+            "plan_revision": 3,
+            "input_artifact_hashes": {"plan": "a" * 64},
+            "merge_independent": True,
+            "execution_policy": {"requested_mode": "ASYNC_PREFERRED"},
+        }
+        proof = {
+            "task_id": "TASK-CANONICAL-RESOLVE",
+            "run_id": "RUN-CANONICAL-RESOLVE",
+            "worktree_path": "C:/worktrees/task-canonical-resolve",
+            "branch_name": "async/task-canonical-resolve",
+            "base_commit": "b" * 40,
+            "plan_revision": 3,
+            "write_scope_hash": "c" * 64,
+            "active_conflicts_checked_at": "2026-08-02T12:00:00Z",
+            "isolation_status": "VERIFIED",
+        }
+        config = {
+            "async_execution": {
+                "capability_enabled": True,
+                "allow_task_opt_in": True,
+                "max_parallel_tasks": 2,
+                "require_isolated_worktree": True,
+                "require_separate_branch": True,
+                "require_disjoint_write_scope": True,
+                "require_dependency_clearance": True,
+                "require_pinned_plan_revision": True,
+                "require_pinned_input_hashes": True,
+            },
+            "agents": {"agent-executor": {"capabilities": ["repository_editing"]}},
+            "planning": {"task_type_capabilities": {"backend": "repository_editing"}},
+        }
+        policy = resolve_execution_mode(
+            task,
+            config=config,
+            active_tasks=[],
+            queue={"revision": 0, "tasks": []},
+            lease={"expires_at": "2099-01-01T00:00:00Z"},
+            isolation_proof=proof,
+            now=BASE_TIME,
+        )
+        self.assertEqual(policy["resolved_mode"], "ASYNC")
+
+    def test_execution_policy_resolves_requested_modes_with_complete_identity(self) -> None:
+        config = {
+            "async_execution": {
+                "capability_enabled": True,
+                "default_mode": "async",
+                "allow_task_opt_in": True,
+                "max_parallel_tasks": 2,
+                "require_isolated_worktree": True,
+                "require_separate_branch": True,
+                "require_disjoint_write_scope": True,
+                "require_dependency_clearance": True,
+                "require_pinned_plan_revision": True,
+                "require_pinned_input_hashes": True,
+                "require_authorized_merge": True,
+                "fallback_to_sync": True,
+                "automatic_merge": False,
+            },
+            "version_control": {"isolated_worktrees": True},
+            "agents": {"agent-executor": {"capabilities": ["repository_editing"]}},
+            "planning": {"task_type_capabilities": {"backend": "repository_editing"}},
+        }
+        task = {
+            "task_id": "TASK-POLICY",
+            "status": "READY",
+            "owner": "agent-executor",
+            "task_type": "backend",
+            "depends_on": [],
+            "write_scope": ["src/policy.py"],
+            "plan_revision": 3,
+            "input_artifact_hashes": {"plan": "a" * 64},
+            "merge_independent": True,
+            "execution_policy": {
+                "requested_mode": "ASYNC_PREFERRED",
+                "resolved_mode": None,
+                "resolution_reason": "",
+                "resolved_by": "",
+                "resolved_at": "",
+                "isolation_proof": None,
+            },
+        }
+        proof = {
+            "task_id": "TASK-POLICY",
+            "run_id": "RUN-POLICY",
+            "worktree_path": "C:/worktrees/task-policy",
+            "branch_name": "async/task-policy",
+            "base_commit": "b" * 40,
+            "plan_revision": 3,
+            "write_scope_hash": "c" * 64,
+            "active_conflicts_checked_at": "2026-08-02T12:00:00Z",
+            "isolation_status": "VERIFIED",
+        }
+        lease = {
+            "task_id": "TASK-POLICY",
+            "run_id": "RUN-POLICY",
+            "expires_at": "2099-01-01T00:00:00Z",
+        }
+        queue = {"revision": 4, "tasks": [], "available_slots": 2}
+        with patch("resolve_execution_mode.validate_isolation_proof", return_value=True):
+            policy = resolve_execution_mode(
+                task,
+                config=config,
+                active_tasks=[],
+                queue=queue,
+                lease=lease,
+                isolation_proof=proof,
+                now=BASE_TIME,
+            )
+        self.assertEqual(set(policy), {"requested_mode", "resolved_mode", "resolution_reason", "resolved_by", "resolved_at", "isolation_proof"})
+        self.assertEqual(policy["resolved_mode"], "ASYNC")
+        self.assertEqual(policy["requested_mode"], "ASYNC_PREFERRED")
+        self.assertEqual(policy["isolation_proof"], proof)
+
+    def test_async_required_blocks_with_machine_readable_reason_when_proof_is_missing(self) -> None:
+        config = {"async_execution": {
+            "capability_enabled": True, "default_mode": "sync", "allow_task_opt_in": True,
+            "max_parallel_tasks": 2, "require_isolated_worktree": True, "require_separate_branch": True,
+            "require_disjoint_write_scope": True, "require_dependency_clearance": True,
+            "require_pinned_plan_revision": True, "require_pinned_input_hashes": True,
+            "require_authorized_merge": True, "fallback_to_sync": True, "automatic_merge": False,
+        }}
+        task = {"task_id": "TASK-BLOCKED", "status": "READY", "execution_policy": {
+            "requested_mode": "ASYNC_REQUIRED", "resolved_mode": None, "resolution_reason": "",
+            "resolved_by": "", "resolved_at": "", "isolation_proof": None,
+        }}
+        policy = resolve_execution_mode(task, config=config, active_tasks=[], queue={"revision": 0, "tasks": []}, lease=None, isolation_proof=None, now=BASE_TIME)
+        self.assertEqual(policy["resolved_mode"], "BLOCKED")
+        self.assertTrue(policy["resolution_reason"].startswith("ISOLATION_PROOF_MISSING"))
     def test_worktree_mapping_is_unique_persistent_and_rejects_shared_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory) / "project"

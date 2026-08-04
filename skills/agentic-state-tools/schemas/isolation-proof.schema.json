@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["task_id", "run_id", "worktree_path", "branch_name", "base_commit", "plan_revision", "write_scope_hash", "active_conflicts_checked_at", "isolation_status"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "run_id": {"type": "string", "minLength": 1},
+    "worktree_path": {"type": "string", "minLength": 1},
+    "branch_name": {"type": "string", "minLength": 1},
+    "base_commit": {"type": "string", "pattern": "^[0-9a-fA-F]{40,64}$"},
+    "plan_revision": {"type": "integer", "minimum": 1},
+    "write_scope_hash": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
+    "active_conflicts_checked_at": {"type": "string", "minLength": 1},
+    "isolation_status": {"type": "string", "enum": ["VERIFIED"]}
+  },
+  "additionalProperties": false
+}

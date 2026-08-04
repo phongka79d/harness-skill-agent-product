@@ -37,6 +37,7 @@ class CleanupBlocked(WorktreeError):
 
 
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "worktree.schema.json"
+ISOLATION_PROOF_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "isolation-proof.schema.json"
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
@@ -431,8 +432,30 @@ class WorktreeManager:
             return copy.deepcopy(entry)
 
 
+def validate_canonical_isolation_proof(task: dict[str, Any], proof: Any) -> bool:
+    """Validate the exact proof contract used by async execution resolution."""
+
+    if not isinstance(task, dict) or not isinstance(proof, dict):
+        return False
+    try:
+        schema = json.loads(ISOLATION_PROOF_SCHEMA_PATH.read_text(encoding="utf-8"))
+        errors = validate(proof, schema, base_path=ISOLATION_PROOF_SCHEMA_PATH.parent)
+        if errors:
+            return False
+        _parse_timestamp(proof["active_conflicts_checked_at"])
+    except (OSError, UnicodeError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    for field in ("task_id", "run_id", "worktree_path", "branch_name", "plan_revision", "write_scope_hash"):
+        if field in task and task.get(field) is not None and task.get(field) != proof.get(field):
+            return False
+    return True
+
+
 def validate_isolation_proof(task: dict[str, Any], proof: Any) -> bool:
-    """Re-check manager-issued proof before allowing async resolution."""
+    """Accept canonical proofs and retain compatibility with manager-issued proofs."""
+
+    if validate_canonical_isolation_proof(task, proof):
+        return True
 
     if not isinstance(task, dict) or not isinstance(proof, dict):
         return False

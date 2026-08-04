@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPTS))
 from reconcile_queue import reconcile_queue  # noqa: E402
 from resolve_rubric import resolve_rubric  # noqa: E402
 from review_contract import contract_from_rubric  # noqa: E402
+from validate_payload import validate  # noqa: E402
 
 CONFIG_VALUE = json.loads(
     (SKILL_ROOT.parent / "agentic-configuration" / "config" / "agentic-config.yaml").read_text(encoding="utf-8")
@@ -50,6 +51,157 @@ def write_json(directory: str, name: str, value: object) -> Path:
 
 
 class OrchestrationHarnessTests(unittest.TestCase):
+    def test_async_identity_schemas_and_edge_kinds_are_declared(self) -> None:
+        execution_policy = json.loads((SCHEMAS / "execution-policy.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            execution_policy["required"],
+            ["requested_mode", "resolved_mode", "resolution_reason", "resolved_by", "resolved_at", "isolation_proof"],
+        )
+        isolation_proof = json.loads((SCHEMAS / "isolation-proof.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            set(isolation_proof["required"]),
+            {"task_id", "run_id", "worktree_path", "branch_name", "base_commit", "plan_revision", "write_scope_hash", "active_conflicts_checked_at", "isolation_status"},
+        )
+        graph = json.loads((SCHEMAS / "graph.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            set(graph["$defs"]["edge"]["properties"]["kind"]["enum"]),
+            {"DEPENDENCY", "CONCURRENT", "MERGE", "CONFLICT_GROUP", "SHARED_WRITE_GROUP"},
+        )
+
+    def test_typed_graph_edges_validate_ids_and_hashes_without_requiring_them_for_legacy_edges(self) -> None:
+        graph_schema = json.loads((SCHEMAS / "graph.schema.json").read_text(encoding="utf-8"))
+        legacy = {"schema_version": 1, "graph_id": "G-LEGACY", "revision": 1, "nodes": ["A", {"id": "B"}], "edges": [{"from": "A", "to": "B"}]}
+        self.assertEqual(validate(legacy, graph_schema), [])
+        invalid = {
+            "schema_version": 1,
+            "graph_id": "G-TYPED",
+            "revision": 1,
+            "nodes": ["A", "B"],
+            "edges": [{"from": "A", "to": "B", "kind": "DEPENDENCY", "edge_id": "bad id", "edge_hash": "not-a-hash"}],
+        }
+        self.assertTrue(validate(invalid, graph_schema))
+
+    def test_async_dispatch_persists_identity_and_proof_across_runtime_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_value = json.loads((SKILL_ROOT.parent / "agentic-configuration/config/agentic-config.yaml").read_text(encoding="utf-8"))
+            config_value["execution"]["async_execution_enabled"] = True
+            config_value["version_control"]["isolated_worktrees"] = True
+            config = write_json(directory, "async-persist-config.json", config_value)
+            project = Path(directory) / "project-ASYNC-PERSIST"
+            self.assertEqual(run_script("init_runtime.py", "--project-root", str(project)).returncode, 0)
+            task = write_json(
+                directory,
+                "async-persist-task.json",
+                {
+                    "task_id": "T-ASYNC-PERSIST",
+                    "title": "async persist",
+                    "status": "READY",
+                    "plan_revision": 3,
+                    "input_artifact_hashes": {"plan": "a" * 64},
+                    "write_scope": ["src/async.py"],
+                    "depends_on": ["DEP-ASYNC"],
+                    "review_contract": TASK_REVIEW_CONTRACT,
+                },
+            )
+            self.assertEqual(run_script("update_task_state.py", "--project-root", str(project), "--input", str(task)).returncode, 0)
+            state_path = project / ".agent/runtime/state.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["task_statuses"]["DEP-ASYNC"] = "ACCEPTED"
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            proof = {
+                "task_id": "T-ASYNC-PERSIST",
+                "run_id": "RUN-ASYNC-PERSIST",
+                "worktree_path": "C:/worktrees/t-async-persist",
+                "branch_name": "async/t-async-persist",
+                "base_commit": "b" * 40,
+                "plan_revision": 3,
+                "write_scope_hash": "c" * 64,
+                "active_conflicts_checked_at": "2026-08-02T12:00:00Z",
+                "isolation_status": "VERIFIED",
+            }
+            dispatch = write_json(
+                directory,
+                "async-persist-dispatch.json",
+                {
+                    "dispatch_id": "DSP-ASYNC-PERSIST",
+                    "task_id": "T-ASYNC-PERSIST",
+                    "agent_role": "agent-executor",
+                    "selected_mode": "ASYNC",
+                    "selected_owner": "primary-agent",
+                    "selected_model": EXECUTOR_MODEL,
+                    "input_revisions": {"task": 1, "queue": 0},
+                    "approval_references": [],
+                    "evidence": {"reason": "async persistence", "architecture_owner": "primary-agent"},
+                    "run_id": proof["run_id"],
+                    "attempt_id": "ATTEMPT-ASYNC-PERSIST",
+                    "isolation_proof": proof,
+                },
+            )
+            result = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch), env={"AGENTIC_CONFIG_FILE": str(config)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            envelope = json.loads(result.stdout)
+            runtime = project / ".agent"
+            queue = json.loads((runtime / "runtime/queue.json").read_text(encoding="utf-8"))
+            graph = json.loads((runtime / "runtime/graph.json").read_text(encoding="utf-8"))
+            task_state = json.loads((runtime / "work/T-ASYNC-PERSIST/task-state.json").read_text(encoding="utf-8"))
+            lease = json.loads((runtime / "work/T-ASYNC-PERSIST/lease.json").read_text(encoding="utf-8"))
+            for artifact in (envelope, queue["dispatches"][0], queue["tasks"][0], queue["task_states"][0], task_state, lease):
+                self.assertEqual(artifact["task_id"], proof["task_id"])
+                self.assertEqual(artifact["run_id"], proof["run_id"])
+                self.assertEqual(artifact["attempt_id"], "ATTEMPT-ASYNC-PERSIST")
+                self.assertEqual(artifact["dispatch_id"], "DSP-ASYNC-PERSIST")
+                self.assertEqual(artifact["worktree_path"], proof["worktree_path"])
+                self.assertEqual(artifact["branch_name"], proof["branch_name"])
+                self.assertEqual(artifact["isolation_proof"], proof)
+            node = next(item for item in graph["nodes"] if isinstance(item, dict) and item.get("task_id") == proof["task_id"])
+            self.assertEqual(node["run_id"], proof["run_id"])
+            self.assertEqual(node["worktree_path"], proof["worktree_path"])
+            self.assertEqual(node["isolation_proof"], proof)
+            edge = next(item for item in graph["edges"] if item.get("to") == proof["task_id"])
+            self.assertEqual(edge["kind"], "DEPENDENCY")
+            self.assertTrue(edge["edge_id"].startswith("EDGE-"))
+            self.assertEqual(len(edge["edge_hash"]), 64)
+            self.assertEqual(edge["isolation_proof"], proof)
+
+    def test_async_dispatch_rejects_run_identity_mismatch_before_persistence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_value = json.loads((SKILL_ROOT.parent / "agentic-configuration/config/agentic-config.yaml").read_text(encoding="utf-8"))
+            config_value["execution"]["async_execution_enabled"] = True
+            config_value["version_control"]["isolated_worktrees"] = True
+            config = write_json(directory, "async-mismatch-config.json", config_value)
+            project = self._dispatch_project(directory, "T-ASYNC-MISMATCH")
+            proof = {
+                "task_id": "T-ASYNC-MISMATCH",
+                "run_id": "RUN-CANONICAL",
+                "worktree_path": "C:/worktrees/t-async-mismatch",
+                "branch_name": "async/t-async-mismatch",
+                "base_commit": "b" * 40,
+                "plan_revision": 1,
+                "write_scope_hash": "c" * 64,
+                "active_conflicts_checked_at": "2026-08-02T12:00:00Z",
+                "isolation_status": "VERIFIED",
+            }
+            dispatch = write_json(
+                directory,
+                "async-mismatch-dispatch.json",
+                {
+                    "dispatch_id": "DSP-ASYNC-MISMATCH",
+                    "task_id": "T-ASYNC-MISMATCH",
+                    "agent_role": "agent-executor",
+                    "selected_mode": "ASYNC",
+                    "selected_owner": "primary-agent",
+                    "selected_model": EXECUTOR_MODEL,
+                    "input_revisions": {"task": 1, "queue": 0},
+                    "approval_references": [],
+                    "evidence": {"reason": "identity mismatch", "architecture_owner": "primary-agent"},
+                    "run_id": "RUN-WRONG",
+                    "isolation_proof": proof,
+                },
+            )
+            result = run_script("dispatch_task.py", "--project-root", str(project), "--input", str(dispatch), env={"AGENTIC_CONFIG_FILE": str(config)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("run_id", result.stderr)
+
     def _dispatch_project(self, directory: str, task_id: str) -> Path:
         project = Path(directory) / f"project-{task_id}"
         initialized = run_script("init_runtime.py", "--project-root", str(project))
