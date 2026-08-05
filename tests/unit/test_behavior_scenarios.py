@@ -55,15 +55,40 @@ class BehaviorScenarioTests(unittest.TestCase):
                     {
                         "assertions": {"reproduced": True},
                         "observed_behaviors": ["reproduction recorded"],
-                        "evidence": ["E-RED-1"],
+                        "evidence": ["reproduction command and output"],
                     }
                 ),
                 encoding="utf-8",
             )
             result = run_behavior_scenarios(scenario, observation, model="configured.model", config="test-config")
             self.assertEqual(result["execution"]["status"], "PASS")
+            self.assertTrue(result["execution"]["expectation_met"])
             self.assertEqual(result["execution"]["model"], "configured.model")
             self.assertEqual(result["execution"]["config"], "test-config")
+
+    def test_unrelated_evidence_cannot_satisfy_required_evidence(self) -> None:
+        import yaml
+
+        scenario = yaml.safe_load(SCENARIO)
+        result = evaluate_observation(
+            scenario,
+            {"assertions": {"reproduced": True}, "evidence": ["unrelated-evidence"]},
+        )
+        self.assertEqual(result["status"], "INCONCLUSIVE")
+        self.assertFalse(result["expectation_met"])
+
+    def test_expected_result_mismatch_is_recorded(self) -> None:
+        import yaml
+
+        scenario = yaml.safe_load(SCENARIO)
+        scenario["expected_result"] = "FAIL"
+        result = evaluate_observation(
+            scenario,
+            {"assertions": {"reproduced": True}, "evidence": ["reproduction command and output"]},
+        )
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["expected_result"], "FAIL")
+        self.assertFalse(result["expectation_met"])
 
     def test_missing_observation_is_inconclusive_and_not_a_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

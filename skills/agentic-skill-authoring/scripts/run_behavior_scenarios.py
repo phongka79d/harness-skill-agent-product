@@ -180,6 +180,17 @@ def _assertion_status(scenario: dict[str, Any], observation: dict[str, Any]) -> 
     return "PASS"
 
 
+def _missing_required_evidence(scenario: dict[str, Any], evidence: list[Any]) -> list[str]:
+    """Return declared evidence items that the observation did not record."""
+
+    observed = {str(item).strip() for item in evidence if str(item).strip()}
+    return [
+        str(item)
+        for item in scenario.get("required_evidence", [])
+        if str(item).strip() not in observed
+    ]
+
+
 def evaluate_observation(
     scenario: dict[str, Any],
     observation: dict[str, Any] | None = None,
@@ -198,10 +209,24 @@ def evaluate_observation(
     rationalizations = raw.get("rationalizations", []) if isinstance(raw.get("rationalizations", []), list) else []
     if status == "PASS" and not evidence:
         status = "INCONCLUSIVE"
+    missing_evidence = _missing_required_evidence(scenario, evidence)
+    if status == "PASS" and missing_evidence:
+        status = "INCONCLUSIVE"
+    expected_result = scenario.get("expected_result", "INCONCLUSIVE")
+    expectation_met = status == expected_result
+    notes = str(raw.get("notes", ""))
+    if missing_evidence:
+        evidence_note = "missing required evidence: " + ", ".join(missing_evidence)
+        notes = f"{notes}; {evidence_note}" if notes else evidence_note
+    if not expectation_met:
+        expectation_note = f"actual result {status} does not match expected result {expected_result}"
+        notes = f"{notes}; {expectation_note}" if notes else expectation_note
     result = {
         "scenario_id": scenario["scenario_id"],
         "status": status,
         "result": status,
+        "expected_result": expected_result,
+        "expectation_met": expectation_met,
         "model": model,
         "config": config,
         "profile_id": profile_id,
@@ -217,7 +242,7 @@ def evaluate_observation(
         "rationalizations": [str(item) for item in rationalizations],
         "evidence": [str(item) for item in evidence],
         "assertions": raw.get("assertions", {}) if isinstance(raw.get("assertions", {}), dict) else {},
-        "notes": str(raw.get("notes", "")),
+        "notes": notes,
     }
     if profile_id != "UNSPECIFIED" and status == "PASS" and not (
         isinstance(raw.get("evidence_location"), str) and raw["evidence_location"].strip()
@@ -288,6 +313,16 @@ def _write_json(path: str | Path, value: dict[str, Any]) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def _expectations_satisfied(result: dict[str, Any]) -> bool:
+    execution = result.get("execution")
+    if isinstance(execution, dict):
+        return execution.get("expectation_met") is True
+    executions = result.get("execution_results")
+    return isinstance(executions, list) and bool(executions) and all(
+        isinstance(item, dict) and item.get("expectation_met") is True for item in executions
+    )
 
 
 def main() -> int:
@@ -367,7 +402,7 @@ def main() -> int:
         print(f"SCENARIO_REJECTED: {exc}")
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0
+    return 0 if _expectations_satisfied(result) else 1
 
 
 if __name__ == "__main__":

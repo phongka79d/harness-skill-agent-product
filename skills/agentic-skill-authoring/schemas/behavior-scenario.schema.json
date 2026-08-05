@@ -129,6 +129,8 @@
       "properties": {
         "status": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED", "INCONCLUSIVE"]},
         "result": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED", "INCONCLUSIVE"]},
+        "expected_result": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED", "INCONCLUSIVE"]},
+        "expectation_met": {"type": "boolean"},
         "model": {"type": "string", "minLength": 1},
         "config": {"type": "string", "minLength": 1},
         "profile_id": {"type": "string", "minLength": 1},
@@ -153,6 +155,8 @@
         "scenario_id": {"type": "string", "minLength": 1},
         "status": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED", "INCONCLUSIVE"]},
         "result": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED", "INCONCLUSIVE"]},
+        "expected_result": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED", "INCONCLUSIVE"]},
+        "expectation_met": {"type": "boolean"},
         "model": {"type": "string", "minLength": 1},
         "config": {"type": "string", "minLength": 1},
         "profile_id": {"type": "string", "minLength": 1},
