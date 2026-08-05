@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from authorization import AuthorizationError, authorize, require_persisted_approval
+from finalize_delivery import DeliveryBlocked, validate_delivery_decision
 from runtime_utils import RuntimeLockedError, read_object, read_payload, runtime_lock
 from runtime_transaction import RuntimeTransaction, _append_ledger
 from worktree_manager import WorktreeError, WorktreeManager, _now, _run_git, _timestamp, _write_atomic
@@ -59,6 +60,26 @@ def _load_merge_artifacts(project_root: str | Path, task_id: str) -> tuple[Path,
     queue_entry, dispatch = _queue_binding(queue, task_id)
     review = _read_optional(root / "work" / task_id / "review.json") or {}
     return root, task, queue_entry, dispatch, review
+
+
+def _delivery_gate(project_root: str | Path, task_id: str, decision: dict[str, Any] | None) -> None:
+    """Require a recorded MERGE_LOCAL decision when a finalization artifact is present."""
+
+    root = _runtime_root(project_root)
+    selected = decision
+    if selected is None:
+        path = root / "work" / task_id / "delivery-decision.json"
+        if not path.is_file():
+            return
+        selected = read_object(path)
+    if not isinstance(selected, dict) or selected.get("task_id") != task_id:
+        raise WorktreeError("delivery decision identity does not match the merge task")
+    if selected.get("outcome") != "MERGE_LOCAL":
+        raise WorktreeError("worktree merge requires a MERGE_LOCAL delivery outcome")
+    try:
+        validate_delivery_decision(selected, project_root, require_persisted_approval=False)
+    except (DeliveryBlocked, OSError, TypeError, ValueError) as exc:
+        raise WorktreeError(f"delivery finalization gate is not satisfied: {exc}") from exc
 
 
 def _batch_contract(root: Path, task: dict[str, Any]) -> dict[str, Any]:
@@ -589,6 +610,7 @@ def merge_worktree(
     approval: dict[str, Any] | None,
     actor: str | dict[str, str],
     actor_type: str | None = None,
+    delivery_decision: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Merge one clean source worktree after validating its persisted approval."""
 
@@ -604,6 +626,7 @@ def merge_worktree(
             raise WorktreeError(f"worktree is not mergeable in status {entry.get('status')}")
         target = build_merge_authorization_target(project_root, worktree_root, task_id, revision, target_branch)
         root, task, queue_entry, dispatch, review = _load_merge_artifacts(project_root, task_id)
+        _delivery_gate(project_root, task_id, delivery_decision)
         lease = _read_optional(root / "work" / task_id / "lease.json")
         batch = _batch_contract(root, task)
         _validate_identity(task, queue_entry, dispatch, lease)
@@ -746,6 +769,7 @@ def main() -> int:
     parser.add_argument("--revision", required=True, type=int)
     parser.add_argument("--target-branch", required=True)
     parser.add_argument("--approval", required=True)
+    parser.add_argument("--delivery-decision")
     parser.add_argument("--actor", required=True)
     parser.add_argument("--actor-type", required=True, choices=("user", "primary_agent", "agent", "service"))
     args = parser.parse_args()
@@ -759,6 +783,7 @@ def main() -> int:
             approval=read_payload(args.approval),
             actor=args.actor,
             actor_type=args.actor_type,
+            delivery_decision=read_payload(args.delivery_decision) if args.delivery_decision else None,
         )
     except (RuntimeLockedError, OSError, ValueError, TypeError, WorktreeError, PermissionError) as exc:
         print(f"MERGE_FAILED: {exc}", file=sys.stderr)

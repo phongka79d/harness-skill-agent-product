@@ -18,6 +18,7 @@ Canonical runtime files:
 .agent/locks/{tasks,files,resources}/*.json  generated ownership locks
 .agent/work/<id>/context.json     generated bounded context package
 .agent/work/<id>/operations.jsonl generated side-effect operation ledger
+.agent/work/<id>/workspace-baseline.json generated pre-implementation baseline
 .agent/work/<batch-id>/batch-contract.json generated approval-bound batch contract
 .agent/approvals/<target-type>-<target-id>.json generated approval record
 .agent/recovery/rollback-plan-<plan-id>.json generated dry-run compensation plan
@@ -68,3 +69,13 @@ event. `verify_completion_claim.py` recomputes freshness and rejects prior-run,
 stale, unmapped, summary-only, skipped, or failed evidence. Legacy handoffs
 remain readable as `LEGACY_UNVERIFIED` but cannot satisfy strict production or
 high-risk completion gates.
+
+Workspace baselines are owned by `capture_workspace_baseline.py` and are bound
+to task ID, run ID, worktree path, branch, base commit, and a content-aware
+workspace hash. The artifact records setup and profile-required baseline
+commands separately from `known_failures`. `CLEAN` means all required checks
+passed; `KNOWN_FAILURES_APPROVED` preserves explicitly approved existing
+failures; `BLOCKED` means an unexpected failure, identity mismatch, missing
+verification command, or changed base. A baseline may be attached to a
+worktree only when its path, branch, and base commit match the registry. A
+`BLOCKED` baseline cannot authorize implementation.

@@ -43,6 +43,8 @@ SCHEMA_MAP = {
     "skill-routing.json": "skill-routing.schema.json",
     "task-state.json": "task-state.schema.json",
     "isolation-proof.json": "isolation-proof.schema.json",
+    "workspace-baseline.json": "workspace-baseline.schema.json",
+    "delivery-decision.json": "delivery-decision.schema.json",
     "transaction.json": "transaction.schema.json",
     "verification-evidence.json": "verification-evidence.schema.json",
     "completion-claim.json": "completion-claim.schema.json",

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "baseline_id": "BASELINE-T-V1-1",
+  "task_id": "T-V1",
+  "run_id": "RUN-V1",
+  "worktree_path": "C:/worktrees/task-t-v1",
+  "worktree_root": "C:/worktrees",
+  "branch": "async/t-v1/r1",
+  "base_branch": "main",
+  "base_commit": "0123456789abcdef0123456789abcdef01234567",
+  "head_commit": "0123456789abcdef0123456789abcdef01234567",
+  "workspace_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "is_isolated": true,
+  "ownership_verified": true,
+  "owner": "agent-executor",
+  "setup_command": "python -m pip install -r requirements.txt",
+  "setup_exit_code": 0,
+  "setup_status": "PASS",
+  "setup_output": null,
+  "setup_output_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "setup_failure_signature": null,
+  "baseline_commands": ["python -m unittest tests.unit.test_example"],
+  "baseline_results": [
+    {
+      "command": "python -m unittest tests.unit.test_example",
+      "exit_code": 0,
+      "status": "PASS",
+      "stdout": "OK",
+      "stderr": "",
+      "output": "OK",
+      "output_digest": "565339bc4d7086f4c4c2c5b6ebf7b2bfde9ee0b1c9a1d7d5b7f3b0e3a6a1e4b4",
+      "failure_signature": null,
+      "approved_known_failure": false,
+      "recorded_at": "2026-08-04T00:00:00Z"
+    }
+  ],
+  "known_failures": [],
+  "approved_known_failures": [],
+  "profile_id": "internal_tool",
+  "blocking_reasons": [],
+  "status": "CLEAN",
+  "captured_at": "2026-08-04T00:00:00Z"
+}

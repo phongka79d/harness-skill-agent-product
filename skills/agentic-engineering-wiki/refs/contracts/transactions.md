@@ -23,5 +23,14 @@ is ambiguous.
 operation idempotency. An unfinished or unknown external side effect requires
 reconciliation before resume and must not be retried automatically.
 
+Delivery decisions are a separate transaction boundary owned by
+`finalize_delivery.py`. The decision records one of the supported delivery
+outcomes, current verification and review evidence, typed approval, identity
+hashes, and cleanup intent before a merge, push, or discard operation begins.
+`DISCARD_BRANCH_AND_WORKTREE` remains `PENDING` until identity-proven cleanup
+is separately recorded. A conflict or stale verification persists
+`BLOCKED`/`NEEDS_RECONCILIATION` evidence and never triggers an automatic
+reset, delete, or destructive repair.
+
 The transaction implementation is local filesystem recovery. A distributed
 transaction coordinator is NOT_IMPLEMENTED.

@@ -13,6 +13,7 @@ from typing import Any
 from authorization import AuthorizationError, authorize, require_persisted_approval
 from create_batch_review import artifact_hash as batch_review_artifact_hash
 from create_batch_review import derive_verdict, load_batch_contract
+from finalize_delivery import DeliveryBlocked, validate_delivery_decision
 from runtime_utils import (
     RuntimeLockedError,
     RuntimeNotInitializedError,
@@ -218,6 +219,7 @@ def commit_batch(
     paths: list[str],
     message: str,
     dry_run: bool = False,
+    delivery_decision: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root_path = Path(project_root).expanduser().resolve()
     if not isinstance(batch_id, str) or not batch_id.strip():
@@ -238,6 +240,17 @@ def commit_batch(
             raise CommitRejected(f"current batch contract is invalid: {exc}") from exc
         validate_batch_contract_pin(review, current_contract, allow_legacy=current_contract is None)
         validate_batch_review_semantics(review, root, current_contract)
+        if delivery_decision is not None:
+            if delivery_decision.get("batch_id") != batch_id:
+                raise CommitRejected("delivery decision batch_id does not match commit batch")
+            try:
+                validate_delivery_decision(
+                    delivery_decision,
+                    root_path,
+                    require_persisted_approval=False,
+                )
+            except (DeliveryBlocked, OSError, TypeError, ValueError) as exc:
+                raise CommitRejected(f"delivery finalization gate is not satisfied: {exc}") from exc
         require_persisted_approval(root, approval, target_type="BATCH", target_id=batch_id)
         approval_id = validate_commit_authorization(review, approval, actor=actor)
         operation_path = _operation_path(root, batch_id)
@@ -299,6 +312,7 @@ def main() -> int:
     parser.add_argument("--actor-type", required=True, choices=("user", "primary_agent", "agent", "service"))
     parser.add_argument("--message", required=True)
     parser.add_argument("--path", action="append", required=True, dest="paths")
+    parser.add_argument("--delivery-decision")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     try:
@@ -310,6 +324,7 @@ def main() -> int:
             paths=args.paths,
             message=args.message,
             dry_run=args.dry_run,
+            delivery_decision=read_payload(args.delivery_decision) if args.delivery_decision else None,
         )
     except (RuntimeNotInitializedError, RuntimeLockedError) as exc:
         print(f"COMMIT_BLOCKED: {exc}", file=sys.stderr)

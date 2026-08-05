@@ -25,6 +25,30 @@ def _normalize_path(value: str) -> str:
     return value
 
 
+def _git_identity(root: Path) -> dict[str, Any]:
+    """Return branch/worktree identity without changing the workspace."""
+
+    top_code, top_output, _ = _git(root, "rev-parse", "--show-toplevel")
+    branch_code, branch_output, _ = _git(root, "branch", "--show-current")
+    list_code, list_output, _ = _git(root, "worktree", "list", "--porcelain")
+    project_root = Path(top_output.strip()).expanduser().resolve() if top_code == 0 and top_output.strip() else None
+    branch = branch_output.strip() if branch_code == 0 else ""
+    worktree_paths: list[Path] = []
+    if list_code == 0:
+        for line in list_output.splitlines():
+            if line.startswith("worktree "):
+                worktree_paths.append(Path(line[9:]).expanduser().resolve())
+    main_worktree = worktree_paths[0] if worktree_paths else project_root
+    return {
+        "project_root": str(project_root) if project_root is not None else None,
+        "branch": branch or None,
+        "worktree_path": str(project_root) if project_root is not None else str(root),
+        "main_worktree_path": str(main_worktree) if main_worktree is not None else None,
+        "is_isolated": project_root is not None and main_worktree is not None and project_root != main_worktree,
+        "worktree_registered": project_root is not None and project_root in worktree_paths,
+    }
+
+
 def parse_porcelain(output: str) -> dict[str, list[str]]:
     if not isinstance(output, str):
         raise ValueError("Git status output must be text")
@@ -57,8 +81,16 @@ def parse_porcelain(output: str) -> dict[str, list[str]]:
     return {"staged_paths": sorted(staged), "unstaged_paths": sorted(unstaged), "untracked_paths": sorted(untracked)}
 
 
-def capture_workspace(root: str | Path, *, expected_files: list[str] | None = None, expected_base: str | None = None) -> dict[str, Any]:
+def capture_workspace(
+    root: str | Path,
+    *,
+    expected_files: list[str] | None = None,
+    expected_base: str | None = None,
+    expected_branch: str | None = None,
+    expected_worktree_path: str | Path | None = None,
+) -> dict[str, Any]:
     project = Path(root).expanduser().resolve()
+    identity = _git_identity(project)
     expected = sorted({_normalize_path(item) for item in (expected_files or []) if isinstance(item, str) and item.strip()})
     status_code, status_output, status_error = _git(project, "status", "--porcelain=1", "--untracked-files=all")
     if status_code != 0:
@@ -68,6 +100,7 @@ def capture_workspace(root: str | Path, *, expected_files: list[str] | None = No
             "workspace_status": "NOT_A_REPOSITORY" if "not a git repository" in message.lower() else "UNAVAILABLE",
             "base_commit": expected_base,
             "head_commit": None,
+            **identity,
             "staged_paths": [],
             "unstaged_paths": [],
             "untracked_paths": [],
@@ -100,6 +133,16 @@ def capture_workspace(root: str | Path, *, expected_files: list[str] | None = No
     base = expected_base or head
     if expected_base and head != expected_base:
         reasons.append(f"workspace HEAD {head} does not match checkpoint base_commit {expected_base}")
+    if expected_branch and identity.get("branch") != expected_branch:
+        reasons.append(f"workspace branch {identity.get('branch') or '<detached>'} does not match expected branch {expected_branch}")
+    if expected_worktree_path is not None:
+        expected_worktree = str(Path(expected_worktree_path).expanduser().resolve())
+        if identity.get("worktree_path") != expected_worktree:
+            reasons.append(
+                f"workspace path {identity.get('worktree_path')} does not match expected worktree path {expected_worktree}"
+            )
+    if identity.get("project_root") is None or not identity.get("worktree_registered"):
+        reasons.append("workspace Git worktree identity could not be verified")
     if unexpected:
         reasons.append(f"workspace has unrecorded changed files: {', '.join(unexpected)}")
     if missing:
@@ -110,6 +153,7 @@ def capture_workspace(root: str | Path, *, expected_files: list[str] | None = No
         "workspace_status": "CHANGED" if changed else "CLEAN",
         "base_commit": base,
         "head_commit": head,
+        **identity,
         **parsed,
         "changed_files": changed,
         "expected_files": expected,
@@ -124,10 +168,23 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", required=True)
     parser.add_argument("--expected-base")
+    parser.add_argument("--expected-branch")
+    parser.add_argument("--expected-worktree-path")
     parser.add_argument("--expected-file", action="append", default=[])
     args = parser.parse_args()
     try:
-        print(json.dumps(capture_workspace(args.project_root, expected_files=args.expected_file, expected_base=args.expected_base), indent=2))
+        print(
+            json.dumps(
+                capture_workspace(
+                    args.project_root,
+                    expected_files=args.expected_file,
+                    expected_base=args.expected_base,
+                    expected_branch=args.expected_branch,
+                    expected_worktree_path=args.expected_worktree_path,
+                ),
+                indent=2,
+            )
+        )
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         print(f"WORKSPACE_CAPTURE_FAILED: {exc}", file=sys.stderr)
         return 1

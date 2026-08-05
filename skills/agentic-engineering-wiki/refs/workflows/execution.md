@@ -9,10 +9,12 @@
 4. For `PARALLEL_READ_ONLY`, collect protocol-compliant reports, preserve their inspected files and evidence, and reconcile conflicts or material unknowns before implementation. No worktree is required and no write may be delegated.
 5. Read the central config and deployment overlay, select the model from the configured role ref, and reject refs outside `model_policy.allowed_model_refs` or inside `model_policy.forbidden_model_refs`.
 6. For `ASYNC_ISOLATED_WRITE`, record a dispatch boundary with input revisions, owner, mode, approvals, evidence, and the verified isolation proof. A `REPAIR_REQUIRED` task also requires a canonical, task-bound debugging investigation whose status is `ROOT_CAUSE_CONFIRMED` or `COMPLETED`.
-7. Use locks, leases, checkpoints, operations, and events through `agentic-state-tools`.
-8. Preserve the investigation ID through the repair dispatch identity chain and require matching root-cause and passing regression evidence before a `COMPLETE` handoff.
-9. Build a fresh context for every attempt. Bind it to task/run/attempt/dispatch identity, retain immutable context lineage, and require a meaningful context delta before reissuing a failed or blocked attempt. Reviewers receive contract and evidence, never implementer private reasoning.
-10. Merge isolated writes sequentially only with the required approval and fresh target-branch validation. Neither async workers nor the Batch Reviewer performs an automatic merge.
+7. Before implementation in an isolated worktree, capture and attach a workspace baseline. Confirm the baseline path, branch, base commit, and workspace hash match the worktree registry; stop on `BLOCKED` and preserve approved existing failures as `KNOWN_FAILURES_APPROVED`.
+8. Use locks, leases, checkpoints, operations, and events through `agentic-state-tools`.
+9. Preserve the investigation ID through the repair dispatch identity chain and require matching root-cause and passing regression evidence before a `COMPLETE` handoff.
+10. Build a fresh context for every attempt. Bind it to task/run/attempt/dispatch identity, retain immutable context lineage, and require a meaningful context delta before reissuing a failed or blocked attempt. Reviewers receive contract and evidence, never implementer private reasoning.
+11. Record one controlled delivery outcome through `agentic-delivery-finalizer`; persist final verification, review, approval, hashes, and cleanup intent before any merge, push, or discard side effect.
+12. Merge isolated writes sequentially only with the required approval and fresh target-branch validation. Neither async workers nor the Batch Reviewer performs an automatic merge.
 
 Async write remains disabled unless the current configuration explicitly enables
 it. Read-only parallel exploration and async implementation are independent

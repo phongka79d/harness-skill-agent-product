@@ -26,6 +26,12 @@ skills.
 
 Use `agentic-state-tools` for every canonical write under `.agent/`. Agents may read `.agent/` but must not hand-write state, events, checkpoints, handoffs, reviews, locks, leases, recovery files, or `checklist.md`.
 
+Use `agentic-delivery-finalizer` when accepted work needs a delivery outcome.
+Persist fresh verification, review, approval, identity, and cleanup evidence
+before any merge, push, or destructive cleanup. The finalizer records the
+decision through state-tools; the Batch Reviewer may review integration but
+never performs the merge.
+
 ## Primary and delegation boundaries
 
 The Primary Agent owns architecture, scope, delegation, conflict decisions, and final validation.

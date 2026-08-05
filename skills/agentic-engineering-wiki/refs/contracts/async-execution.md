@@ -36,6 +36,9 @@ Retain all existing Harness requirements:
 - write scopes are disjoint from active work;
 - execution capacity and a valid lease are available;
 - an isolation proof is verified before dispatch;
+- a workspace baseline is captured for the exact external worktree and base
+  commit; `CLEAN` or explicitly approved known failures are required before
+  implementation;
 - task-to-branch-to-worktree identity is bound to the task, run, attempt, dispatch, base commit, plan revision, and write-scope hash;
 - merges remain sequential and approval-backed; async workers and the Batch Reviewer do not merge automatically.
 
@@ -44,6 +47,13 @@ base commit, plan revision, write-scope hash, conflict-check timestamp, and
 `isolation_status: VERIFIED`. Missing, stale, or mismatched proof falls back to
 `SYNC_WRITE` when fallback is allowed, or blocks an explicitly required async
 request.
+
+The baseline contract is owned by
+`skills/agentic-state-tools/scripts/capture_workspace_baseline.py`. It verifies
+the Git worktree identity before running explicitly approved, shell-free setup
+and baseline commands. Existing failures are listed separately and can only be
+carried forward through an explicit approval token; unexpected failures produce
+`BLOCKED`. A baseline from another worktree or base commit is rejected.
 
 `ASYNC_ISOLATED_WRITE` is disabled by default. It must not be inferred from
 available capacity, a request for parallelism, or the eligibility of

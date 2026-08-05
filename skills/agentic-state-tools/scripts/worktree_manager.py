@@ -18,6 +18,7 @@ from typing import Any, Iterator
 
 from runtime_utils import process_is_alive
 from validate_payload import validate
+from write_artifact import write_validated
 
 
 class WorktreeError(ValueError):
@@ -38,7 +39,10 @@ class CleanupBlocked(WorktreeError):
 
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "worktree.schema.json"
 ISOLATION_PROOF_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "isolation-proof.schema.json"
+DELIVERY_DECISION_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "delivery-decision.schema.json"
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+BASELINE_HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+BASELINE_STATUSES = {"CLEAN", "KNOWN_FAILURES_APPROVED", "BLOCKED"}
 
 
 def _now() -> datetime:
@@ -115,6 +119,114 @@ def _validate_task_revision(task_id: str, revision: int) -> None:
         raise WorktreeError("task_id must contain only letters, numbers, dot, underscore, or hyphen")
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
         raise WorktreeError("revision must be a positive integer")
+
+
+def _baseline_updates(entry: dict[str, Any], baseline: dict[str, Any], baseline_path: str | Path | None = None) -> dict[str, Any]:
+    """Validate and project a baseline artifact onto a worktree registry entry."""
+
+    if not isinstance(baseline, dict):
+        raise WorktreeError("workspace baseline must be an object")
+    status = baseline.get("status")
+    if status not in BASELINE_STATUSES:
+        raise WorktreeError("workspace baseline has an unsupported status")
+    if status == "BLOCKED":
+        raise WorktreeError("a BLOCKED workspace baseline cannot authorize implementation")
+    if baseline.get("task_id") != entry.get("task_id"):
+        raise WorktreeError("workspace baseline task identity does not match the worktree")
+    baseline_path_value = baseline.get("worktree_path")
+    if (
+        not isinstance(baseline_path_value, str)
+        or Path(baseline_path_value).expanduser().is_symlink()
+        or Path(baseline_path_value).expanduser().resolve() != Path(str(entry.get("path"))).expanduser().resolve()
+    ):
+        raise WorktreeError("workspace baseline worktree path does not match the registry")
+    for baseline_field, entry_field in (("branch", "branch"), ("base_commit", "base_commit")):
+        if baseline.get(baseline_field) != entry.get(entry_field):
+            raise WorktreeError(f"workspace baseline {baseline_field} does not match the registry")
+    baseline_id = baseline.get("baseline_id")
+    run_id = baseline.get("run_id")
+    workspace_hash = baseline.get("workspace_hash")
+    captured_at = baseline.get("captured_at")
+    if not isinstance(baseline_id, str) or not baseline_id.strip():
+        raise WorktreeError("workspace baseline baseline_id is required")
+    if not isinstance(run_id, str) or not run_id.strip():
+        raise WorktreeError("workspace baseline run_id is required")
+    if not isinstance(workspace_hash, str) or BASELINE_HASH_PATTERN.fullmatch(workspace_hash) is None:
+        raise WorktreeError("workspace baseline workspace_hash must be a lowercase SHA-256 hash")
+    if not isinstance(captured_at, str) or not captured_at.strip():
+        raise WorktreeError("workspace baseline captured_at is required")
+    updates: dict[str, Any] = {
+        "baseline_id": baseline_id,
+        "baseline_run_id": run_id,
+        "baseline_branch": baseline.get("branch"),
+        "baseline_base_commit": baseline.get("base_commit"),
+        "baseline_workspace_hash": workspace_hash,
+        "baseline_status": status,
+        "baseline_captured_at": captured_at,
+    }
+    if baseline_path is not None:
+        updates["baseline_path"] = str(Path(baseline_path).expanduser().resolve())
+    return updates
+
+
+def _delivery_cleanup_context(project_root: Path, entry: dict[str, Any]) -> tuple[Path, dict[str, Any]] | None:
+    """Load a finalizer decision when a worktree is being cleaned."""
+
+    decision_path = project_root / ".agent" / "work" / str(entry.get("task_id")) / "delivery-decision.json"
+    if not decision_path.is_file():
+        if entry.get("baseline_id"):
+            raise CleanupBlocked("worktree baseline requires a persisted delivery decision before cleanup")
+        return None
+    if decision_path.is_symlink():
+        raise CleanupBlocked("delivery decision must not be a symlink")
+    try:
+        decision = json.loads(decision_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise CleanupBlocked("delivery decision is unreadable") from exc
+    if not isinstance(decision, dict) or decision.get("task_id") != entry.get("task_id"):
+        raise CleanupBlocked("delivery decision task identity does not match the worktree")
+    if decision.get("status") not in {"RECORDED", "COMPLETED"}:
+        raise CleanupBlocked("delivery decision is not recorded as a successful decision")
+    if decision.get("outcome") not in {"MERGE_LOCAL", "DISCARD_BRANCH_AND_WORKTREE"}:
+        raise CleanupBlocked("delivery outcome does not authorize worktree cleanup")
+    if decision.get("branch_name") != entry.get("branch") or decision.get("base_commit") != entry.get("base_commit"):
+        raise CleanupBlocked("delivery decision branch or base commit does not match the worktree")
+    try:
+        decision_path_value = Path(str(decision["worktree_path"])).expanduser().resolve()
+        entry_path = Path(str(entry["path"])).expanduser().resolve()
+    except (KeyError, OSError, TypeError, ValueError) as exc:
+        raise CleanupBlocked("delivery decision worktree path is invalid") from exc
+    if decision_path_value != entry_path:
+        raise CleanupBlocked("delivery decision worktree path does not match the registry")
+    cleanup = decision.get("cleanup")
+    if not isinstance(cleanup, dict) or cleanup.get("requested") is not True or cleanup.get("identity_proven") is not True:
+        raise CleanupBlocked("delivery decision does not request identity-proven cleanup")
+    if cleanup.get("status") not in {"PENDING", "CLEANED"}:
+        raise CleanupBlocked("delivery decision cleanup is not pending or completed")
+    approval = decision.get("approval")
+    if not isinstance(approval, dict) or approval.get("decision") != "APPROVED":
+        raise CleanupBlocked("delivery cleanup requires an approved decision")
+    if decision.get("outcome") == "DISCARD_BRANCH_AND_WORKTREE" and approval.get("actor_type") != "user":
+        raise CleanupBlocked("discard cleanup requires a user approval")
+    return decision_path, decision
+
+
+def _persist_cleanup_evidence(project_root: Path, decision_path: Path, decision: dict[str, Any], entry: dict[str, Any]) -> None:
+    cleanup = dict(decision["cleanup"])
+    cleanup.update(
+        {
+            "status": "CLEANED",
+            "operation_id": f"CLEANUP-{entry['task_id']}-{entry['revision']}",
+            "recorded_at": _timestamp(_now()),
+        }
+    )
+    updated = dict(decision)
+    updated["cleanup"] = cleanup
+    current_revision = int(updated.get("revision", 1))
+    updated["previous_revision"] = current_revision
+    updated["revision"] = current_revision + 1
+    relative = decision_path.resolve().relative_to((project_root / ".agent").resolve()).as_posix()
+    write_validated(str(project_root), relative, updated, DELIVERY_DECISION_SCHEMA_PATH)
 
 
 class WorktreeManager:
@@ -280,7 +392,15 @@ class WorktreeManager:
             return True
         return True
 
-    def create(self, task_id: str, revision: int, *, base_ref: str = "HEAD") -> dict[str, Any]:
+    def create(
+        self,
+        task_id: str,
+        revision: int,
+        *,
+        base_ref: str = "HEAD",
+        baseline: dict[str, Any] | None = None,
+        baseline_path: str | Path | None = None,
+    ) -> dict[str, Any]:
         _validate_task_revision(task_id, revision)
         with self.workspace_lock():
             state = self._load_state()
@@ -290,6 +410,13 @@ class WorktreeManager:
                 if existing.get("status") == "STALE":
                     pass
                 elif self._entry_is_live(existing):
+                    if baseline is None:
+                        return copy.deepcopy(existing)
+                    updates = _baseline_updates(existing, baseline, baseline_path)
+                    existing.update(updates)
+                    existing["updated_at"] = _timestamp(_now())
+                    state["entries"][key] = existing
+                    self._save_state(state)
                     return copy.deepcopy(existing)
                 elif self._lease_live(existing):
                     raise StaleMetadata("live lease points to missing or mismatched worktree")
@@ -316,6 +443,8 @@ class WorktreeManager:
             }
             if old is not None:
                 entry["reclaimed_from"] = old.get("branch")
+            if baseline is not None:
+                entry.update(_baseline_updates(entry, baseline, baseline_path))
             state["entries"][key] = entry
             self._save_state(state)
             return copy.deepcopy(entry)
@@ -327,13 +456,15 @@ class WorktreeManager:
             raise WorktreeError(f"worktree mapping does not exist: {task_id}@{revision}")
         return copy.deepcopy(entry)
 
-    def validate_isolation(self, task_id: str, revision: int) -> dict[str, Any]:
+    def validate_isolation(self, task_id: str, revision: int, *, require_baseline: bool = False) -> dict[str, Any]:
         entry = self.get(task_id, revision)
         if entry.get("status") in {"STALE", "RECOVERY_PENDING"} or not self._entry_is_live(entry):
             raise StaleMetadata("worktree isolation is not currently valid")
         if not self._lease_live(entry):
             raise StaleMetadata("worktree lease has expired")
-        return {
+        if require_baseline and entry.get("baseline_status") not in {"CLEAN", "KNOWN_FAILURES_APPROVED"}:
+            raise StaleMetadata("worktree baseline evidence is missing or not approved")
+        proof = {
             "validated_by": "worktree_manager",
             "project_root": str(self.project_root),
             "metadata_path": str(self.metadata_path),
@@ -342,6 +473,41 @@ class WorktreeManager:
             "path": entry["path"],
             "branch": entry["branch"],
         }
+        if entry.get("baseline_id"):
+            proof.update(
+                {
+                    "baseline_id": entry["baseline_id"],
+                    "baseline_workspace_hash": entry.get("baseline_workspace_hash"),
+                    "baseline_status": entry.get("baseline_status"),
+                    "baseline_captured_at": entry.get("baseline_captured_at"),
+                }
+            )
+        return proof
+
+    def attach_baseline(
+        self,
+        task_id: str,
+        revision: int,
+        baseline: dict[str, Any],
+        *,
+        baseline_path: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """Bind a captured baseline to an existing live worktree atomically."""
+
+        _validate_task_revision(task_id, revision)
+        with self.workspace_lock():
+            state = self._load_state()
+            key = self._key(task_id, revision)
+            entry = state["entries"].get(key)
+            if not isinstance(entry, dict):
+                raise WorktreeError(f"worktree mapping does not exist: {task_id}@{revision}")
+            if not self._entry_is_live(entry):
+                raise StaleMetadata("cannot attach a baseline to a non-live worktree")
+            entry.update(_baseline_updates(entry, baseline, baseline_path))
+            entry["updated_at"] = _timestamp(_now())
+            state["entries"][key] = entry
+            self._save_state(state)
+            return copy.deepcopy(entry)
 
     def reclaim(self, task_id: str, revision: int, *, authorized: bool = False) -> dict[str, Any]:
         if not authorized:
@@ -415,6 +581,7 @@ class WorktreeManager:
             superseding_revision = entry.get("superseding_plan_revision") or entry.get("superseded_by_plan_revision") or entry.get("current_plan_revision")
             if isinstance(plan_revision, int) and isinstance(superseding_revision, int) and superseding_revision > plan_revision:
                 raise CleanupBlocked("cleanup is blocked by a superseding plan revision")
+            delivery_context = _delivery_cleanup_context(self.project_root, entry)
             path = Path(str(entry["path"])).expanduser().resolve()
             try:
                 path.relative_to(self.worktree_root)
@@ -433,6 +600,11 @@ class WorktreeManager:
                 if result.returncode:
                     detail = result.stderr.strip() or result.stdout.strip() or "unknown git error"
                     raise CleanupBlocked(f"git worktree remove refused cleanup: {detail}")
+            if delivery_context is not None:
+                try:
+                    _persist_cleanup_evidence(self.project_root, delivery_context[0], delivery_context[1], entry)
+                except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                    raise CleanupBlocked("worktree cleanup completed but delivery evidence could not be persisted") from exc
             entry["cleaned_at"] = _timestamp(_now())
             entry["updated_at"] = _timestamp(_now())
             state["entries"][self._key(task_id, revision)] = entry
@@ -453,8 +625,29 @@ def validate_canonical_isolation_proof(task: dict[str, Any], proof: Any) -> bool
         _parse_timestamp(proof["active_conflicts_checked_at"])
     except (OSError, UnicodeError, TypeError, ValueError, json.JSONDecodeError):
         return False
-    for field in ("task_id", "run_id", "worktree_path", "branch_name", "plan_revision", "write_scope_hash"):
+    if proof.get("baseline_status") == "BLOCKED":
+        return False
+    if proof.get("baseline_id") is not None and any(
+        proof.get(field) is None
+        for field in ("baseline_workspace_hash", "baseline_status", "baseline_captured_at")
+    ):
+        return False
+    for field in (
+        "task_id",
+        "run_id",
+        "worktree_path",
+        "branch_name",
+        "plan_revision",
+        "write_scope_hash",
+        "baseline_id",
+        "baseline_workspace_hash",
+        "baseline_status",
+        "baseline_captured_at",
+    ):
         if field in task and task.get(field) is not None and task.get(field) != proof.get(field):
+            return False
+    if task.get("baseline_required") is True:
+        if proof.get("baseline_id") is None or proof.get("baseline_status") not in {"CLEAN", "KNOWN_FAILURES_APPROVED"}:
             return False
     return True
 
@@ -479,6 +672,13 @@ def validate_isolation_proof(task: dict[str, Any], proof: Any) -> bool:
         entry = state["entries"][f"{proof['task_id']}@{proof['revision']}"]
         if entry.get("path") != proof.get("path") or entry.get("branch") != proof.get("branch"):
             return False
+        for field in ("baseline_id", "baseline_workspace_hash", "baseline_status", "baseline_captured_at"):
+            if field in proof and proof.get(field) != entry.get(field):
+                return False
+        if proof.get("baseline_status") == "BLOCKED":
+            return False
+        if task.get("baseline_required") is True and entry.get("baseline_status") not in {"CLEAN", "KNOWN_FAILURES_APPROVED"}:
+            return False
         if entry.get("status") in {"STALE", "RECOVERY_PENDING"} or not manager._entry_is_live(entry) or not manager._lease_live(entry):
             return False
         return True
@@ -492,12 +692,27 @@ def main() -> int:
     parser.add_argument("--worktree-root", required=True)
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--revision", required=True, type=int)
+    parser.add_argument("--base-ref", default="HEAD")
+    parser.add_argument("--baseline")
+    parser.add_argument("--baseline-path")
     parser.add_argument("--reclaim", action="store_true")
     parser.add_argument("--authorized", action="store_true")
     args = parser.parse_args()
     try:
         manager = WorktreeManager(args.project_root, args.worktree_root)
-        result = manager.reclaim(args.task_id, args.revision, authorized=args.authorized) if args.reclaim else manager.create(args.task_id, args.revision)
+        if args.reclaim:
+            result = manager.reclaim(args.task_id, args.revision, authorized=args.authorized)
+        else:
+            baseline = None
+            if args.baseline:
+                baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+            result = manager.create(
+                args.task_id,
+                args.revision,
+                base_ref=args.base_ref,
+                baseline=baseline,
+                baseline_path=args.baseline_path,
+            )
     except (OSError, ValueError, TypeError, WorktreeError, PermissionError) as exc:
         print(f"WORKTREE_FAILED: {exc}", file=sys.stderr)
         return 1
