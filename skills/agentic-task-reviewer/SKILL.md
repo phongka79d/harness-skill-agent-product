@@ -10,6 +10,17 @@ Read [agentic-configuration](../agentic-configuration/SKILL.md) before selecting
 
 Review evidence; do not repair implementation and do not hand-write the canonical review or verdict.
 
+Task reviews use two ordered stages when required by the active profile:
+
+1. `SPEC_COMPLIANCE` checks approved behavior, acceptance criteria, architecture,
+   scope, write scope, and evidence mapping.
+2. `CODE_QUALITY` runs only after a passing specification stage and checks correctness,
+   maintainability, reuse, tests, and applicable risk criteria.
+
+Every staged review carries an immutable `artifact_identity`. A quality review must
+match the preceding specification identity exactly. If implementation changes after
+quality review, the quality result is stale and a new specification review is required.
+
 ## Read in order
 
 1. `agentic-engineering-core`;
@@ -31,6 +42,10 @@ Review evidence; do not repair implementation and do not hand-write the canonica
 7. Provide exactly one evidence-backed `hard_fail_checks` entry for every canonical hard-fail rule; a missing or triggered check cannot pass.
 8. Submit the review payload to `agentic-state-tools`.
 9. Use the script-generated score and verdict; never override a hard fail with a high score.
+
+For `SPEC_COMPLIANCE`, do not use a quality score to conceal a missing requirement.
+Record the missing requirement as a finding or an explicit failed `spec_compliance`
+result so the generated verdict remains non-passing.
 
 ## Verdict rules
 

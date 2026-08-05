@@ -5,6 +5,16 @@ Policy status: ENFORCED (enforced by `skills/agentic-state-tools/scripts/review_
 ```yaml
 review_id: "REV-SP-01-B01-T01"
 task_id: "SP-01-B01-T01"
+schema_version: 2
+stage: SPEC_COMPLIANCE
+artifact_identity:
+  task_id: "SP-01-B01-T01"
+  task_revision: 3
+  run_id: "RUN-1"
+  attempt_id: "ATT-1"
+  dispatch_id: "DSP-1"
+  workspace_hash: "<sha256>"
+  artifact_hash: "<sha256 of the identity without artifact_hash>"
 review_type: task
 review_contract:
   project_profile: "personal"
@@ -29,6 +39,16 @@ hard_fail_checks:
 findings: []
 reviewer: "task-reviewer"
 ```
+
+`CODE_QUALITY` must additionally include `previous_review_id`,
+`previous_stage: SPEC_COMPLIANCE`, and `previous_artifact_identity`. The state-tools
+writer checks that these values identify the immediately preceding passing
+specification review. A staged review without an artifact identity is rejected.
+
+Profiles `personal`, `quick_change`, and `prototype` require a passing final
+`SPEC_COMPLIANCE` stage. `course_project`, `internal_tool`, `production`, and
+`high_risk` require a passing `SPEC_COMPLIANCE` followed by a passing
+`CODE_QUALITY` stage. A later implementation revision invalidates both prior stages.
 
 The contract and resolved rubric are canonical. A reviewer supplies achieved scores,
 evidence, findings, and one evidence-backed `hard_fail_checks` entry for every

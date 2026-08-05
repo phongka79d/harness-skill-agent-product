@@ -12,7 +12,13 @@ from calculate_rubric_score import calculate, validate_rubric_identity
 from authorization import authorize, require_persisted_approval
 from rebuild_state import rebuild_state_for_root
 from render_checklist import render_checklist
-from review_contract import validate_rubric_against_contract
+from review_contract import (
+    canonical_artifact_hash,
+    required_review_stages,
+    validate_artifact_identity,
+    validate_rubric_against_contract,
+    validate_stage_chain,
+)
 from runtime_utils import (
     RuntimeLockedError,
     RuntimeNotInitializedError,
@@ -29,7 +35,7 @@ from runtime_utils import (
     validate_identifier,
 )
 from validate_transition import is_allowed_transition, validate_transition
-from verification_contract import is_strict_profile
+from verification_contract import is_strict_profile, workspace_hash
 from verify_completion_claim import validate_claim
 from runtime_transaction import RuntimeTransaction, TransactionError
 
@@ -40,6 +46,24 @@ class CleanupRecoveryError(RuntimeError):
     def __init__(self, evidence: dict) -> None:
         self.evidence = evidence
         super().__init__(evidence.get("error", "terminal cleanup recovery is pending"))
+
+
+def _implementation_artifact_identity(project_root: str | Path, task_state: dict, task_revision: int) -> dict:
+    """Build the immutable identity of the implementation snapshot being reviewed."""
+
+    relevant_files = task_state.get("write_scope", [])
+    if not isinstance(relevant_files, list):
+        relevant_files = []
+    identity = {
+        "task_id": task_state.get("task_id"),
+        "task_revision": task_revision,
+        "run_id": task_state.get("run_id"),
+        "attempt_id": task_state.get("attempt_id"),
+        "dispatch_id": task_state.get("dispatch_id"),
+        "workspace_hash": workspace_hash(project_root, relevant_files),
+    }
+    identity["artifact_hash"] = canonical_artifact_hash(identity)
+    return identity
 
 
 def _authorize_review_override(
@@ -216,7 +240,8 @@ def main() -> int:
             task_state = read_object(task_path)
             current_status = str(task_state.get("status", "")).upper()
             existing_review_path = root / "work" / task_id / "review.json"
-            existing_revision = int(read_object(existing_review_path).get("revision", 0)) if existing_review_path.is_file() else 0
+            existing_review = read_object(existing_review_path) if existing_review_path.is_file() else None
+            existing_revision = int(existing_review.get("revision", 0)) if isinstance(existing_review, dict) else 0
             current_task_revision = int(task_state.get("revision", 0))
             lease_path = root / "work" / task_id / "lease.json"
             queue_path = root / "runtime" / "queue.json"
@@ -289,8 +314,63 @@ def main() -> int:
                         raise ValueError(f"review {identity_field} does not match task identity")
                     payload[identity_field] = expected
                 guard_evidence["review"] = payload
+
+            staged_review = payload.get("stage") is not None
+            if (
+                not staged_review
+                and payload.get("legacy_migration") is not True
+                and isinstance(profile_id, str)
+                and profile_id not in {"personal", "quick_change", "prototype"}
+            ):
+                raise ValueError("standard and strict profiles require staged task reviews")
+            if staged_review:
+                if payload.get("schema_version") is None:
+                    payload["schema_version"] = 2
+                stage = payload.get("stage")
+                if stage not in {"SPEC_COMPLIANCE", "CODE_QUALITY"}:
+                    raise ValueError("review.stage must be SPEC_COMPLIANCE or CODE_QUALITY")
+                if payload.get("artifact_identity") is None:
+                    raise ValueError("staged reviews require artifact_identity")
+                if current_status == "COMPLETED":
+                    if stage != "SPEC_COMPLIANCE":
+                        raise ValueError("CODE_QUALITY cannot be the first review stage")
+                    expected_identity = _implementation_artifact_identity(
+                        args.project_root, task_state, current_task_revision
+                    )
+                elif current_status == "REVIEWING":
+                    if stage != "CODE_QUALITY":
+                        raise ValueError("REVIEWING requires the CODE_QUALITY stage")
+                    if not isinstance(existing_review, dict):
+                        raise ValueError("CODE_QUALITY requires a prior SPEC_COMPLIANCE review")
+                    expected_identity = validate_artifact_identity(existing_review.get("artifact_identity"))
+                    payload["previous_review_id"] = existing_review.get("review_id")
+                    payload["previous_stage"] = existing_review.get("stage")
+                    payload["previous_artifact_identity"] = expected_identity
+                    validate_stage_chain(payload, existing_review, profile_id=profile_id)
+                else:
+                    raise ValueError("staged review requires task status COMPLETED or REVIEWING")
+                validate_artifact_identity(payload.get("artifact_identity"), expected=expected_identity)
+                payload["artifact_identity"] = expected_identity
+                if expected_identity.get("task_id") != task_id:
+                    raise ValueError("review.artifact_identity.task_id does not match task_id")
+
+            if staged_review and payload.get("stage") == "SPEC_COMPLIANCE":
+                spec_compliance = payload.get("spec_compliance")
+                if isinstance(spec_compliance, dict) and spec_compliance.get("status") != "PASS":
+                    payload["verdict"] = "REPAIR_REQUIRED"
+            if staged_review and payload.get("stage") == "CODE_QUALITY":
+                if not isinstance(existing_review, dict) or existing_review.get("verdict") != "PASS":
+                    raise ValueError("CODE_QUALITY requires a passing SPEC_COMPLIANCE review")
+
             verdict = payload["verdict"]
             next_status = "ACCEPTED" if verdict == "PASS" else "BLOCKED" if verdict == "BLOCKED" else "REPAIR_REQUIRED"
+            if (
+                staged_review
+                and verdict == "PASS"
+                and payload.get("stage") == "SPEC_COMPLIANCE"
+                and "CODE_QUALITY" in required_review_stages(profile_id)
+            ):
+                next_status = "REVIEWING"
             review_status = current_status
             if current_status == "COMPLETED":
                 if payload.get("legacy_migration") is True:
@@ -301,7 +381,9 @@ def main() -> int:
                 if not allowed:
                     raise ValueError(f"invalid reviewer transition: {current_status} -> REVIEWING")
                 review_status = "REVIEWING"
-            if payload.get("legacy_migration") is True:
+            if staged_review and current_status == "COMPLETED" and next_status == "REVIEWING":
+                allowed = True
+            elif payload.get("legacy_migration") is True:
                 allowed = is_allowed_transition(review_status, next_status, actor="reviewer")
             else:
                 validate_transition(review_status, next_status, actor="reviewer", evidence=guard_evidence)
@@ -355,17 +437,18 @@ def main() -> int:
                 prior_events=prior_events,
             )
             prior_events.append(review_event)
-            _, event_revision, event_content, _ = prepare_event_log(
-                root,
-                {
-                    "type": STATUS_TO_EVENT_TYPE[next_status],
-                    "actor": args.actor,
-                    "task_id": task_id,
-                    "data": {"review_id": payload["review_id"]},
-                },
-                artifact_overrides=event_overrides,
-                prior_events=prior_events,
-            )
+            if not (staged_review and current_status == "COMPLETED" and next_status == "REVIEWING"):
+                _, event_revision, event_content, _ = prepare_event_log(
+                    root,
+                    {
+                        "type": STATUS_TO_EVENT_TYPE[next_status],
+                        "actor": args.actor,
+                        "task_id": task_id,
+                        "data": {"review_id": payload["review_id"]},
+                    },
+                    artifact_overrides=event_overrides,
+                    prior_events=prior_events,
+                )
             transaction = RuntimeTransaction(
                 args.project_root,
                 operation_type="REVIEW",

@@ -6,3 +6,7 @@
 - `SUGGESTION`: optional non-blocking improvement; must not create an infinite repair loop.
 
 Every finding needs evidence, a location when applicable, and a required change.
+
+During `SPEC_COMPLIANCE`, a missing or extra requirement is at least `MAJOR` and
+must not be offset by a weighted quality score. During `CODE_QUALITY`, a behavior or
+scope change requires a fresh specification review against the new artifact identity.

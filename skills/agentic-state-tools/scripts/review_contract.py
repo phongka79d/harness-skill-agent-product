@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from risk_flags import normalize_risk_flags
@@ -30,6 +32,126 @@ RUBRIC_PIN_FIELDS = (
     "rubric_hash",
     "review_policy_version",
 )
+
+REVIEW_STAGES = ("SPEC_COMPLIANCE", "CODE_QUALITY")
+LIGHTWEIGHT_REVIEW_PROFILES = frozenset({"personal", "quick_change", "prototype"})
+
+
+def required_review_stages(profile_id: Any) -> tuple[str, ...]:
+    """Return the final review stages required by the resolved profile."""
+
+    if not isinstance(profile_id, str) or not profile_id.strip():
+        raise ValueError("review profile must be a non-empty string")
+    if profile_id in LIGHTWEIGHT_REVIEW_PROFILES:
+        return ("SPEC_COMPLIANCE",)
+    return REVIEW_STAGES
+
+
+def canonical_artifact_hash(identity: dict[str, Any]) -> str:
+    """Calculate the stable identity hash for the implementation under review."""
+
+    value = dict(identity)
+    value.pop("artifact_hash", None)
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def validate_artifact_identity(identity: Any, *, expected: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Validate the immutable implementation identity carried by a staged review."""
+
+    if not isinstance(identity, dict):
+        raise ValueError("review.artifact_identity must be an object")
+    required = ("task_id", "task_revision", "run_id", "attempt_id", "dispatch_id", "workspace_hash", "artifact_hash")
+    missing = [field for field in required if field not in identity]
+    if missing:
+        raise ValueError("review.artifact_identity is missing fields: " + ", ".join(missing))
+    if not isinstance(identity["task_id"], str) or not identity["task_id"].strip():
+        raise ValueError("review.artifact_identity.task_id must be a non-empty string")
+    if isinstance(identity["task_revision"], bool) or not isinstance(identity["task_revision"], int) or identity["task_revision"] < 1:
+        raise ValueError("review.artifact_identity.task_revision must be a positive integer")
+    for field in ("run_id", "attempt_id", "dispatch_id", "workspace_hash", "artifact_hash"):
+        if not isinstance(identity[field], str) or not identity[field].strip():
+            raise ValueError(f"review.artifact_identity.{field} must be a non-empty string")
+    if len(identity["workspace_hash"]) != 64 or len(identity["artifact_hash"]) != 64:
+        raise ValueError("review.artifact_identity hashes must be SHA-256 values")
+    if identity["artifact_hash"] != canonical_artifact_hash(identity):
+        raise ValueError("review.artifact_identity.artifact_hash does not match its contents")
+    normalized = dict(identity)
+    if expected is not None and normalized != expected:
+        raise ValueError("review artifact identity does not match the prior or current implementation")
+    return normalized
+
+
+def validate_stage_chain(review: Any, prior_review: Any = None, *, profile_id: Any = None) -> dict[str, Any]:
+    """Validate stage ordering and immutable identity for a task review chain."""
+
+    if not isinstance(review, dict):
+        raise ValueError("review must be an object")
+    stage = review.get("stage")
+    if stage not in REVIEW_STAGES:
+        raise ValueError("review.stage must be SPEC_COMPLIANCE or CODE_QUALITY")
+    identity = validate_artifact_identity(review.get("artifact_identity"))
+    if profile_id is not None and stage not in required_review_stages(profile_id):
+        if stage == "CODE_QUALITY" and not isinstance(prior_review, dict):
+            raise ValueError("CODE_QUALITY requires a preceding SPEC_COMPLIANCE review")
+    if stage == "SPEC_COMPLIANCE":
+        if isinstance(prior_review, dict) and prior_review.get("stage") == "CODE_QUALITY":
+            raise ValueError("a new SPEC_COMPLIANCE review is required after a CODE_QUALITY correction")
+        return identity
+    if not isinstance(prior_review, dict) or prior_review.get("stage") != "SPEC_COMPLIANCE":
+        raise ValueError("CODE_QUALITY must follow a passing SPEC_COMPLIANCE review")
+    if str(prior_review.get("verdict", "")).upper() != "PASS":
+        raise ValueError("CODE_QUALITY requires a passing SPEC_COMPLIANCE review")
+    prior_identity = validate_artifact_identity(prior_review.get("artifact_identity"))
+    if identity != prior_identity:
+        raise ValueError("CODE_QUALITY review artifact identity does not match SPEC_COMPLIANCE")
+    if review.get("previous_review_id") != prior_review.get("review_id"):
+        raise ValueError("CODE_QUALITY must link the immediately preceding SPEC_COMPLIANCE review")
+    if review.get("previous_stage") != "SPEC_COMPLIANCE":
+        raise ValueError("CODE_QUALITY previous_stage must be SPEC_COMPLIANCE")
+    if review.get("previous_artifact_identity") != prior_identity:
+        raise ValueError("CODE_QUALITY previous_artifact_identity does not match SPEC_COMPLIANCE")
+    return identity
+
+
+def validate_final_review_stages(
+    reviews: Any,
+    *,
+    profile_id: Any,
+    review_index: dict[str, dict[str, Any]] | None = None,
+) -> None:
+    """Validate the final task-review artifacts consumed by a batch review."""
+
+    if not isinstance(reviews, list) or not reviews:
+        raise ValueError("batch review requires at least one task review")
+    required = required_review_stages(profile_id)
+    for index, review in enumerate(reviews):
+        if not isinstance(review, dict):
+            raise ValueError(f"task review {index} must be an object")
+        stage = review.get("stage")
+        if stage is None:
+            # Existing artifacts are accepted only for the legacy-compatible lightweight path.
+            if required != ("SPEC_COMPLIANCE",):
+                raise ValueError(f"task review {index} has no final review stage")
+            continue
+        if stage != required[-1] or str(review.get("verdict", "")).upper() != "PASS":
+            raise ValueError(f"task review {index} does not have a passing final {required[-1]} stage")
+        validate_artifact_identity(review.get("artifact_identity"))
+        if required == REVIEW_STAGES:
+            if review.get("previous_stage") != "SPEC_COMPLIANCE":
+                raise ValueError(f"task review {index} is missing its SPEC_COMPLIANCE predecessor")
+            if not isinstance(review.get("previous_review_id"), str) or not review["previous_review_id"].strip():
+                raise ValueError(f"task review {index} is missing previous_review_id")
+            previous_identity = validate_artifact_identity(review.get("previous_artifact_identity"))
+            if previous_identity != review.get("artifact_identity"):
+                raise ValueError(f"task review {index} has mismatched stage identities")
+            if review_index is not None:
+                previous_id = review["previous_review_id"]
+                previous_review = review_index.get(previous_id)
+                if not isinstance(previous_review, dict):
+                    raise ValueError(f"task review {index} predecessor is missing: {previous_id}")
+                validate_stage_chain(review, previous_review, profile_id=profile_id)
 
 
 def contract_from_rubric(rubric: Any) -> dict[str, Any]:

@@ -13,7 +13,11 @@ from authorization import require_persisted_approval, validate_approval
 from calculate_rubric_score import calculate, validate_findings, validate_rubric_identity
 from rebuild_state import rebuild_state_for_root
 from render_checklist import render_checklist_for_root
-from review_contract import validate_contract, validate_rubric_against_contract
+from review_contract import (
+    validate_contract,
+    validate_final_review_stages,
+    validate_rubric_against_contract,
+)
 from runtime_utils import (
     RuntimeLockedError,
     RuntimeNotInitializedError,
@@ -249,12 +253,14 @@ def derive_verdict(root: Path, record: dict[str, Any]) -> tuple[str, list[str]]:
             for item in contract["tasks"]
         }
     submitted_task_ids: list[str] = []
+    submitted_reviews: list[dict[str, Any]] = []
     for review_id in record["task_reviews"]:
         item = reviews.get(review_id)
         if item is None:
             reasons.append(f"task review is missing: {review_id}")
             continue
         review, review_path = item
+        submitted_reviews.append(review)
         task_id = review.get("task_id")
         if isinstance(task_id, str) and task_id:
             submitted_task_ids.append(task_id)
@@ -284,6 +290,20 @@ def derive_verdict(root: Path, record: dict[str, Any]) -> tuple[str, list[str]]:
                     validate_rubric_against_contract(review.get("resolved_rubric"), task_contract, review_type="task")
                 except (TypeError, ValueError) as exc:
                     reasons.append(f"task review rubric is not bound to its contract: {review_id}: {exc}")
+
+    if record.get("legacy_migration") is not True:
+        try:
+            validate_final_review_stages(
+                submitted_reviews,
+                profile_id=record.get("profile_id"),
+                review_index={
+                    review.get("review_id"): review
+                    for review, _ in reviews.values()
+                    if isinstance(review.get("review_id"), str)
+                },
+            )
+        except (TypeError, ValueError) as exc:
+            reasons.append(f"task review stages are invalid: {exc}")
 
     if expected_task_ids is not None:
         submitted_task_set = set(submitted_task_ids)

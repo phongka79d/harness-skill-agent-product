@@ -5,6 +5,35 @@
   "properties": {
     "review_id": {"type": "string", "minLength": 1},
     "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "stage": {"type": "string", "enum": ["SPEC_COMPLIANCE", "CODE_QUALITY"]},
+    "artifact_identity": {
+      "type": "object",
+      "required": ["task_id", "task_revision", "run_id", "attempt_id", "dispatch_id", "workspace_hash", "artifact_hash"],
+      "properties": {
+        "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+        "task_revision": {"type": "integer", "minimum": 1},
+        "run_id": {"type": "string", "minLength": 1},
+        "attempt_id": {"type": "string", "minLength": 1},
+        "dispatch_id": {"type": "string", "minLength": 1},
+        "workspace_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "artifact_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "previous_review_id": {"type": "string", "minLength": 1},
+    "previous_stage": {"type": "string", "const": "SPEC_COMPLIANCE"},
+    "previous_artifact_identity": {"$ref": "#/properties/artifact_identity"},
+    "spec_compliance": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED"]},
+        "requirement_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "evidence": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
     "created_at": {"type": "string", "minLength": 1},
     "revision": {"type": "integer", "minimum": 1},
     "criteria": {"type": "array"},
@@ -27,5 +56,22 @@
     "completion_claim": {"type": "object"},
     "legacy_migration": {"type": "boolean"},
     "verdict": {"type": "string", "enum": ["PASS", "BLOCKED", "REPAIR_REQUIRED"]}
-  }
+  },
+  "allOf": [
+    {
+      "if": {"required": ["stage"]},
+      "then": {"required": ["schema_version", "artifact_identity"]}
+    },
+    {
+      "if": {"required": ["stage"], "properties": {"stage": {"const": "CODE_QUALITY"}}},
+      "then": {"required": ["previous_review_id", "previous_stage", "previous_artifact_identity"]}
+    },
+    {
+      "if": {
+        "required": ["profile_id"],
+        "properties": {"profile_id": {"enum": ["course_project", "internal_tool", "production", "high_risk", "high-risk"]}}
+      },
+      "then": {"required": ["stage"]}
+    }
+  ]
 }
