@@ -222,11 +222,13 @@ def _positive_runtime_errors(path: Path, value: Any) -> list[str]:
                 "status": "REVIEWING",
                 "run_id": value["run_id"],
                 "attempt_id": value["attempt_id"],
+                "dispatch_id": value["artifact_identity"]["dispatch_id"],
             })
             _write_json(project / ".agent/work" / task_id / "review.json", {
                 "review_id": value["review_id"],
                 "task_id": task_id,
-                "findings": [{"severity": "MAJOR", "evidence": "bad", "required_change": "fix"}],
+                "artifact_identity": value["artifact_identity"],
+                "findings": [value["finding"]],
                 "verdict": "REPAIR_REQUIRED",
             })
             code, output = _project_cli("create_review_resolution.py", project, value, "--task-id", task_id)
