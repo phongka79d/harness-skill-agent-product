@@ -20,6 +20,7 @@ DEPLOYMENT_SCHEMA = Path(__file__).resolve().parents[1] / "schemas" / "deploymen
 REQUIRED_SECTIONS = (
     "planning",
     "execution",
+    "parallel_read_only",
     "approval_matrix",
     "runtime",
     "checkpoint",

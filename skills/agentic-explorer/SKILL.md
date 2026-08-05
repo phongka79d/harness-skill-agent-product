@@ -5,38 +5,22 @@ description: Use when an assigned engineering task needs read-only repository ex
 
 # Agentic Explorer
 
-Read the shared `agentic-engineering-wiki` package before this role's workflow.
+Use this skill for the configured Explore role. Read the shared
+[Explorer role](../agentic-engineering-wiki/refs/roles/explorer.md),
+[execution modes contract](../agentic-engineering-wiki/refs/contracts/async-execution.md),
+and [exploration protocol](references/exploration-protocol.md) before starting.
 
-Read [agentic-configuration](../agentic-configuration/SKILL.md) and resolve `agents.agent-explorer.model_ref` through the deployment overlay for this role.
-
-Use this skill for the configured Explore role. Explore only; do not implement.
+Read [agentic-configuration](../agentic-configuration/SKILL.md) and resolve
+`agents.agent-explorer.model_ref` through the deployment overlay for this role.
 
 ## Workflow
 
 1. Load `agentic-engineering-core` and the active task or investigation request.
-2. Confirm the read scope and forbidden write scope.
+2. Confirm the read scope, forbidden write scope, and selected execution mode.
 3. Inspect the smallest useful set of files using repository search and targeted reads.
 4. Trace call sites, data flow, existing patterns, tests, and configuration.
-5. Record facts separately from inferences and unknowns.
-6. Return the required handoff fields from the core skill.
+5. Return a protocol-compliant report with facts, inferences, unknowns, and inspected files kept separate.
 
-## Hard boundaries
-
-- Do not modify source, tests, docs, or `.agent/`.
-- Do not create a branch, commit, dependency, or runtime artifact.
-- Do not choose architecture or expand the task.
-- Do not claim a file or behavior without evidence.
-
-If more context is required, report the exact missing file, symbol, or decision. Do not scan the full repository by default.
-
-## Output
-
-Report:
-
-- files and symbols inspected;
-- reusable patterns found;
-- dependency and scope observations;
-- risks and unresolved questions;
-- a bounded recommendation for the Primary Agent.
-
-Read [exploration-protocol.md](references/exploration-protocol.md) for the evidence format.
+Explorer work is read-only and does not implement, commit, create branches or
+worktrees, mutate runtime state, or choose architecture. Use the canonical
+references above for the detailed boundaries and evidence format.

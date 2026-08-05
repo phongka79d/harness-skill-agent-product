@@ -18,7 +18,15 @@ sys.path.insert(0, str(CONFIG_SKILL / "scripts"))
 from load_config import load_config  # noqa: E402
 
 
-VALID_REQUESTED_MODES = {"SYNC", "AUTO", "ASYNC_PREFERRED", "ASYNC_REQUIRED"}
+VALID_REQUESTED_MODES = {
+    "SYNC",
+    "SYNC_WRITE",
+    "AUTO",
+    "PARALLEL_READ_ONLY",
+    "ASYNC_PREFERRED",
+    "ASYNC_REQUIRED",
+    "ASYNC_ISOLATED_WRITE",
+}
 RECOVERY_STATES = {"BLOCKED", "ESCALATED", "RECOVERY_PENDING", "STALE", "RESUMING", "PAUSED", "ABORTED_UNSAFE"}
 TERMINAL_STATES = {"ACCEPTED", "CANCELLED", "SUPERSEDED", "ARCHIVED", "COMPLETED"}
 ASYNC_RISK_FLAGS = {"destructive_operation", "deployment", "schema_migration", "infrastructure", "shared_state", "concurrency"}
@@ -41,8 +49,21 @@ def _requested_mode(task: dict[str, Any]) -> str:
     legacy = {"ASYNC": "ASYNC_PREFERRED", "SYNC": "SYNC", "AUTO": "AUTO"}
     normalized = legacy.get(normalized, normalized)
     if normalized not in VALID_REQUESTED_MODES:
-        raise ValueError("execution policy requested_mode must be SYNC, AUTO, ASYNC_PREFERRED, or ASYNC_REQUIRED")
+        raise ValueError("execution policy requested_mode must be SYNC_WRITE, AUTO, PARALLEL_READ_ONLY, or ASYNC_ISOLATED_WRITE")
     return normalized
+
+
+def _legacy_mode_output(task: dict[str, Any], requested: str, resolved: str) -> str:
+    """Keep old aliases readable while exposing the explicit HSP-502 modes."""
+
+    raw_policy = task.get("execution_policy")
+    raw = raw_policy.get("requested_mode") if isinstance(raw_policy, dict) else task.get("execution_mode", "AUTO")
+    raw = str(raw).upper()
+    if raw in {"SYNC", "AUTO"} and resolved == "SYNC_WRITE":
+        return "SYNC"
+    if raw in {"ASYNC", "ASYNC_PREFERRED", "ASYNC_REQUIRED", "AUTO"} and resolved == "ASYNC_ISOLATED_WRITE":
+        return "ASYNC"
+    return resolved
 
 
 def _active_task_count(active_tasks: list[dict[str, Any]], queue: dict[str, Any]) -> int:
@@ -65,6 +86,125 @@ def _overlaps(left: list[Any], right: list[Any]) -> bool:
             if left_value == right_value or left_value.startswith(right_value + "/") or right_value.startswith(left_value + "/"):
                 return True
     return False
+
+
+def _parallel_read_only_active_count(active_tasks: list[dict[str, Any]], queue: dict[str, Any]) -> int:
+    records: list[dict[str, Any]] = [item for item in active_tasks if isinstance(item, dict)]
+    queue_active = queue.get("active_tasks")
+    if isinstance(queue_active, list):
+        records.extend(item for item in queue_active if isinstance(item, dict))
+    else:
+        queue_tasks = queue.get("tasks")
+        if isinstance(queue_tasks, list):
+            active_statuses = {"RUNNING", "DISPATCHED", "QUEUED_ASYNC", "QUEUED_SYNC", "ASYNC"}
+            records.extend(
+                item
+                for item in queue_tasks
+                if isinstance(item, dict)
+                and str(item.get("status", item.get("queue_state", ""))).upper() in active_statuses
+            )
+    identities: set[str] = set()
+    anonymous = 0
+    for item in records:
+        policy = item.get("execution_policy")
+        requested = policy.get("requested_mode") if isinstance(policy, dict) else item.get("execution_mode")
+        if str(requested or "").upper() != "PARALLEL_READ_ONLY":
+            continue
+        task_id = item.get("task_id")
+        if isinstance(task_id, str) and task_id:
+            identities.add(task_id)
+        else:
+            anonymous += 1
+    return len(identities) + anonymous
+
+
+def _parallel_read_only_reason(
+    task: dict[str, Any],
+    *,
+    config: dict[str, Any],
+    active_tasks: list[dict[str, Any]],
+    queue: dict[str, Any],
+) -> str | None:
+    policy = config.get("parallel_read_only")
+    if not isinstance(policy, dict) or policy.get("capability_enabled") is not True:
+        return "PARALLEL_READ_ONLY_DISABLED"
+    status = str(task.get("status", "")).upper()
+    if status in RECOVERY_STATES:
+        return f"RECOVERY_STATE_{status}"
+    if status in TERMINAL_STATES:
+        return f"TASK_STATE_{status}"
+    if task.get("dependencies_pending") is True:
+        return "DEPENDENCY_NOT_CLEAR"
+    dependencies = task.get("depends_on", [])
+    if not isinstance(dependencies, list) or dependencies:
+        return "PARALLEL_DEPENDENCY_NOT_INDEPENDENT"
+
+    question = task.get("exploration_question", task.get("investigation_question"))
+    if not isinstance(question, str) or not question.strip():
+        return "EXPLORATION_QUESTION_MISSING"
+    if policy.get("require_independent_questions") is True and task.get("independent_question") is not True:
+        return "INDEPENDENT_QUESTION_UNCONFIRMED"
+    normalized_question = question.strip().casefold()
+    for active in active_tasks:
+        if not isinstance(active, dict) or active.get("task_id") == task.get("task_id"):
+            continue
+        active_policy = active.get("execution_policy")
+        active_requested = active_policy.get("requested_mode") if isinstance(active_policy, dict) else active.get("execution_mode")
+        if str(active_requested or "").upper() != "PARALLEL_READ_ONLY":
+            continue
+        active_question = active.get("exploration_question", active.get("investigation_question"))
+        if isinstance(active_question, str) and active_question.strip().casefold() == normalized_question:
+            return "EXPLORATION_QUESTION_NOT_INDEPENDENT"
+
+    write_scope = task.get("write_scope")
+    if policy.get("require_read_only_scope") is True and (not isinstance(write_scope, list) or write_scope):
+        return "READ_ONLY_SCOPE_REQUIRED"
+    if task.get("writes") is True or task.get("can_write") is True:
+        return "READ_ONLY_PERMISSION_REQUIRED"
+    read_scope = task.get("read_scope", task.get("files_to_read", []))
+    if not isinstance(read_scope, list) or not read_scope:
+        return "READ_SCOPE_MISSING"
+
+    if policy.get("require_context_capacity") is True:
+        capacity = task.get("context_capacity_available", task.get("context_available"))
+        if capacity is not True:
+            return "CONTEXT_CAPACITY_UNAVAILABLE"
+        token_capacity = task.get("token_capacity_available", task.get("token_budget_available"))
+        if token_capacity is not True:
+            return "TOKEN_CAPACITY_UNAVAILABLE"
+    if policy.get("require_deterministic_reconciliation") is True:
+        deterministic = task.get("deterministic_reconciliation", task.get("reconcile_deterministically"))
+        strategy = task.get("reconciliation_strategy", task.get("reconciliation_plan"))
+        if deterministic is not True or not isinstance(strategy, str) or not strategy.strip():
+            return "RECONCILIATION_NOT_DETERMINISTIC"
+        contract = task.get("reconciliation_contract")
+        if not isinstance(contract, dict):
+            return "RECONCILIATION_CONTRACT_MISSING"
+        if contract.get("order") != ["task_id", "path", "symbol"]:
+            return "RECONCILIATION_ORDER_UNPINNED"
+        if contract.get("preserve_source_locations") is not True:
+            return "SOURCE_LOCATIONS_UNPRESERVED"
+        if contract.get("block_on_conflict") is not True or contract.get("block_on_material_unknown") is not True:
+            return "RECONCILIATION_BLOCK_POLICY_UNSAFE"
+
+    if policy.get("require_read_only_scope") is True and task.get("write_forbidden") is not True:
+        return "WRITE_PROHIBITION_UNCONFIRMED"
+
+    planning = config.get("planning", {})
+    agents = config.get("agents", {})
+    owner = task.get("owner")
+    aliases = planning.get("owner_aliases", {}) if isinstance(planning, dict) else {}
+    owner_id = aliases.get(owner, owner) if isinstance(aliases, dict) else owner
+    agent = agents.get(owner_id) if isinstance(agents, dict) else None
+    capabilities = agent.get("capabilities", []) if isinstance(agent, dict) else []
+    if not isinstance(agent, dict) or "repository_reading" not in capabilities or "evidence_gathering" not in capabilities:
+        return "EXPLORER_CAPABILITY_MISSING"
+
+    if _parallel_read_only_active_count(active_tasks, queue) >= int(policy.get("max_parallel_tasks", 1)):
+        return "PARALLEL_READ_ONLY_CAPACITY_EXCEEDED"
+    if isinstance(queue.get("available_slots"), int) and queue["available_slots"] < 1:
+        return "QUEUE_SLOT_UNAVAILABLE"
+    return None
 
 
 def _eligibility_reason(
@@ -166,15 +306,32 @@ def resolve_execution_policy(
 ) -> dict[str, Any]:
     requested = _requested_mode(task)
     resolved_at = _timestamp(now)
+    default_resolved = "SYNC_WRITE" if requested not in {"SYNC_WRITE", "SYNC", "AUTO"} else "SYNC"
+    if requested == "SYNC_WRITE":
+        default_resolved = _legacy_mode_output(task, requested, "SYNC_WRITE")
     base = {
         "requested_mode": requested,
-        "resolved_mode": "SYNC",
-        "resolution_reason": "REQUESTED_SYNC" if requested == "SYNC" else "",
+        "resolved_mode": default_resolved,
+        "resolution_reason": "REQUESTED_SYNC_WRITE" if requested == "SYNC_WRITE" else ("REQUESTED_SYNC" if requested == "SYNC" else ""),
         "resolved_by": "resolve_execution_mode",
         "resolved_at": resolved_at,
         "isolation_proof": isolation_proof if isinstance(isolation_proof, dict) else None,
     }
-    if requested == "SYNC":
+    if requested in {"SYNC", "SYNC_WRITE"}:
+        return base
+    if requested == "PARALLEL_READ_ONLY":
+        reason = _parallel_read_only_reason(
+            task,
+            config=config,
+            active_tasks=active_tasks,
+            queue=queue,
+        )
+        if reason is None:
+            base["resolved_mode"] = "PARALLEL_READ_ONLY"
+            base["resolution_reason"] = "PARALLEL_READ_ONLY_ELIGIBLE"
+        else:
+            base["resolved_mode"] = "BLOCKED"
+            base["resolution_reason"] = reason
         return base
     reason = _eligibility_reason(
         task,
@@ -186,13 +343,18 @@ def resolve_execution_policy(
         now=now,
     )
     if reason is None:
-        base["resolved_mode"] = "ASYNC"
+        base["resolved_mode"] = _legacy_mode_output(task, requested, "ASYNC_ISOLATED_WRITE")
         base["resolution_reason"] = "ASYNC_ELIGIBLE"
         return base
     if requested == "ASYNC_REQUIRED":
         base["resolved_mode"] = "BLOCKED"
         base["resolution_reason"] = reason
         return base
+    if requested == "ASYNC_ISOLATED_WRITE":
+        base["resolved_mode"] = "BLOCKED"
+        base["resolution_reason"] = reason
+        return base
+    base["resolved_mode"] = _legacy_mode_output(task, requested, "SYNC_WRITE")
     base["resolution_reason"] = f"FALLBACK_TO_SYNC:{reason}"
     return base
 
@@ -219,7 +381,20 @@ def resolve_execution_mode(
         if dependencies_pending:
             legacy_task["dependencies_pending"] = True
         old_execution = selected_config.get("execution", {})
-        requested = str(legacy_task.get("execution_mode", "auto")).lower()
+        legacy_policy = legacy_task.get("execution_policy")
+        requested_value = legacy_policy.get("requested_mode") if isinstance(legacy_policy, dict) else legacy_task.get("execution_mode", "auto")
+        requested = str(requested_value).lower()
+        if requested in {"sync_write", "parallel_read_only", "async_isolated_write"}:
+            policy = resolve_execution_policy(
+                legacy_task,
+                config=selected_config,
+                active_tasks=[],
+                queue={},
+                lease=None,
+                isolation_proof=isolation_proof,
+                now=None,
+            )
+            return policy["resolved_mode"]
         if requested == "auto":
             requested = str(old_execution.get("default_mode", "sync")).lower()
             if requested == "auto":

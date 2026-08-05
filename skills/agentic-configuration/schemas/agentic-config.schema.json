@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["schema_version", "config_id", "version", "agents", "skill_routing", "planning", "model_policy", "execution", "async_execution", "approval_matrix", "runtime", "checkpoint", "locking", "recovery", "version_control", "documentation", "context_budget", "security", "retention"],
+  "required": ["schema_version", "config_id", "version", "agents", "skill_routing", "planning", "model_policy", "execution", "parallel_read_only", "async_execution", "approval_matrix", "runtime", "checkpoint", "locking", "recovery", "version_control", "documentation", "context_budget", "security", "retention"],
   "properties": {
     "schema_version": {"type": "integer", "enum": [1]},
     "config_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
@@ -65,6 +65,19 @@
         "max_repair_cycles": {"type": "integer", "minimum": 1},
         "async_requires_isolated_worktree": {"type": "boolean"}
       }
+    },
+    "parallel_read_only": {
+      "type": "object",
+      "required": ["capability_enabled", "max_parallel_tasks", "require_independent_questions", "require_read_only_scope", "require_context_capacity", "require_deterministic_reconciliation"],
+      "properties": {
+        "capability_enabled": {"type": "boolean"},
+        "max_parallel_tasks": {"type": "integer", "minimum": 1},
+        "require_independent_questions": {"type": "boolean"},
+        "require_read_only_scope": {"type": "boolean"},
+        "require_context_capacity": {"type": "boolean"},
+        "require_deterministic_reconciliation": {"type": "boolean"}
+      },
+      "additionalProperties": false
     },
     "async_execution": {
       "type": "object",

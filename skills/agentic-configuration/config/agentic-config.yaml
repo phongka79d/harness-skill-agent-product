@@ -157,6 +157,7 @@
       "data_change": "repository_editing",
       "infrastructure": "repository_editing",
       "documentation": "repository_editing",
+      "exploration": "evidence_gathering",
       "testing": "testing",
       "review": "evidence_review"
     }
@@ -174,6 +175,14 @@
     "max_execution_attempts": 2,
     "max_repair_cycles": 3,
     "async_requires_isolated_worktree": true
+  },
+  "parallel_read_only": {
+    "capability_enabled": true,
+    "max_parallel_tasks": 2,
+    "require_independent_questions": true,
+    "require_read_only_scope": true,
+    "require_context_capacity": true,
+    "require_deterministic_reconciliation": true
   },
   "async_execution": {
     "capability_enabled": false,
