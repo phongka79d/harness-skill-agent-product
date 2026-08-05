@@ -46,6 +46,8 @@ quality review, the quality result is stale and a new specification review is re
 For `SPEC_COMPLIANCE`, do not use a quality score to conceal a missing requirement.
 Record the missing requirement as a finding or an explicit failed `spec_compliance`
 result so the generated verdict remains non-passing.
+before writing a `CLOSED` resolution; otherwise leave it `FIXED_PENDING_REREVIEW`.
+before writing a `CLOSED` resolution; otherwise leave it `FIXED_PENDING_REREVIEW`.
 
 ## Verdict rules
 

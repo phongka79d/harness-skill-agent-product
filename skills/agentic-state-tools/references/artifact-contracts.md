@@ -13,6 +13,7 @@ Canonical runtime files:
 .agent/work/<id>/handoff.json     generated handoff
 .agent/work/<id>/verification/<evidence-id>.json generated task-bound verification evidence
 .agent/work/<id>/review.json      generated review
+.agent/work/<id>/review-resolution.json generated latest finding resolution
 .agent/work/<id>/lease.json       generated heartbeat lease
 .agent/locks/{tasks,files,resources}/*.json  generated ownership locks
 .agent/work/<id>/context.json     generated bounded context package
@@ -26,6 +27,11 @@ Canonical runtime files:
 ```
 
 Agents provide payloads. Scripts add timestamps, IDs, revisions, and derived fields, then write atomically.
+
+Review findings are resolved by `create_review_resolution.py`. The artifact binds the
+finding to the current task review and task/run/attempt revision. `CLOSED` is a
+reviewer-only state and must retain correction and re-review evidence; implementers
+can only reach `FIXED_PENDING_REREVIEW` after passing targeted verification.
 
 `debug-investigation.json` is owned by `create_debug_investigation.py`. It is a
 versioned, task/run/attempt-bound evidence artifact. The writer preserves the

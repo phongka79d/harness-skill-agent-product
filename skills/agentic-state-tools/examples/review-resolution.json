@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "resolution_id": "RES-TASK-1-001",
+  "task_id": "TASK-1",
+  "review_id": "REV-TASK-1-2",
+  "finding_id": "finding-1",
+  "run_id": "RUN-1",
+  "attempt_id": "ATT-1",
+  "task_revision": 4,
+  "status": "FIXED_PENDING_REREVIEW",
+  "owner": "agentic-implementer",
+  "actor": "agentic-implementer",
+  "previous_resolution_id": null,
+  "previous_status": null,
+  "rationale": "The finding was corrected within the approved task scope.",
+  "evidence": {"summary": "The contract and changed files were checked before the correction.", "references": ["skills/example.py"]},
+  "correction": {"summary": "Updated the behavior covered by the finding.", "changed_files": ["skills/example.py"]},
+  "verification": {"command": "python -m unittest tests.unit.test_example", "exit_code": 0, "status": "PASS", "evidence_ids": ["VE-TASK-1-1"]},
+  "re_review": null,
+  "created_at": "2026-08-05T00:00:00Z",
+  "updated_at": "2026-08-05T00:00:00Z",
+  "revision": 1
+}

@@ -12,3 +12,7 @@ by `review_contract.py`; a quality score cannot make a missing specification
 requirement pass. Batch consumers use the profile's required final stage: lightweight
 profiles may finish at specification compliance, while standard and strict profiles
 require both stages with the same implementation identity.
+reject with evidence, request clarification, supersede, or mark a correction
+`FIXED_PENDING_REREVIEW`; only a reviewer can mark it `CLOSED` after fresh re-review.
+reject with evidence, request clarification, supersede, or mark a correction
+`FIXED_PENDING_REREVIEW`; only a reviewer can mark it `CLOSED` after fresh re-review.

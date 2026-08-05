@@ -11,3 +11,8 @@ Invalidate affected evidence after every material edit. Report failures,
 skips, blockers, and stale or not-run checks honestly; do not turn a summary or
 prior-run result into `PASS`. Do not redesign architecture, lower profile
 strictness, hand-write `.agent/` files, or use a prose-only exception.
+
+Review findings are resolved explicitly through `create_review_resolution.py`.
+Verify suggestions against the task contract and actual usage before accepting them;
+reject them only with concrete evidence. A correction is not closed until the
+reviewer performs a fresh re-review.

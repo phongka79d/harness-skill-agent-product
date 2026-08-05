@@ -86,3 +86,4 @@ cannot be reported as `FIXED` or `PASS` without an accepted exception.
 On a blocker, stop before the next side effect, record the blocker payload through the state tools, and report the required decision.
 
 Read [implementation-loop.md](references/implementation-loop.md) and [handoff-template.md](references/handoff-template.md).
+Read [review-feedback-resolution.md](references/review-feedback-resolution.md) when a task has review findings. Findings must be explicitly resolved; do not silently ignore or blindly implement reviewer suggestions.
