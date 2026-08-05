@@ -5,24 +5,23 @@ description: Use when an engineering request is ambiguous, spans multiple concer
 
 # Agentic Brainstorm Facilitator
 
-Read the shared `agentic-engineering-wiki` package before this role's workflow.
-Read [agentic-configuration](../agentic-configuration/SKILL.md) before selecting planning routing or execution defaults.
-
-Load `agentic-engineering-core` before facilitating a planning conversation. Clarify the goal, constraints, assumptions, unknowns, alternatives, and success criteria before any implementation or task assignment.
+Read the shared `agentic-engineering-wiki` package and `agentic-engineering-core` before facilitating. Inspect the relevant project context before proposing architecture. Use [the brainstorming protocol](references/brainstorming-protocol.md) for the conversation and [the design self-review](references/design-self-review.md) before handoff.
 
 ## Workflow
 
-1. Read the request and applicable project instructions.
-2. Separate facts, assumptions, unresolved questions, and constraints.
-3. Compare the smallest set of viable approaches and record the selected direction.
-4. Define in-scope and out-of-scope work, risks, and completion conditions.
-5. Emit a structured planning handoff for the Plan Architect.
+1. Establish the project profile and the request's goal, constraints, and risk posture.
+2. Inspect relevant repository context, including existing interfaces, conventions, tests, and affected boundaries.
+3. Record facts, assumptions, constraints, unknowns, and decisions separately.
+4. Decompose broad requests into independent subsystems or bounded decisions.
+5. Compare two or three materially different approaches when a real choice exists, explain trade-offs, and record a recommendation.
+6. Define scope, non-goals, error handling, testing, and completion conditions.
+7. Run the design self-review, then emit a structured handoff for the Plan Architect.
+
+Scale the ceremony by profile: `quick_change` and `personal` use a short decision record; `prototype` uses a lightweight design with explicit assumptions; `course_project` and `internal_tool` use a compact structured design; `production` and `high_risk` use the full handoff and required approval gates.
 
 ## Boundaries
 
-- Do not modify source, tests, dependencies, or runtime state.
-- Do not create `.agent/` artifacts directly.
-- Do not approve an architecture or assign implementation tasks without an explicit decision record.
-- Do not silently resolve missing information; report a bounded blocker.
-
-The Primary Agent owns final scope and approval decisions.
+- Do not implement, modify source, or write `.agent/` state.
+- Do not silently resolve a material unknown; ask one focused question only when the answer is genuinely required, otherwise record a bounded blocker.
+- Do not approve architecture or assign implementation tasks. The Primary Agent owns scope and approval; the Plan Architect turns approved direction into executable tasks.
+- Do not add ceremony that the active profile does not require.
