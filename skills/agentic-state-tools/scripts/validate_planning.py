@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ from load_config import load_config  # noqa: E402
 from authorization import require_persisted_approval  # noqa: E402
 from review_contract import validate_contract  # noqa: E402
 from risk_flags import normalize_risk_flags  # noqa: E402
+from validate_no_placeholders import find_placeholders  # noqa: E402
 
 
 SCHEMAS = {
@@ -131,6 +133,215 @@ def has_dependency_path(left: str, right: str, task_edges: dict[str, list[str]])
         visited.add(node)
         pending.extend(task_edges.get(node, []))
     return False
+
+
+_EXACT_PATH_FORBIDDEN = re.compile(r"(^/|^[A-Za-z]:[\\/]|\.\.|[*?\[\]])")
+_HIDDEN_ARCHITECTURE = re.compile(
+    r"\b(?:choose|select|pick|decide)\s+(?:an?\s+|the\s+)?"
+    r"(?:architecture|database|framework|library|protocol|interface|design)\b|"
+    r"\b(?:design|architect)\s+(?:an?\s+|the\s+)?"
+    r"(?:new\s+)?(?:architecture|api|protocol|system)\b|"
+    r"\bintroduce\s+(?:an?\s+|the\s+)?(?:new\s+)?(?:architecture|framework|protocol)\b",
+    re.IGNORECASE,
+)
+_COMMAND_PREFIX = re.compile(
+    r"^(?:python(?:\s|$)|py\s|pytest\b|(?:python|py)\s+-m\s|"
+    r"npm\b|pnpm\b|yarn\b|cargo\b|go\b|make\b|dotnet\b|"
+    r"bash\b|pwsh\b|powershell\b|git\s+(?:diff|status|check)|"
+    r"[A-Za-z]:\\|\./|\.\\)",
+    re.IGNORECASE,
+)
+
+
+def _is_executable_task(task: dict[str, Any]) -> bool:
+    return task.get("contract_mode") == "executable" or task.get("strict") is True
+
+
+def _string_list(value: Any) -> list[str] | None:
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+        return None
+    return [item.strip() for item in value]
+
+
+def _normalize_repo_path(value: str) -> str:
+    return normalize_scope(value).replace("\\", "/")
+
+
+def _valid_exact_path(value: str) -> bool:
+    normalized = _normalize_repo_path(value)
+    return bool(normalized and normalized != "." and not normalized.endswith("/") and not _EXACT_PATH_FORBIDDEN.search(normalized))
+
+
+def _scope_contains(scope: str, path: str) -> bool:
+    normalized_scope = _normalize_repo_path(scope)
+    normalized_path = _normalize_repo_path(path)
+    return normalized_scope == "." or normalized_path == normalized_scope or normalized_path.startswith(normalized_scope + "/")
+
+
+def _expected_result_is_present(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    return isinstance(value, dict) and isinstance(value.get("result"), str) and bool(value["result"].strip())
+
+
+def _validate_executable_task(task: dict[str, Any], decisions: list[dict[str, Any]], errors: list[str]) -> None:
+    task_id = str(task.get("task_id"))
+    required = (
+        "prerequisite_decisions", "exact_paths", "relevant_symbols", "allowed_files", "forbidden_files",
+        "dependency_ids", "implementation_steps", "validation_mode", "validation_steps", "red_required",
+        "expected_green", "verification_commands", "acceptance_criteria_ids", "handoff_expectations",
+        "file_responsibility_map",
+    )
+    for field in required:
+        if field not in task:
+            errors.append(f"executable task {task_id} requires field: {field}")
+
+    placeholder_errors = find_placeholders(task)
+    errors.extend(f"task {task_id} {finding}" for finding in placeholder_errors)
+
+    exact_paths = _string_list(task.get("exact_paths")) or []
+    allowed_files = _string_list(task.get("allowed_files")) or []
+    forbidden_files = _string_list(task.get("forbidden_files")) or []
+    dependency_ids = _string_list(task.get("dependency_ids")) or []
+    depends_on = _string_list(task.get("depends_on")) or []
+    implementation_steps = _string_list(task.get("implementation_steps")) or []
+    validation_steps = _string_list(task.get("validation_steps")) or []
+    verification_commands = _string_list(task.get("verification_commands")) or []
+    acceptance_ids = _string_list(task.get("acceptance_criteria_ids")) or []
+    handoff = _string_list(task.get("handoff_expectations")) or []
+
+    for field, values in (("exact_paths", exact_paths), ("allowed_files", allowed_files), ("forbidden_files", forbidden_files)):
+        for path in values:
+            if not _valid_exact_path(path):
+                errors.append(f"executable task {task_id} {field} contains a non-exact repository path: {path}")
+    if set(exact_paths) - set(allowed_files):
+        missing = sorted(set(exact_paths) - set(allowed_files))
+        errors.append(f"executable task {task_id} exact_paths are not all allowed_files: {', '.join(missing)}")
+    forbidden_overlap = sorted(set(forbidden_files) & (set(exact_paths) | set(allowed_files)))
+    if forbidden_overlap:
+        errors.append(f"executable task {task_id} allowed and forbidden files overlap: {', '.join(forbidden_overlap)}")
+    if sorted(dependency_ids) != sorted(depends_on):
+        errors.append(f"executable task {task_id} dependency_ids must exactly match depends_on")
+    if len(exact_paths) > 32 or len(implementation_steps) > 20:
+        errors.append(f"executable task {task_id} exceeds the bounded one-attempt task size")
+
+    write_scope = task.get("write_scope", [])
+    if isinstance(write_scope, list):
+        for path in exact_paths:
+            if not any(isinstance(scope, str) and _scope_contains(scope, path) for scope in write_scope):
+                errors.append(f"executable task {task_id} exact path is outside write_scope: {path}")
+    else:
+        errors.append(f"executable task {task_id} write_scope must be an array")
+
+    criterion_ids = [item.get("criterion_id") for item in task.get("acceptance_criteria", []) if isinstance(item, dict)]
+    if len(criterion_ids) != len(set(criterion_ids)):
+        errors.append(f"executable task {task_id} has duplicate acceptance criterion IDs")
+    if sorted(acceptance_ids) != sorted(str(item) for item in criterion_ids):
+        errors.append(f"executable task {task_id} acceptance_criteria_ids must exactly match acceptance criteria")
+
+    validation_mode = task.get("validation_mode")
+    red_required = task.get("red_required")
+    if validation_mode not in {"TDD", "ALTERNATIVE"}:
+        errors.append(f"executable task {task_id} validation_mode must be TDD or ALTERNATIVE")
+    if not isinstance(red_required, bool):
+        errors.append(f"executable task {task_id} red_required must be boolean")
+    elif validation_mode == "TDD" and not red_required:
+        errors.append(f"executable task {task_id} TDD validation requires red_required=true")
+    if red_required and not _expected_result_is_present(task.get("expected_red")):
+        errors.append(f"executable task {task_id} requires an expected_red result")
+    if not _expected_result_is_present(task.get("expected_green")):
+        errors.append(f"executable task {task_id} requires an expected_green result")
+    if not verification_commands:
+        errors.append(f"executable task {task_id} requires exact verification commands")
+    for command in verification_commands:
+        if not _COMMAND_PREFIX.search(command.strip()):
+            errors.append(f"executable task {task_id} verification command is not executable: {command}")
+    if validation_steps and not any(_COMMAND_PREFIX.search(step.strip()) for step in validation_steps):
+        errors.append(f"executable task {task_id} validation_steps contain no runnable command or explicit test action")
+
+    risk_flags = task.get("risk_flags", {})
+    risk_active = isinstance(risk_flags, dict) and any(bool(value) for value in risk_flags.values())
+    if risk_active and (
+        not isinstance(task.get("rollback_recovery_note"), str)
+        or not task["rollback_recovery_note"].strip()
+    ):
+        errors.append(f"executable task {task_id} requires rollback_recovery_note when risk_flags are active")
+
+    architecture_decision_ids = {item.get("decision_id") for item in decisions if isinstance(item, dict)}
+    accepted_decision_ids = {
+        item.get("decision_id") for item in decisions
+        if isinstance(item, dict) and str(item.get("status", "")).upper() == "ACCEPTED"
+    }
+    for decision_id in task.get("prerequisite_decisions", []):
+        if decision_id not in architecture_decision_ids:
+            errors.append(f"executable task {task_id} references unknown prerequisite decision: {decision_id}")
+        elif decision_id not in accepted_decision_ids:
+            errors.append(f"executable task {task_id} requires unapproved prerequisite decision: {decision_id}")
+
+    if not task.get("architecture_decisions") and _HIDDEN_ARCHITECTURE.search(
+        " ".join([str(task.get("objective", "")), *implementation_steps])
+    ):
+        errors.append(f"executable task {task_id} contains a hidden architecture decision")
+
+    responsibility_map = task.get("file_responsibility_map", [])
+    map_paths: set[str] = set()
+    relevant_symbols = set(_string_list(task.get("relevant_symbols")) or [])
+    if isinstance(responsibility_map, list):
+        for entry in responsibility_map:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("path")
+            if isinstance(path, str):
+                normalized = _normalize_repo_path(path)
+                map_paths.add(normalized)
+                if normalized not in {_normalize_repo_path(item) for item in exact_paths}:
+                    errors.append(f"executable task {task_id} responsibility map path is not in exact_paths: {path}")
+            for symbol in entry.get("symbols", []):
+                if symbol not in relevant_symbols:
+                    errors.append(f"executable task {task_id} responsibility symbol is not listed in relevant_symbols: {symbol}")
+                if isinstance(symbol, str) and "::" in symbol and _normalize_repo_path(symbol.split("::", 1)[0]) != _normalize_repo_path(str(path)):
+                    errors.append(f"executable task {task_id} symbol/interface path is inconsistent: {symbol}")
+    if map_paths != {_normalize_repo_path(item) for item in exact_paths}:
+        errors.append(f"executable task {task_id} file_responsibility_map must cover every exact_path exactly once")
+
+    for reference in relevant_symbols:
+        if "::" in reference:
+            path, symbol = reference.split("::", 1)
+            if not path or not symbol or _normalize_repo_path(path) not in map_paths:
+                errors.append(f"executable task {task_id} relevant symbol/interface is not mapped: {reference}")
+
+
+def _validate_executable_cross_task_ownership(tasks: list[dict[str, Any]], errors: list[str]) -> None:
+    paths: dict[str, tuple[str, str]] = {}
+    symbols: dict[str, tuple[str, str, str]] = {}
+    for task in tasks:
+        if not _is_executable_task(task):
+            continue
+        task_id = str(task.get("task_id"))
+        for entry in task.get("file_responsibility_map", []):
+            if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+                continue
+            path = _normalize_repo_path(entry["path"])
+            owner = str(entry.get("owner", ""))
+            previous = paths.get(path)
+            if previous:
+                errors.append(
+                    f"executable task scope overlap: {task_id}:{path} already owned by {previous[1]} in {previous[0]}"
+                )
+            else:
+                paths[path] = (task_id, owner)
+            for symbol in entry.get("symbols", []):
+                if not isinstance(symbol, str):
+                    continue
+                key = symbol if "::" in symbol else f"{path}::{symbol}"
+                previous_symbol = symbols.get(key)
+                if previous_symbol and previous_symbol[1] != owner:
+                    errors.append(
+                        f"executable task symbol/interface ownership conflict: {key} belongs to "
+                        f"{previous_symbol[1]} in {previous_symbol[0]} and {owner} in {task_id}"
+                    )
+                elif not previous_symbol:
+                    symbols[key] = (task_id, owner, path)
 
 
 def _approval_records(manifest: dict[str, Any], approval_root: str | Path | None = None, groups: set[str] | None = None) -> list[dict[str, Any]]:
@@ -415,6 +626,9 @@ def validate_relationships(manifest: dict[str, Any], errors: list[str], approval
                 validate_contract(task.get("review_contract"), review_type="task")
             except (TypeError, ValueError) as exc:
                 errors.append(f"task {task_id} review_contract invalid: {exc}")
+        if _is_executable_task(task):
+            _validate_executable_task(task, decisions, errors)
+    _validate_executable_cross_task_ownership(tasks, errors)
     detect_cycles(task_ids, task_edges, "task", errors)
     detect_cycles(batch_ids, {item.get("batch_id"): list(item.get("depends_on", [])) for item in batches}, "batch", errors)
 

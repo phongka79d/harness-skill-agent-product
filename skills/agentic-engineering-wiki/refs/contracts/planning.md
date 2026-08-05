@@ -22,6 +22,24 @@ acceptance criteria; an untraced requirement is a validation error unless it is
 deprecated.
 
 - Feature: planning validation command=`skills/agentic-state-tools/scripts/validate_planning.py` schema=`skills/agentic-state-tools/schemas/planning-task.schema.json`
+- Feature: placeholder validation command=`skills/agentic-state-tools/scripts/validate_no_placeholders.py`
+
+## Executable task contract
+
+Legacy tasks remain readable. A new task opts into the stricter contract with
+`contract_mode: executable` (or `strict: true`). Such a task is independently
+executable: it carries prerequisite decision IDs, exact repository paths,
+relevant symbols/interfaces, allowed and forbidden files, dependency IDs,
+implementation and validation steps, expected RED/GREEN results, exact
+verification commands, acceptance-criterion IDs, handoff expectations, and a
+file responsibility map. Active risk flags also require a rollback/recovery
+note.
+
+The validator rejects path ambiguity, mismatched dependency or acceptance IDs,
+hidden architecture choices, conflicting file ownership, inconsistent qualified
+symbols (`path/to/file.py::symbol`), unbounded task size, and vague placeholder
+instructions. `verification` remains readable for old artifacts; executable
+tasks use `verification_commands` as the exact command list.
 
 ## Transition Matrix
 

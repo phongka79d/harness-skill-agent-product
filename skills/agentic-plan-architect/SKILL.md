@@ -7,6 +7,9 @@ description: Use when an approved engineering direction must become machine-vali
 
 Read the shared `agentic-engineering-wiki` package before this role's workflow.
 Read [agentic-configuration](../agentic-configuration/SKILL.md) before selecting planning routing or approval defaults.
+Read [the executable task design](references/executable-task-design.md) and
+[the file responsibility map](references/file-responsibility-map.md) before
+creating atomic tasks.
 
 Load `agentic-engineering-core` and the approved brainstorm handoff before writing planning documents. Convert the approved direction into explicit, bounded contracts under the project's documentation area.
 
@@ -15,8 +18,16 @@ Load `agentic-engineering-core` and the approved brainstorm handoff before writi
 1. Read the approved scope, architecture decision, constraints, and risk posture.
 2. Define the Master Plan, Sub-plans, Batches, and Atomic Tasks with traceable IDs.
 3. Record decisions, assumptions, risks, dependencies, write scopes, acceptance criteria, and verification.
-4. Resolve the project profile and review rubric with `agentic-state-tools`.
-5. Run `validate_planning.py` and stop on any contract or relationship error.
+4. For new work, mark each task `contract_mode: executable` and include exact
+   paths, relevant symbols/interfaces, allowed and forbidden files, dependency
+   IDs, implementation steps, validation mode, expected RED/GREEN results,
+   exact commands, acceptance IDs, rollback/recovery, handoff expectations,
+   and a file responsibility map.
+5. Keep architecture choices in approved decision records; a task may refer to
+   decisions but may not hide a new choice in an implementation step.
+6. Resolve the project profile and review rubric with `agentic-state-tools`.
+7. Run `validate_no_placeholders.py` for the task and `validate_planning.py`
+   for the bundle; stop on any contract, placeholder, or relationship error.
 
 ## Verification planning
 
@@ -43,5 +54,8 @@ success by summary alone.
 - Do not place plans or reusable instructions in `.agent/`.
 - Do not invent missing architecture decisions, requirements, or dependencies.
 - Do not create overlapping write scopes without an explicit approved change.
+- Do not copy full implementation bodies into a task. Include snippets only to
+  pin a public interface, schema, migration, fixture, or otherwise non-inferable
+  cross-task protocol.
 
 The Primary Agent owns architecture approval and routing.

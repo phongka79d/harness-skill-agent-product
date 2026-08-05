@@ -8,7 +8,11 @@ Planning begins with an approved direction, not an implementation guess. The Bra
 4. Compare two or three materially different approaches when a real choice exists; record trade-offs and the authorized recommendation.
 5. Run the design self-review for contradiction, ambiguity, placeholders, missing requirements, and unnecessary scope. Material unresolved findings are blockers, not silent assumptions.
 6. Create versioned plans and atomic task contracts in the project documentation area.
-7. Validate schemas, dependencies, scope overlap, approvals, and handoffs.
-8. Obtain the required approval before execution.
+7. For each new executable task, define the file responsibility map before
+   assigning atomic work, keep dependency IDs identical to `depends_on`, and
+   separate approved architecture decisions from implementation steps.
+8. Validate schemas, dependencies, scope overlap, approvals, handoffs,
+   placeholders, symbols/interfaces, and bounded task size.
+9. Obtain the required approval before execution.
 
 The detailed brainstorm protocol and self-review remain in `agentic-brainstorm-facilitator`; this Wiki entry is routing guidance. Plan changes create a new version and an immutable supersede link. Historical plan evidence is never edited in place.
