@@ -3,7 +3,7 @@
   "contract_id": "BATCH-CONTRACT-B-V1-R1",
   "plan_id": "MP-V1",
   "plan_revision": 1,
-  "plan_hash": "47fc6e860fc0da1d291e59fbd61a647f7b83c3dc1a638e0b4e0254282b4b0a91",
+  "plan_hash": "7ef48bf2fe4e65e77d2a3bd623da547a52aa4473534607b7e9690b15721edc7c",
   "plan_approval_id": "APR-MP-V1-1",
   "batch_id": "B-V1",
   "batch_revision": 1,
@@ -11,28 +11,28 @@
     {
       "task_id": "T-V1",
       "task_revision": 1,
-      "review_contract_hash": "007251c14fb53bfe9f586b6a3917743ec2097be4118dee50adde85a4934cbf7b",
+      "review_contract_hash": "a81a313c8ac134c0109b3d4cf67326c68ec20a2f97b09ccfed0c15c2c96f7a64",
       "rubric_id": "TASK_REVIEW_BACKEND_LIGHTWEIGHT_V1",
       "rubric_version": "1.1",
-      "rubric_hash": "ebb470252d77a1309f35dbbbe4e924b687c336b5ab824807ccc40ae53cbbce31"
+      "rubric_hash": "e9064bbddeb5838b3c77e1dc9ab33c88420c832329703da95d0498c7f8517ff3"
     }
   ],
   "review_contract": {
     "project_profile": "personal",
-    "profile_hash": "68d3cbf1f0092461f7d62df20e4e3c1c74dc39d4ed59da59c56f9b1836c6848a",
+    "profile_hash": "d797c0c42d7f88fe34a1101f635fffc128946321f802336489471698dd865851",
     "task_type": "standard",
     "risk_flags": {},
     "review_type": "batch",
     "rubric_id": "BATCH_REVIEW_STANDARD_LIGHTWEIGHT_V1",
     "rubric_version": "1.1",
-    "rubric_hash": "b16300c8b50c19af42cb97f0a402e65ec545931397025bf0cf283efd4088c167",
+    "rubric_hash": "3602be7ff82704fd97ac1851384b949659519a4d738b4bef8bfafc9e1eb710fa",
     "review_policy_version": "1"
   },
   "rubric_id": "BATCH_REVIEW_STANDARD_LIGHTWEIGHT_V1",
   "rubric_version": "1.1",
-  "rubric_hash": "b16300c8b50c19af42cb97f0a402e65ec545931397025bf0cf283efd4088c167",
+  "rubric_hash": "3602be7ff82704fd97ac1851384b949659519a4d738b4bef8bfafc9e1eb710fa",
   "revision": 1,
   "previous_revision": null,
   "created_at": "2026-08-04T00:00:00Z",
-  "contract_hash": "11151e92ea782094411e4d7ddee12e16d7ea350cd66e0c77b20bae258894752b"
+  "contract_hash": "bec6dfd24e3627e9c88385c89da3e51765fa38ca0c071958db619adc24ffd555"
 }

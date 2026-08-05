@@ -1,0 +1,41 @@
+{
+  "claim_id": "C-EXAMPLE-VERIFY-1",
+  "claim": "complete",
+  "task_id": "T-EXAMPLE-VERIFY",
+  "plan_revision": 2,
+  "run_id": "RUN-EXAMPLE-VERIFY",
+  "attempt_id": "ATTEMPT-EXAMPLE-VERIFY-1",
+  "task_revision": 5,
+  "workspace_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "profile_id": "production",
+  "change_kind": "behavior_change",
+  "evidence_ids": [
+    "E-LINT-EXAMPLE-1",
+    "E-TYPECHECK-EXAMPLE-1",
+    "E-TEST-FOCUSED-EXAMPLE-1",
+    "E-TEST-BROAD-EXAMPLE-1",
+    "E-BUILD-EXAMPLE-1",
+    "E-PACKAGE-EXAMPLE-1",
+    "E-REQUIREMENTS-EXAMPLE-1"
+  ],
+  "acceptance_criteria": [
+    {
+      "criterion_id": "AC-EXAMPLE-BEHAVIOR",
+      "evidence_ids": [
+        "E-TEST-FOCUSED-EXAMPLE-1",
+        "E-TEST-BROAD-EXAMPLE-1",
+        "E-REQUIREMENTS-EXAMPLE-1"
+      ]
+    },
+    {
+      "criterion_id": "AC-EXAMPLE-DELIVERY",
+      "evidence_ids": [
+        "E-LINT-EXAMPLE-1",
+        "E-TYPECHECK-EXAMPLE-1",
+        "E-BUILD-EXAMPLE-1",
+        "E-PACKAGE-EXAMPLE-1",
+        "E-REQUIREMENTS-EXAMPLE-1"
+      ]
+    }
+  ]
+}

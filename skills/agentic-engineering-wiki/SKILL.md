@@ -21,6 +21,7 @@ Read `agentic-configuration/SKILL.md` before selecting models, role capabilities
 | Planning workflow | [planning](refs/workflows/planning.md), [planning contract](refs/contracts/planning.md) |
 | Execution and dispatch | [execution](refs/workflows/execution.md), [handoff contract](refs/contracts/handoff.md) |
 | Product/code debugging symptoms | `agentic-systematic-debugging` for evidence-first root-cause investigation |
+| Completion, readiness, merge, or release claims | `agentic-verification-before-completion` for fresh evidence and claim mapping |
 | Review and quality | [review](refs/workflows/review.md), [rubric contract](refs/contracts/rubric.md), [validation policy](refs/policies/validation.md) |
 | Interrupted runtime state or uncertain side effects | `agentic-runtime-recovery`; do not use product debugging to decide resume safety |
 | Recovery and cleanup | [recovery](refs/workflows/recovery.md), [delegation policy](refs/policies/delegation.md) |
@@ -34,6 +35,7 @@ Read `agentic-configuration/SKILL.md` before selecting models, role capabilities
 - Delegated model routing is limited by `agents.*.model_ref`, the deployment overlay, and `model_policy` in the central config; forbidden and unknown refs are rejected.
 - State changes use `agentic-state-tools`; agents do not hand-write canonical `.agent/` artifacts.
 - Product/code defects route through `agentic-systematic-debugging`; interrupted runs and uncertain side effects route through `agentic-runtime-recovery`.
+- Positive completion claims route through `agentic-verification-before-completion`; summaries, prior-run results, and stale evidence are not proof.
 - Unaccepted dependencies are not runnable, and uncertain side effects are not repeated automatically.
 - A score never overrides a hard fail, missing evidence, or an unresolved major finding.
 - New reviews carry a resolved rubric; only explicitly marked legacy migration artifacts may omit it.

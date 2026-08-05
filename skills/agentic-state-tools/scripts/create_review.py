@@ -29,6 +29,8 @@ from runtime_utils import (
     validate_identifier,
 )
 from validate_transition import is_allowed_transition, validate_transition
+from verification_contract import is_strict_profile
+from verify_completion_claim import validate_claim
 from runtime_transaction import RuntimeTransaction, TransactionError
 
 
@@ -220,6 +222,22 @@ def main() -> int:
             queue_path = root / "runtime" / "queue.json"
             lease = read_object(lease_path) if lease_path.is_file() else None
             queue = read_object(queue_path) if queue_path.is_file() else None
+
+            profile_id = payload.get("profile_id")
+            if profile_id is None and isinstance(resolved_rubric, dict):
+                profile_id = resolved_rubric.get("profile_id") or resolved_rubric.get("project_profile")
+            if profile_id is not None:
+                payload["profile_id"] = profile_id
+            completion_claim = payload.get("completion_claim")
+            if is_strict_profile(profile_id) and payload.get("legacy_migration") is not True:
+                if not isinstance(completion_claim, dict):
+                    raise ValueError("strict review PASS requires a current completion_claim")
+            if completion_claim is not None:
+                if not isinstance(completion_claim, dict):
+                    raise ValueError("review completion_claim must be an object")
+                verified_claim = validate_claim(completion_claim, project_root=args.project_root, root=root)
+                payload["verification_status"] = verified_claim["verification_status"]
+                payload["completion_claim_id"] = verified_claim["claim_id"]
 
             allow_approved_override = (
                 isinstance(resolved_rubric, dict)

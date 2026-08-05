@@ -27,13 +27,14 @@ from runtime_utils import (
 )
 from validate_payload import validate
 from runtime_transaction import RuntimeTransaction, TransactionError
+from verification_contract import hidden_failure_output, is_strict_profile, load_task_state, workspace_hash
 
 
 SCHEMA = Path(__file__).resolve().parents[1] / "schemas/batch-review.schema.json"
 CONTRACT_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/batch-contract.schema.json"
 TASK_STATE_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/task-state.schema.json"
 REVIEW_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/review.schema.json"
-VALID_CHECK_RESULTS = {"PASS", "FAIL", "BLOCKED", "NOT_RUN"}
+VALID_CHECK_RESULTS = {"PASS", "FAIL", "BLOCKED", "NOT_RUN", "SKIPPED", "NOT_APPLICABLE"}
 VALID_CHECK_KINDS = {"integration", "regression", "scope"}
 
 
@@ -67,8 +68,26 @@ def normalize(payload: Any) -> dict[str, Any]:
             raise ValueError(f"integration_checks[{index}].kind must be integration, regression, or scope")
         if not isinstance(name, str) or not name.strip():
             raise ValueError(f"integration_checks[{index}].name must be a non-empty string")
-        if not isinstance(evidence, str) or not evidence.strip():
-            raise ValueError(f"integration_checks[{index}].evidence must be a non-empty string")
+        if isinstance(evidence, str):
+            if not evidence.strip():
+                raise ValueError(f"integration_checks[{index}].evidence must be a non-empty string")
+            profile_id = payload.get("profile_id")
+            if profile_id is None and isinstance(payload.get("resolved_rubric"), dict):
+                profile_id = payload["resolved_rubric"].get("profile_id") or payload["resolved_rubric"].get("project_profile")
+            if is_strict_profile(profile_id) and not legacy_migration:
+                raise ValueError(f"integration_checks[{index}] requires structured verification evidence for strict profiles")
+        elif isinstance(evidence, dict):
+            for field in ("evidence_id", "command", "exit_code", "status", "workspace_hash"):
+                if field not in evidence or evidence[field] in (None, ""):
+                    raise ValueError(f"integration_checks[{index}].evidence.{field} is required")
+            if not isinstance(evidence["command"], str) or not evidence["command"].strip():
+                raise ValueError(f"integration_checks[{index}].evidence.command must be non-empty")
+            if evidence["exit_code"] is not None and (isinstance(evidence["exit_code"], bool) or not isinstance(evidence["exit_code"], int)):
+                raise ValueError(f"integration_checks[{index}].evidence.exit_code must be an integer or null")
+            if result == "PASS" and (evidence["status"] != "PASS" or evidence["exit_code"] != 0):
+                raise ValueError(f"integration_checks[{index}] PASS result requires status PASS and exit_code 0")
+        else:
+            raise ValueError(f"integration_checks[{index}].evidence must be a string or structured object")
         if result not in VALID_CHECK_RESULTS:
             raise ValueError(f"integration_checks[{index}].result is invalid")
         normalized_checks.append({**check, "kind": kind, "result": result})
@@ -101,6 +120,11 @@ def normalize(payload: Any) -> dict[str, Any]:
     record["integration_checks"] = normalized_checks
     record["findings"] = findings
     record["scope_valid"] = scope_valid
+    profile_id = payload.get("profile_id")
+    if profile_id is None and isinstance(payload.get("resolved_rubric"), dict):
+        profile_id = payload["resolved_rubric"].get("profile_id") or payload["resolved_rubric"].get("project_profile")
+    if profile_id is not None:
+        record["profile_id"] = profile_id
     if score is not None:
         record.update(
             {
@@ -273,9 +297,34 @@ def derive_verdict(root: Path, record: dict[str, Any]) -> tuple[str, list[str]]:
             reasons.append("review contains tasks outside canonical batch: " + ", ".join(unexpected_tasks))
 
     check_results = {check["result"] for check in record["integration_checks"]}
+    if is_strict_profile(record.get("profile_id")) and record.get("legacy_migration") is not True:
+        for index, check in enumerate(record["integration_checks"]):
+            evidence = check.get("evidence")
+            if not isinstance(evidence, dict):
+                reasons.append(f"integration check {index} is not structured verification evidence")
+                continue
+            task_id = evidence.get("task_id")
+            if not isinstance(task_id, str) or not task_id.strip():
+                reasons.append(f"integration check {index} evidence.task_id is missing")
+                continue
+            try:
+                task_state = load_task_state(root, task_id)
+                for field in ("run_id", "attempt_id", "task_revision"):
+                    if evidence.get(field) != task_state.get(field) and task_state.get(field) is not None:
+                        reasons.append(f"integration check {index} evidence.{field} is stale")
+                if evidence.get("workspace_hash") != workspace_hash(root.parent, evidence.get("relevant_files", [])):
+                    reasons.append(f"integration check {index} evidence workspace is stale")
+            except (OSError, ValueError, TypeError) as exc:
+                reasons.append(f"integration check {index} evidence is invalid: {exc}")
+            if not isinstance(evidence.get("command"), str) or not evidence["command"].strip():
+                reasons.append(f"integration check {index} evidence command is missing")
+            if check["result"] == "PASS" and (evidence.get("status") != "PASS" or evidence.get("exit_code") != 0):
+                reasons.append(f"integration check {index} PASS evidence has no zero exit code")
+            if hidden_failure_output(evidence):
+                reasons.append(f"integration check {index} hides skipped or failed output")
     if "FAIL" in check_results:
         reasons.append("an integration check failed")
-    if "BLOCKED" in check_results or "NOT_RUN" in check_results:
+    if {"BLOCKED", "NOT_RUN", "SKIPPED", "NOT_APPLICABLE"} & check_results:
         reasons.append("an integration check is blocked or not run")
     unresolved_severe = validate_findings(record["findings"])
     if unresolved_severe:
@@ -285,7 +334,7 @@ def derive_verdict(root: Path, record: dict[str, Any]) -> tuple[str, list[str]]:
         verdict = "PLAN_INVALID"
     elif any("missing" in reason or "not accepted" in reason or "not passing" in reason for reason in reasons):
         verdict = "BLOCKED"
-    elif "BLOCKED" in check_results or "NOT_RUN" in check_results:
+    elif {"BLOCKED", "NOT_RUN", "SKIPPED", "NOT_APPLICABLE"} & check_results:
         verdict = "BLOCKED"
     elif reasons:
         verdict = "REPAIR_REQUIRED"
@@ -325,9 +374,16 @@ def main() -> int:
                     raise ValueError("new batch reviews require resolved_rubric")
                 validate_rubric_against_contract(record["resolved_rubric"], batch_contract["review_contract"], review_type="batch")
                 record["review_contract"] = batch_contract["review_contract"]
+                record["profile_id"] = record.get("profile_id") or batch_contract["review_contract"].get("project_profile")
                 record["batch_contract_revision"] = batch_contract["revision"]
                 record["batch_contract_hash"] = batch_contract["contract_hash"]
+                if is_strict_profile(record.get("profile_id")) and any(isinstance(check.get("evidence"), str) for check in record["integration_checks"]):
+                    raise ValueError("strict batch review requires structured verification evidence")
             record["verdict"], record["blocking_reasons"] = derive_verdict(root, record)
+            if record.get("legacy_migration") is True:
+                record["verification_status"] = "LEGACY_UNVERIFIED"
+            elif record.get("verdict") == "PASS" and is_strict_profile(record.get("profile_id")):
+                record["verification_status"] = "VERIFIED"
             record["artifact_hash"] = artifact_hash(record)
             target = root / "work" / record["batch_id"] / "review.json"
             relative = f"work/{record['batch_id']}/review.json"

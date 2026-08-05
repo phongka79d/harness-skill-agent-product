@@ -18,6 +18,25 @@ Load `agentic-engineering-core` and the approved brainstorm handoff before writi
 4. Resolve the project profile and review rubric with `agentic-state-tools`.
 5. Run `validate_planning.py` and stop on any contract or relationship error.
 
+## Verification planning
+
+For every behavior-change or bug-fix task, define a structured verification
+case rather than only a command string. It must name the acceptance criteria,
+exact RED, GREEN, and profile-required broad commands, expected result for each
+phase, and the evidence fields: command, exit code, timestamp, workspace hash,
+task ID, plan revision, run ID, attempt ID, and task revision. Runtime assigns
+the run and attempt; the plan must require them to be bound before evidence is
+accepted. Plan separate phase hashes: RED is the pre-change baseline, while
+GREEN and broad verification must identify the workspace on which they ran.
+
+State the resolved profile's strictness in the task and forbid the task from
+lowering it. If an exception is permitted, plan a machine-readable object with
+its scope/type, reason, authority, structured alternative verification, and
+`expires_at` or `follow_up`. Define that material edits invalidate affected
+evidence and require reruns. Plans must also specify how failed, skipped,
+blocked, timed-out, and not-run commands are reported; none may be described as
+success by summary alone.
+
 ## Boundaries
 
 - Do not implement source changes or approve your own plan.

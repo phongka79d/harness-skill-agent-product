@@ -1,0 +1,17 @@
+{
+  "evidence_id": "E-EXAMPLE-GREEN",
+  "verification_case_id": "VC-EXAMPLE",
+  "task_id": "T-EXAMPLE",
+  "plan_revision": 1,
+  "run_id": "RUN-EXAMPLE",
+  "attempt_id": "ATT-EXAMPLE",
+  "task_revision": 1,
+  "phase": "GREEN",
+  "verification_type": "documentation",
+  "workspace_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "command": "python -m unittest focused",
+  "exit_code": 0,
+  "status": "PASS",
+  "recorded_at": "2026-08-05T00:00:00Z",
+  "acceptance_criterion_ids": ["AC-EXAMPLE"]
+}

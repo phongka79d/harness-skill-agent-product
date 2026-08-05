@@ -42,6 +42,8 @@ SCHEMA_MAP = {
     "task-state.json": "task-state.schema.json",
     "isolation-proof.json": "isolation-proof.schema.json",
     "transaction.json": "transaction.schema.json",
+    "verification-evidence.json": "verification-evidence.schema.json",
+    "completion-claim.json": "completion-claim.schema.json",
     "v1-dispatch.json": "dispatch.schema.json",
     "v1-recovery.json": "reconciliation.schema.json",
 }
@@ -246,6 +248,71 @@ def _positive_runtime_errors(path: Path, value: Any) -> list[str]:
             if code:
                 return [f"create_debug_investigation.py: {output or f'exited {code}'}"]
             return _positive_artifact_errors(path.name, value, project)
+    if path.name == "verification-evidence.json":
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            _init_project(project)
+            task_id = str(value["task_id"])
+            _write_json(
+                project / ".agent/work" / task_id / "task-state.json",
+                {
+                    "task_id": task_id,
+                    "plan_revision": value["plan_revision"],
+                    "revision": value["task_revision"],
+                    "status": "RUNNING",
+                    "run_id": value["run_id"],
+                    "attempt_id": value["attempt_id"],
+                },
+            )
+            runtime_value = dict(value)
+            runtime_value.pop("workspace_hash", None)
+            code, output = _project_cli("record_verification_evidence.py", project, runtime_value)
+            if code:
+                return [f"record_verification_evidence.py: {output or f'exited {code}'}"]
+            generated = _read_json(
+                project / ".agent/work" / task_id / "verification" / f"{value['evidence_id']}.json"
+            )
+            return [
+                f"record_verification_evidence.py: {error}"
+                for error in _stable_field_errors(
+                    value,
+                    generated,
+                    dynamic_fields={"workspace_hash", "recorded_at", "base_commit"},
+                )
+            ]
+    if path.name == "completion-claim.json":
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            _init_project(project)
+            task_id = str(value["task_id"])
+            _write_json(
+                project / ".agent/work" / task_id / "task-state.json",
+                {
+                    "task_id": task_id,
+                    "plan_revision": value["plan_revision"],
+                    "revision": value["task_revision"],
+                    "status": "RUNNING",
+                    "run_id": value["run_id"],
+                    "attempt_id": value["attempt_id"],
+                },
+            )
+            evidence = _canonical_example("verification-evidence.json")
+            evidence_input = dict(evidence)
+            evidence_input.pop("workspace_hash", None)
+            evidence_path = Path(directory) / "verification-evidence.json"
+            _write_json(evidence_path, evidence_input)
+            code, output = _project_cli("record_verification_evidence.py", project, evidence_input)
+            if code:
+                return [f"record_verification_evidence.py: {output or f'exited {code}'}"]
+            generated = _read_json(
+                project / ".agent/work" / task_id / "verification" / f"{evidence['evidence_id']}.json"
+            )
+            claim = dict(value)
+            claim["workspace_hash"] = generated["workspace_hash"]
+            code, output = _project_cli("verify_completion_claim.py", project, claim)
+            if code:
+                return [f"verify_completion_claim.py: {output or f'exited {code}'}"]
+            return []
 
     scripts = {
         "task-state.json": "update_task_state.py",

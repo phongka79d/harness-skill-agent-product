@@ -19,6 +19,12 @@
     "applicability": {"type": "object"},
     "resolved_rubric": {"type": "object"},
     "review_contract": {"$ref": "review-contract.schema.json"},
+    "profile_id": {"type": "string", "minLength": 1},
+    "profile_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "verification_status": {"type": "string", "enum": ["VERIFIED", "LEGACY_UNVERIFIED", "REJECTED"]},
+    "verification_evidence_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "completion_claim_id": {"type": "string", "minLength": 1},
+    "completion_claim": {"type": "object"},
     "legacy_migration": {"type": "boolean"},
     "verdict": {"type": "string", "enum": ["PASS", "BLOCKED", "REPAIR_REQUIRED"]}
   }

@@ -14,12 +14,41 @@ from capture_workspace import capture_workspace
 from render_checklist import render_checklist
 from runtime_utils import RuntimeLockedError, RuntimeNotInitializedError, next_revision, parse_timestamp, read_object, read_payload, runtime_lock, utc_now, validate_identifier
 from validate_payload import validate
+from verification_contract import is_strict_profile
 from write_artifact import write_validated
 
 
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ROOT = Path(__file__).resolve().parents[1]
 DEBUG_INVESTIGATION_SCHEMA = ROOT / "schemas/debug-investigation.schema.json"
+
+
+def _normalize_verification_status(payload: dict[str, object]) -> None:
+    """Classify old handoffs without allowing them to masquerade as verified."""
+
+    evidence = payload.get("evidence")
+    if not isinstance(evidence, dict):
+        return
+    status = payload.get("verification_status")
+    if status is not None and status not in {"VERIFIED", "LEGACY_UNVERIFIED", "REJECTED"}:
+        raise ValueError("handoff.verification_status is invalid")
+    evidence_ids = payload.get("verification_evidence_ids")
+    if evidence_ids is None:
+        evidence_ids = evidence.get("verification_evidence_ids") or evidence.get("evidence_ids")
+    claim_id = payload.get("completion_claim_id") or evidence.get("completion_claim_id")
+    structured = isinstance(evidence_ids, list) and bool(evidence_ids) or isinstance(claim_id, str) and bool(claim_id.strip())
+    profile_id = payload.get("profile_id") or evidence.get("profile_id")
+    if payload.get("status") != "COMPLETE":
+        if status is None:
+            payload["verification_status"] = "LEGACY_UNVERIFIED"
+        return
+    if status == "VERIFIED" and not structured:
+        raise ValueError("verified handoff requires completion claim or verification evidence IDs")
+    if status is None:
+        payload["verification_status"] = "LEGACY_UNVERIFIED"
+        status = "LEGACY_UNVERIFIED"
+    if is_strict_profile(profile_id) and status != "VERIFIED":
+        raise ValueError("strict production/high-risk handoff requires current verification evidence")
 
 
 def _workspace_evidence_hash(root: Path) -> str:
@@ -131,6 +160,7 @@ def main() -> int:
         validate_hash_map(payload.get("output_artifact_hashes"), "output_artifact_hashes")
         if not isinstance(payload.get("evidence"), dict):
             raise ValueError("handoff.evidence must be an object")
+        _normalize_verification_status(payload)
         parse_timestamp(payload["created_at"])
         with runtime_lock(args.project_root) as root:
             task_state_path = root / "work" / args.task_id / "task-state.json"

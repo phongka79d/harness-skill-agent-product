@@ -21,6 +21,9 @@ PROFILE_ALIASES = {
     "quick-change": "quick_change",
 }
 
+VALID_TDD_MODES = {"MANDATORY", "REQUIRED_IF_HARNESS", "EXCEPTION_ALLOWED"}
+VALID_BROAD_SUITE_MODES = {"MANDATORY", "RISK_BASED", "FOCUSED"}
+
 
 def load_data(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
@@ -66,6 +69,29 @@ def resolve_profile(profile_id: str, profiles_dir: str | Path = DEFAULT_PROFILES
         raise ValueError("profile.project_profile must be an object")
     if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) or not 0 <= threshold <= 100:
         raise ValueError("profile.default_threshold_percent must be between 0 and 100")
+    verification_policy = raw.get("verification_policy")
+    if not isinstance(verification_policy, dict):
+        raise ValueError("profile.verification_policy must be an object")
+    tdd_mode = verification_policy.get("tdd_mode")
+    broad_suite_mode = verification_policy.get("broad_suite_mode")
+    if tdd_mode not in VALID_TDD_MODES:
+        raise ValueError("profile.verification_policy.tdd_mode is invalid")
+    if broad_suite_mode not in VALID_BROAD_SUITE_MODES:
+        raise ValueError("profile.verification_policy.broad_suite_mode is invalid")
+    allowed_exceptions = verification_policy.get("allowed_exception_types")
+    behavior_change_types = verification_policy.get("behavior_change_types")
+    if (
+        not isinstance(allowed_exceptions, list)
+        or not allowed_exceptions
+        or any(not isinstance(item, str) or not item.strip() for item in allowed_exceptions)
+    ):
+        raise ValueError("profile.verification_policy.allowed_exception_types must be a non-empty string array")
+    if (
+        not isinstance(behavior_change_types, list)
+        or not behavior_change_types
+        or any(not isinstance(item, str) or not item.strip() for item in behavior_change_types)
+    ):
+        raise ValueError("profile.verification_policy.behavior_change_types must be a non-empty string array")
     profile_hash = hashlib.sha256(canonical(raw).encode("utf-8")).hexdigest()
     return {
         "profile_id": canonical_id,
@@ -74,6 +100,7 @@ def resolve_profile(profile_id: str, profiles_dir: str | Path = DEFAULT_PROFILES
         "project_profile": project_profile,
         "quality_level": quality_level,
         "default_threshold_percent": threshold,
+        "verification_policy": verification_policy,
     }
 
 

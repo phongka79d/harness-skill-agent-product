@@ -84,10 +84,22 @@ skills/agentic-plan-architect/SKILL.md
 skills/agentic-plan-reviewer/SKILL.md
 skills/agentic-runtime-recovery/references/recovery-model.md
 skills/agentic-runtime-recovery/SKILL.md
+skills/agentic-systematic-debugging/examples/debug-investigation.example.json
+skills/agentic-systematic-debugging/references/condition-based-waiting.md
+skills/agentic-systematic-debugging/references/debugging-protocol.md
+skills/agentic-systematic-debugging/references/escalation-and-stop-rules.md
+skills/agentic-systematic-debugging/references/root-cause-tracing.md
+skills/agentic-systematic-debugging/SKILL.md
+skills/agentic-verification-before-completion/examples/completion-claim.example.json
+skills/agentic-verification-before-completion/references/claim-to-evidence-mapping.md
+skills/agentic-verification-before-completion/references/completion-gate.md
+skills/agentic-verification-before-completion/references/evidence-freshness.md
+skills/agentic-verification-before-completion/SKILL.md
 skills/agentic-state-tools/examples/batch-review.json
 skills/agentic-state-tools/examples/batch-contract.json
 skills/agentic-state-tools/examples/checklist.md
 skills/agentic-state-tools/examples/context.json
+skills/agentic-state-tools/examples/debug-investigation.json
 skills/agentic-state-tools/examples/event.json
 skills/agentic-state-tools/examples/heartbeat.json
 skills/agentic-state-tools/examples/isolation-proof.json
@@ -96,6 +108,8 @@ skills/agentic-state-tools/examples/operation.json
 skills/agentic-state-tools/examples/review.json
 skills/agentic-state-tools/examples/task-state.json
 skills/agentic-state-tools/examples/transaction.json
+skills/agentic-state-tools/examples/completion-claim.json
+skills/agentic-state-tools/examples/verification-evidence.json
 skills/agentic-state-tools/examples/v1-dispatch.json
 skills/agentic-state-tools/examples/v1-planning-bundle.json
 skills/agentic-state-tools/examples/v1-recovery.json
@@ -112,6 +126,7 @@ skills/agentic-state-tools/schemas/checklist.schema.json
 skills/agentic-state-tools/schemas/checkpoint.schema.json
 skills/agentic-state-tools/schemas/compensation-action.schema.json
 skills/agentic-state-tools/schemas/context.schema.json
+skills/agentic-state-tools/schemas/debug-investigation.schema.json
 skills/agentic-state-tools/schemas/decision.schema.json
 skills/agentic-state-tools/schemas/dispatch.schema.json
 skills/agentic-state-tools/schemas/distributed-lock.schema.json
@@ -145,6 +160,8 @@ skills/agentic-state-tools/schemas/state-machine.json
 skills/agentic-state-tools/schemas/sub-plan.schema.json
 skills/agentic-state-tools/schemas/task-state.schema.json
 skills/agentic-state-tools/schemas/transaction.schema.json
+skills/agentic-state-tools/schemas/completion-claim.schema.json
+skills/agentic-state-tools/schemas/verification-evidence.schema.json
 skills/agentic-state-tools/schemas/worktree.schema.json
 skills/agentic-state-tools/scripts/acquire_lock.py
 skills/agentic-state-tools/scripts/append_event.py
@@ -158,6 +175,7 @@ skills/agentic-state-tools/scripts/create_batch_contract.py
 skills/agentic-state-tools/scripts/create_batch_review.py
 skills/agentic-state-tools/scripts/create_checkpoint.py
 skills/agentic-state-tools/scripts/create_context.py
+skills/agentic-state-tools/scripts/create_debug_investigation.py
 skills/agentic-state-tools/scripts/create_handoff.py
 skills/agentic-state-tools/scripts/create_review.py
 skills/agentic-state-tools/scripts/detect_scope_overlap.py
@@ -180,6 +198,7 @@ skills/agentic-state-tools/scripts/reconcile_queue.py
 skills/agentic-state-tools/scripts/record_approval.py
 skills/agentic-state-tools/scripts/record_heartbeat.py
 skills/agentic-state-tools/scripts/record_operation.py
+skills/agentic-state-tools/scripts/record_verification_evidence.py
 skills/agentic-state-tools/scripts/redaction.py
 skills/agentic-state-tools/scripts/reissue_task_attempt.py
 skills/agentic-state-tools/scripts/release_lock.py
@@ -193,6 +212,7 @@ skills/agentic-state-tools/scripts/risk_flags.py
 skills/agentic-state-tools/scripts/rollback.py
 skills/agentic-state-tools/scripts/runtime_transaction.py
 skills/agentic-state-tools/scripts/runtime_utils.py
+skills/agentic-state-tools/scripts/verification_contract.py
 skills/agentic-state-tools/scripts/secret_scanner.py
 skills/agentic-state-tools/scripts/state_machine.py
 skills/agentic-state-tools/scripts/state_transition_registry.py
@@ -208,6 +228,7 @@ skills/agentic-state-tools/scripts/validate_state.py
 skills/agentic-state-tools/scripts/validate_state_machine.py
 skills/agentic-state-tools/scripts/validate_transition.py
 skills/agentic-state-tools/scripts/verify_terminal_cleanup.py
+skills/agentic-state-tools/scripts/verify_completion_claim.py
 skills/agentic-state-tools/scripts/worktree_manager.py
 skills/agentic-state-tools/scripts/write_artifact.py
 skills/agentic-state-tools/SKILL.md
@@ -220,6 +241,7 @@ tests/e2e/test_v1_workflow.py
 tests/integration/test_example_runtime.py
 tests/integration/test_report_gaps.py
 tests/integration/test_state_tools.py
+tests/integration/test_debug_repair_integration.py
 tests/recovery/test_recovery_hardening.py
 tests/recovery/test_recovery_policy.py
 tests/recovery/test_task4_merge_recovery.py
@@ -239,5 +261,8 @@ tests/schema/test_schema_runtime.py
 tests/unit/test_context_security.py
 tests/unit/test_dashboard.py
 tests/unit/test_documentation_policy.py
+tests/unit/test_debug_investigation.py
+tests/unit/test_systematic_debugging_skill.py
+tests/unit/test_verification_contract.py
 tests/unit/test_skill_metadata.py
 tests/unit/test_wiki_routing.py

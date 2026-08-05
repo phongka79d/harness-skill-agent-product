@@ -74,6 +74,8 @@ python scripts/validate_examples.py --examples-root examples --deployment <deplo
 python scripts/package_skill.py --root <package-root> --output <release.zip>
 python ../agentic-configuration/scripts/load_config.py --check
 python scripts/capture_workspace.py --project-root <project>
+python scripts/record_verification_evidence.py --project-root <project> --input <verification-evidence.json>
+python scripts/verify_completion_claim.py --project-root <project> --input <completion-claim.json>
 python scripts/verify_terminal_cleanup.py --project-root <project> --task-id <id>
 python scripts/plan_rollback.py --project-root <project> --input <rollback-request.json>
 python scripts/execute_rollback.py --project-root <project> --plan-id <id> --approval <approval.json> --outcomes <provider-outcomes.json>
@@ -129,6 +131,12 @@ required for future contract changes.
 - Refuse live-owner lock reclaim and prove terminal cleanup before reporting a clean terminal state.
 - Render `.agent/checklist.md` from canonical task state and reviews.
 - Return non-zero exit codes for invalid payloads or unsafe state.
+- Record RED, GREEN, and profile-required broad verification as immutable,
+  identity-bound evidence with content-aware workspace freshness.
+- Reject completion claims based on summaries, prior runs, stale workspaces,
+  missing commands or exit codes, unmapped acceptance criteria, hidden skips,
+  and hidden failures. Legacy handoffs are readable as `LEGACY_UNVERIFIED` but
+  cannot satisfy strict production or high-risk gates.
 
 Rollback is explicit and evidence-backed. `plan_rollback.py` only creates a
 dry-run plan from known operation IDs; a failed task alone cannot create one.

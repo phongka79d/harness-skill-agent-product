@@ -379,6 +379,33 @@ def validate_relationships(manifest: dict[str, Any], errors: list[str], approval
             errors.append(f"task {task_id} has no acceptance criteria")
         if not task.get("verification"):
             errors.append(f"task {task_id} has no verification plan")
+        criterion_ids = {item.get("criterion_id") for item in task.get("acceptance_criteria", []) if isinstance(item, dict)}
+        verification_cases = task.get("verification_cases", [])
+        if verification_cases:
+            case_ids: set[str] = set()
+            for case in verification_cases:
+                case_id = case.get("verification_case_id") if isinstance(case, dict) else None
+                if case_id in case_ids:
+                    errors.append(f"task {task_id} has duplicate verification case: {case_id}")
+                if isinstance(case_id, str):
+                    case_ids.add(case_id)
+                mapped = case.get("acceptance_criterion_ids", []) if isinstance(case, dict) else []
+                unknown = sorted(set(mapped) - criterion_ids) if isinstance(mapped, list) else []
+                if unknown:
+                    errors.append(
+                        f"task {task_id} verification case {case_id} references unknown acceptance criteria: {', '.join(unknown)}"
+                    )
+                if isinstance(case, dict) and case.get("red_required") is True and not case.get("red_command"):
+                    errors.append(f"task {task_id} verification case {case_id} requires a RED command")
+                if isinstance(case, dict) and not case.get("green_command"):
+                    errors.append(f"task {task_id} verification case {case_id} requires a GREEN command")
+        for exception in task.get("verification_exceptions", []):
+            if not isinstance(exception, dict):
+                continue
+            if not exception.get("expires_at") and not exception.get("follow_up"):
+                errors.append(
+                    f"task {task_id} verification exception {exception.get('exception_id')} requires expires_at or follow_up"
+                )
         try:
             normalize_risk_flags(task.get("risk_flags", {}))
         except ValueError as exc:

@@ -11,6 +11,7 @@ the presence of a schema field alone does not establish enforcement.
 
 The release-backed contract set includes task state, planning, handoff,
 batch-contract, dispatch, isolation-proof, transaction, change-request,
-approval, review, lock, lease, checkpoint, operation, and recovery schemas.
+approval, review, lock, lease, checkpoint, operation, recovery,
+verification-evidence, and completion-claim schemas.
 Distributed and remote schemas are descriptive until a command and release
 test consume them.

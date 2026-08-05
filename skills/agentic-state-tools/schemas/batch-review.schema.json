@@ -15,7 +15,26 @@
           "kind": {"type": "string", "enum": ["integration", "regression", "scope"]},
           "name": {"type": "string", "minLength": 1},
           "result": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED", "NOT_RUN"]},
-          "evidence": {"type": "string", "minLength": 1}
+            "evidence": {
+              "oneOf": [
+                {"type": "string", "minLength": 1},
+                {
+                  "type": "object",
+                  "required": ["evidence_id", "command", "exit_code", "status", "workspace_hash"],
+                  "properties": {
+                    "evidence_id": {"type": "string", "minLength": 1},
+                    "command": {"type": "string", "minLength": 1},
+                    "exit_code": {"type": ["integer", "null"], "minimum": 0},
+                    "status": {"type": "string", "enum": ["PASS", "FAIL", "SKIPPED", "NOT_APPLICABLE", "NOT_RUN", "BLOCKED"]},
+                    "workspace_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "task_id": {"type": "string", "minLength": 1},
+                    "run_id": {"type": "string", "minLength": 1},
+                    "attempt_id": {"type": "string", "minLength": 1},
+                    "task_revision": {"type": "integer", "minimum": 1}
+                  }
+                }
+              ]
+            }
         }
       }
     },
@@ -29,6 +48,9 @@
     "batch_contract_revision": {"type": "integer", "minimum": 1},
     "batch_contract_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "resolved_rubric": {"type": "object"},
+    "profile_id": {"type": "string", "minLength": 1},
+    "profile_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "verification_status": {"type": "string", "enum": ["VERIFIED", "LEGACY_UNVERIFIED", "REJECTED"]},
     "review_contract": {"$ref": "review-contract.schema.json"},
     "legacy_migration": {"type": "boolean"},
     "verdict": {"type": "string", "enum": ["PASS", "REPAIR_REQUIRED", "BLOCKED", "PLAN_INVALID"]}

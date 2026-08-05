@@ -19,3 +19,9 @@ The handoff status is `COMPLETE`, `BLOCKED`, `ESCALATED`, or
 `NEEDS_RECONCILIATION`. A complete handoff must include validation evidence;
 recovery or unresolved side effects must remain explicitly classified rather
 than being reported as complete.
+
+Handoffs that predate structured verification are classified
+`LEGACY_UNVERIFIED` by the writer. They remain readable for migration but do
+not satisfy strict production or high-risk completion gates. New positive
+claims must reference current evidence created by
+`record_verification_evidence.py` and pass `verify_completion_claim.py`.

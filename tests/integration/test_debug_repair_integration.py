@@ -31,13 +31,13 @@ def run_script(name: str, *args: str) -> subprocess.CompletedProcess[str]:
 
 REVIEW_CONTRACT = {
     "project_profile": "personal",
-    "profile_hash": "68d3cbf1f0092461f7d62df20e4e3c1c74dc39d4ed59da59c56f9b1836c6848a",
+    "profile_hash": "d797c0c42d7f88fe34a1101f635fffc128946321f802336489471698dd865851",
     "task_type": "backend",
     "risk_flags": {},
     "review_type": "task",
     "rubric_id": "TASK_REVIEW_BACKEND_LIGHTWEIGHT_V1",
     "rubric_version": "1.1",
-    "rubric_hash": "ebb470252d77a1309f35dbbbe4e924b687c336b5ab824807ccc40ae53cbbce31",
+    "rubric_hash": "e9064bbddeb5838b3c77e1dc9ab33c88420c832329703da95d0498c7f8517ff3",
     "review_policy_version": "1",
 }
 

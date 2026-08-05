@@ -11,6 +11,7 @@ Canonical runtime files:
 .agent/work/<id>/debug-investigation.json generated task-bound repair investigation
 .agent/work/<id>/checkpoint.json  generated recovery checkpoint
 .agent/work/<id>/handoff.json     generated handoff
+.agent/work/<id>/verification/<evidence-id>.json generated task-bound verification evidence
 .agent/work/<id>/review.json      generated review
 .agent/work/<id>/lease.json       generated heartbeat lease
 .agent/locks/{tasks,files,resources}/*.json  generated ownership locks
@@ -52,3 +53,12 @@ revision identity. A handoff with the wrong run or attempt is rejected by
 `create_handoff.py`; a batch review with a stale contract revision or hash is
 rejected at the commit boundary. Schema validation is necessary but not by
 itself evidence that an artifact was created through the owning writer.
+
+Verification evidence is owned by `record_verification_evidence.py`. Each
+record stores the exact command, exit code, phase, timestamp, content-aware
+workspace hash, task/run/attempt/revision identity, and acceptance mapping.
+The writer publishes it atomically with a `VERIFICATION_EVIDENCE_RECORDED`
+event. `verify_completion_claim.py` recomputes freshness and rejects prior-run,
+stale, unmapped, summary-only, skipped, or failed evidence. Legacy handoffs
+remain readable as `LEGACY_UNVERIFIED` but cannot satisfy strict production or
+high-risk completion gates.
