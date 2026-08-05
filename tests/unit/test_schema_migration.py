@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -53,6 +54,48 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertEqual(projected["previous_revision"], 3)
         with self.assertRaisesRegex(ValueError, "does not match"):
             preserve_projection_links({"supersedes_id": "REV-OTHER"}, previous_id="REV-1")
+
+    def test_context_migration_collision_is_rejected_without_partial_publish(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            init = subprocess.run(
+                [sys.executable, str(SCRIPTS / "init_runtime.py"), "--project-root", str(project)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(init.returncode, 0, init.stderr)
+            payload = json.loads(
+                (ROOT / "skills/agentic-state-tools/examples/context-current.json").read_text(encoding="utf-8")
+            )
+            payload["context_id"] = "CTX-MIGRATION-ATOMIC"
+            payload["task"]["task_id"] = "TASK-MIGRATION-ATOMIC"
+            payload.pop("budget", None)
+            input_path = project / "context.json"
+            input_path.write_text(json.dumps(payload), encoding="utf-8")
+            command = [
+                sys.executable,
+                str(SCRIPTS / "create_context.py"),
+                "--project-root",
+                str(project),
+                "--input",
+                str(input_path),
+            ]
+            first = subprocess.run(command, capture_output=True, text=True, check=False)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            current_path = project / ".agent/work/TASK-MIGRATION-ATOMIC/context.json"
+            history_path = project / ".agent/work/TASK-MIGRATION-ATOMIC/contexts/CTX-MIGRATION-ATOMIC.json"
+            before_current = current_path.read_bytes()
+            before_history = history_path.read_bytes()
+
+            payload["attempt_id"] = "ATT-CURRENT-2"
+            payload["dispatch_id"] = "DSP-CURRENT-2"
+            input_path.write_text(json.dumps(payload), encoding="utf-8")
+            second = subprocess.run(command, capture_output=True, text=True, check=False)
+            self.assertNotEqual(second.returncode, 0)
+            self.assertIn("context_id must be generated", second.stderr)
+            self.assertEqual(current_path.read_bytes(), before_current)
+            self.assertEqual(history_path.read_bytes(), before_history)
 
 
 if __name__ == "__main__":
