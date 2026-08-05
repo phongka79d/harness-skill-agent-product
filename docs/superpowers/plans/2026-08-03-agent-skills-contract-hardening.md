@@ -29,7 +29,7 @@ The implementation must preserve the current filesystem backend, Primary-control
 
 The attached specification uses `state-tools/...` as a shorthand. In this repository the concrete package root is `skills/agentic-state-tools/`, and importable runtime modules belong under `skills/agentic-state-tools/scripts/`; the file map below uses those actual paths.
 
-**Progress checkpoint (2026-08-04):** Tasks 1–8 are complete. Task 9 Step 1 has been validated through the focused gates. The remaining Task 9 steps stay open until the integrated release archive and final report are completed.
+**Progress checkpoint (2026-08-05):** Tasks 1–9 are complete. The integrated release gate, archive inspection, and final implementation report are complete.
 
 ## File map
 
@@ -785,7 +785,7 @@ python -m unittest discover -s skills/agentic-state-tools/tests -p "test_authori
 
 Expected: every focused suite passes before the full release command is attempted.
 
-- [ ] **Step 2: Run the complete release gate.**
+- [x] **Step 2: Run the complete release gate.**
 
 Run:
 
@@ -798,7 +798,7 @@ python skills/agentic-engineering-wiki/scripts/validate_wiki_links.py --root ski
 
 Expected: all test groups pass, no test collection error occurs, state-machine validation prints `STATE_MACHINE_VALID`, and Wiki validation prints `WIKI_VALID`.
 
-- [ ] **Step 3: Build and inspect the release archive.**
+- [x] **Step 3: Build and inspect the release archive.**
 
 Run:
 
@@ -809,7 +809,7 @@ python -c "import zipfile; from pathlib import Path; p=Path(r'C:\Temp\agent-skil
 
 Expected: the archive is created, reopens successfully, contains only manifest members, and contains no runtime state, cache, compiled bytecode, logs, coverage, build output, secrets, or local environment files.
 
-- [ ] **Step 4: Inspect status and diff before claiming completion.**
+- [x] **Step 4: Inspect status and diff before claiming completion.**
 
 Run:
 
@@ -822,7 +822,7 @@ git diff -- docs/superpowers/plans/2026-08-03-agent-skills-contract-hardening.md
 
 Expected: only files authorized by the task matrix are changed, the new plan/report contains no placeholder wording, and `git diff --check` produces no output. Do not delete, reset, clean, or move any other files during this review.
 
-- [ ] **Step 5: Populate the final report and select the verdict.**
+- [x] **Step 5: Populate the final report and select the verdict.**
 
 Copy the actual group counts, failures, skips, and durations from the release runner into `docs/release-report-template.md`. List every remaining `DECLARATIVE_ONLY` or `NOT_IMPLEMENTED` policy honestly. Select `READY` only when full tests pass and runtime identity, canonical artifact creation, async isolation, approval-backed merge, transaction recovery, and package inspection all pass; otherwise select `READY_WITH_RESTRICTIONS` or `NOT_READY` according to the failed gate.
 
