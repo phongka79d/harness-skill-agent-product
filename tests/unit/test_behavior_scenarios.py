@@ -131,6 +131,18 @@ class BehaviorScenarioTests(unittest.TestCase):
         self.assertTrue({"HSP-702-07", "HSP-702-08", "HSP-702-09"} <= ids)
         self.assertTrue(all(item["status"] == "INCONCLUSIVE" for item in result["execution_results"]))
 
+    def test_compliant_observation_fixture_passes_every_pressure_scenario(self) -> None:
+        result = run_behavior_scenarios(
+            SKILL / "examples/pressure-scenarios.yaml",
+            SKILL / "examples/pressure-observations.pass.json",
+            model="configured.model",
+            config="test-config",
+            profile_id="agentic-skill-authoring",
+        )
+        self.assertEqual(len(result["execution_results"]), 13)
+        self.assertTrue(all(item["status"] == "PASS" for item in result["execution_results"]))
+        self.assertTrue(all(item["expectation_met"] for item in result["execution_results"]))
+
     def test_declared_pass_without_assertion_evidence_is_inconclusive(self) -> None:
         import yaml
 

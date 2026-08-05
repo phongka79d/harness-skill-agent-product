@@ -282,6 +282,7 @@ skills/agentic-plan-architect/references/executable-task-design.md
 skills/agentic-plan-architect/references/file-responsibility-map.md
 skills/agentic-skill-authoring/SKILL.md
 skills/agentic-skill-authoring/examples/pressure-scenarios.yaml
+skills/agentic-skill-authoring/examples/pressure-observations.pass.json
 skills/agentic-skill-authoring/examples/skill-authoring-profile.yaml
 skills/agentic-skill-authoring/references/behavioral-testing.md
 skills/agentic-skill-authoring/references/rationalization-hardening.md
