@@ -20,3 +20,12 @@ The routing policy explicitly disables the probabilistic “1% chance” rule.
 Routing is reproducible for identical inputs and does not contain provider model
 IDs. Model selection remains the responsibility of the central configuration and
 deployment overlay.
+
+## Pressure resistance
+
+Do not skip a required process skill because a task looks trivial. Resolve the
+route from intent, state, risk, and profile first; then apply the profile's
+lightweight focused exception when one is allowed. Do not load every available
+skill “just in case” either: unrelated process and domain skills are context
+debt. The `HSP-701-09` and `HSP-701-10` scenarios
+exercise both failure directions without hard-coding a provider or model.

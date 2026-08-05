@@ -139,6 +139,17 @@ Reject with actionable evidence when any of the following is true:
 
 Return a rejection or `UNVERIFIED` result; do not emit a partial `PASS`.
 
+## Pressure resistance
+
+Old output is not current evidence: any material edit, branch change, or task
+identity change makes affected results stale even when the command previously
+passed. A green linter proves only the `lint` class; it cannot stand in for a
+build, package, test, or requirements check. Personal and quick-change profiles
+may use their declared focused checks or a machine-readable exception, but
+“the project is personal” is not a blanket verification exemption. These
+boundaries are exercised by the `HSP-701-03`, `HSP-702-07`, and
+`HSP-702-09` scenarios.
+
 ## Legacy handling
 
 Old handoffs or evidence that do not carry the new identity, command, result,

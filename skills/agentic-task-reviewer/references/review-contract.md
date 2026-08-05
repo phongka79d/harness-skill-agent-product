@@ -60,3 +60,14 @@ The task reviewer may accept only the task's current run/attempt evidence and
 the pinned review contract. Findings must identify evidence and location where
 applicable. A hard fail overrides the weighted score, and acceptance is not a
 reviewer shortcut around the canonical state transition.
+
+## Pressure resistance
+
+“Best practice” does not expand the approved scope. Treat an out-of-scope
+feature recommendation as a finding or change request; do not implement it
+just because the reviewer sounds confident. A subagent's success message is
+also not evidence: inspect the scoped diff, artifact identity, and current
+verification records before issuing a passing review. The `HSP-701-04` and
+`HSP-702-08` scenarios cover
+these boundaries; low-risk profiles may reduce optional quality scoring but
+cannot remove specification or scope compliance.

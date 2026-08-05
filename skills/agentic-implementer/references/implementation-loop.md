@@ -48,3 +48,13 @@ Create a checkpoint before a migration, deletion, external side effect, or conte
 Profile strictness and machine-readable exception requirements are defined once
 in `agentic-engineering-wiki/refs/contracts/testing.md`. An exception is not a
 free-form note and cannot silently lower the resolved profile policy.
+
+## Pressure resistance
+
+Task size does not decide whether the process applies. A quick change can use a
+short focused RED/GREEN loop when the profile allows it, but it still records
+the applicable contract and current evidence. A non-zero result is valid RED
+only when its failure signature is the intended one; “close enough” failures
+from syntax, collection, environment, or an unrelated test require a corrected
+experiment. Exercise these rules with `HSP-701-09` and `HSP-701-02` before
+treating the implementation loop as hardened.
