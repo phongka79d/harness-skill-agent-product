@@ -6,6 +6,14 @@
     "context_id": {"type": "string", "minLength": 1},
     "created_at": {"type": "string", "minLength": 1},
     "revision": {"type": "integer", "minimum": 1},
+    "context_revision": {"type": "integer", "minimum": 1},
+    "context_purpose": {"type": "string", "minLength": 1},
+    "recipient_role": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "attempt_id": {"type": "string", "minLength": 1},
+    "dispatch_id": {"type": "string", "minLength": 1},
+    "model_ref": {"type": "string", "minLength": 1},
+    "forbidden_scope": {"type": "array", "items": {"type": "string"}},
     "task": {
       "type": "object",
       "required": ["task_id", "objective"],
@@ -15,6 +23,15 @@
       }
     },
     "required_documents": {"type": "array", "items": {"type": "string"}},
+    "source_items": {"type": "array"},
+    "source_hashes": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    },
+    "inclusion_reasons": {"type": "array", "items": {"type": "string"}},
+    "excluded_sensitive_items": {"type": "array", "items": {"type": "string"}},
+    "previous_context_id": {"type": ["string", "null"], "minLength": 1},
+    "context_delta": {"type": ["object", "null"], "minProperties": 1},
     "code_context": {
       "type": "object",
       "required": ["files_to_read", "symbols_to_inspect", "existing_patterns"],

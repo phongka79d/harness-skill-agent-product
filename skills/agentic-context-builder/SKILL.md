@@ -10,6 +10,8 @@ Read [agentic-configuration](../agentic-configuration/SKILL.md) before applying 
 
 Assemble context; do not make architecture decisions and do not modify implementation or `.agent/` state directly.
 
+Every implementer attempt receives a newly generated package bound to its `run_id`, `attempt_id`, and `dispatch_id`. The package identifies its context revision, purpose, recipient role, source items and hashes, inclusion reasons, excluded sensitive items, prior context, context delta, and explicit forbidden scope. Reviewer packages contain reviewable evidence only; private reasoning and confidence statements are never included.
+
 ## Workflow
 
 1. Read `agentic-engineering-core` and the task contract.

@@ -7,3 +7,4 @@
 5. Record a dispatch boundary with input revisions, owner, mode, approvals, evidence, and the routing artifact. A `REPAIR_REQUIRED` task also requires a canonical, task-bound debugging investigation whose status is `ROOT_CAUSE_CONFIRMED` or `COMPLETED`.
 6. Use locks, leases, checkpoints, operations, and events through `agentic-state-tools`.
 7. Preserve the investigation ID through the repair dispatch identity chain and require matching root-cause and passing regression evidence before a `COMPLETE` handoff.
+8. Build a fresh context for every attempt. Bind it to task/run/attempt/dispatch identity, retain immutable context lineage, and require a meaningful context delta before reissuing a failed or blocked attempt. Reviewers receive contract and evidence, never implementer private reasoning.

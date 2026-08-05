@@ -908,7 +908,7 @@ class ContractHardeningTests(unittest.TestCase):
         schema = json.loads((SCHEMAS / "attempt-reissue.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(
             schema["required"],
-            ["task_id", "reason", "new_run_id", "new_attempt_id", "new_dispatch_id", "expected_revision"],
+            ["task_id", "reason", "new_run_id", "new_attempt_id", "new_dispatch_id", "expected_revision", "context_delta"],
         )
         self.assertIn("expected_revision", schema["properties"])
         self.assertIn("expected_revision", schema["required"])
@@ -931,6 +931,32 @@ class ContractHardeningTests(unittest.TestCase):
         self.write_json(project / ".agent/runtime/queue.json", queue)
         lease = {"task_id": "T-ID-1", "owner": "executor", "run_id": "RUN-1", "attempt_id": "ATTEMPT-1", "dispatch_id": "DISPATCH-1", "task_revision": 1, "acquired_at": "2026-08-03T00:00:00Z", "last_heartbeat": "2026-08-03T00:00:00Z", "lease_seconds": 300, "expires_at": "2099-01-01T00:00:00Z"}
         self.write_json(project / ".agent/work/T-ID-1/lease.json", lease)
+        context = {
+            "context_id": "CTX-T-ID-1-ATTEMPT-1",
+            "created_at": "2026-08-03T00:00:00Z",
+            "revision": 1,
+            "context_revision": 1,
+            "context_purpose": "IMPLEMENTATION",
+            "recipient_role": "IMPLEMENTER",
+            "run_id": "RUN-1",
+            "attempt_id": "ATTEMPT-1",
+            "dispatch_id": "DISPATCH-1",
+            "task": {"task_id": "T-ID-1", "objective": "repair the bounded defect"},
+            "required_documents": [],
+            "code_context": {"files_to_read": ["src/app.py"], "symbols_to_inspect": [], "existing_patterns": []},
+            "constraints": {"inherited": [], "task_specific": []},
+            "review_history": [],
+            "source_items": [],
+            "source_hashes": [],
+            "inclusion_reasons": [],
+            "excluded_sensitive_items": [],
+            "forbidden_scope": [],
+            "previous_context_id": None,
+            "context_delta": None,
+            "budget": {"max_files": 20, "max_reference_documents": 8, "max_examples": 3},
+        }
+        write_validated(str(project), "work/T-ID-1/context.json", context, SCHEMAS / "context.schema.json")
+        write_validated(str(project), "work/T-ID-1/contexts/CTX-T-ID-1-ATTEMPT-1.json", context, SCHEMAS / "context.schema.json")
 
     def test_reissue_requires_expected_revision_guard(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -945,7 +971,7 @@ class ContractHardeningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)
             self._prepare_reissue_project(project)
-            reissue = self.write_json(project / "reissue-cli-only.json", {"task_id": "T-ID-1", "reason": "stale executor", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2"})
+            reissue = self.write_json(project / "reissue-cli-only.json", {"task_id": "T-ID-1", "reason": "stale executor", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2", "context_delta": {"debugging_evidence": "the stale attempt was reproduced"}})
             result = run_script("reissue_task_attempt.py", "--project-root", str(project), "--input", str(reissue), "--expected-revision", "1")
             self.assertEqual(result.returncode, 0, result.stderr)
             updated = json.loads((project / ".agent/work/T-ID-1/task-state.json").read_text(encoding="utf-8"))
@@ -967,7 +993,7 @@ class ContractHardeningTests(unittest.TestCase):
             old_identity = {"run_id": "RUN-1", "attempt_id": "ATTEMPT-1", "dispatch_id": "DISPATCH-1"}
             reissue = self.write_json(
                 project / "reissue.json",
-                {"task_id": "T-ID-1", "reason": "stale executor", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2", "expected_revision": 1},
+                {"task_id": "T-ID-1", "reason": "stale executor", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2", "expected_revision": 1, "context_delta": {"debugging_evidence": "the stale attempt was reproduced"}},
             )
 
             result = run_script("reissue_task_attempt.py", "--project-root", str(project), "--input", str(reissue))
@@ -1015,7 +1041,7 @@ class ContractHardeningTests(unittest.TestCase):
             original_dispatches = json.loads(json.dumps(queue["dispatches"]))
             reissue = self.write_json(
                 project / "reissue-with-history.json",
-                {"task_id": "T-ID-1", "reason": "stale executor", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2", "expected_revision": 1},
+                {"task_id": "T-ID-1", "reason": "stale executor", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2", "expected_revision": 1, "context_delta": {"debugging_evidence": "the stale attempt was reproduced"}},
             )
 
             result = run_script("reissue_task_attempt.py", "--project-root", str(project), "--input", str(reissue))
@@ -1062,7 +1088,7 @@ class ContractHardeningTests(unittest.TestCase):
                 self._prepare_reissue_project(project)
                 reissue = self.write_json(
                     project / f"reissue-reused-{field}.json",
-                    {"task_id": "T-ID-1", "reason": "identity reuse", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2", "expected_revision": 1, field: value},
+                    {"task_id": "T-ID-1", "reason": "identity reuse", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2", "expected_revision": 1, "context_delta": {"debugging_evidence": "the stale attempt was reproduced"}, field: value},
                 )
                 result = run_script("reissue_task_attempt.py", "--project-root", str(project), "--input", str(reissue))
                 self.assertEqual(result.returncode, 1)
@@ -1196,7 +1222,7 @@ class ContractHardeningTests(unittest.TestCase):
             self._prepare_reissue_project(project)
             payload = self.write_json(
                 project / "reissue-failure.json",
-                {"task_id": "T-ID-1", "reason": "append failure", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2", "expected_revision": 1},
+                {"task_id": "T-ID-1", "reason": "append failure", "new_run_id": "RUN-2", "new_attempt_id": "ATTEMPT-2", "new_dispatch_id": "DISPATCH-2", "expected_revision": 1, "context_delta": {"debugging_evidence": "the append failure was reproduced"}},
             )
             root = project / ".agent"
             before = {name: (root / name).read_bytes() for name in ("runtime/events.jsonl", "runtime/state.json", "checklist.md")}

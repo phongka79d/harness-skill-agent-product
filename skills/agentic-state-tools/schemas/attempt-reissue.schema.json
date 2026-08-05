@@ -1,14 +1,30 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["task_id", "reason", "new_run_id", "new_attempt_id", "new_dispatch_id", "expected_revision"],
+  "required": ["task_id", "reason", "new_run_id", "new_attempt_id", "new_dispatch_id", "expected_revision", "context_delta"],
   "properties": {
     "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
     "reason": {"type": "string", "minLength": 1},
     "new_run_id": {"type": "string", "minLength": 1},
     "new_attempt_id": {"type": "string", "minLength": 1},
     "new_dispatch_id": {"type": "string", "minLength": 1},
-    "expected_revision": {"type": "integer", "minimum": 0}
+    "expected_revision": {"type": "integer", "minimum": 0},
+    "context_delta": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "corrected_contract": {},
+        "added_context": {},
+        "removed_context": {},
+        "decomposition": {},
+        "model_escalation": {},
+        "approved_decision": {},
+        "debugging_evidence": {},
+        "summary": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "model_ref": {"type": "string", "minLength": 1}
   },
   "additionalProperties": false
 }
