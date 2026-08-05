@@ -41,6 +41,7 @@ GRAPH_SCHEMA = ROOT / "schemas/graph.schema.json"
 LEASE_SCHEMA = ROOT / "schemas/lease.schema.json"
 TASK_STATE_SCHEMA = ROOT / "schemas/task-state.schema.json"
 OPERATION_SCHEMA = ROOT / "schemas/operation.schema.json"
+DEBUG_INVESTIGATION_SCHEMA = ROOT / "schemas/debug-investigation.schema.json"
 ASYNC_PROOF_FIELDS = (
     "worktree_path",
     "branch_name",
@@ -173,6 +174,43 @@ def _find_existing_dispatch(queue: dict[str, Any], task_id: str, idempotency_key
     return None
 
 
+def require_repair_investigation(
+    root: Path,
+    task: dict[str, Any],
+    dispatch: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Require a confirmed investigation before dispatching repair work."""
+
+    if str(task.get("status", "")).upper() != "REPAIR_REQUIRED":
+        return None
+    investigation_id = dispatch.get("investigation_id")
+    if not isinstance(investigation_id, str) or not investigation_id.strip():
+        raise ValueError("repair dispatch requires investigation_id")
+    task_id = task.get("task_id")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise ValueError("repair task state requires task_id")
+    path = root / "work" / task_id / "debug-investigation.json"
+    if not path.is_file():
+        raise ValueError("repair dispatch requires a canonical debug investigation artifact")
+    investigation = read_object(path)
+    errors = validate(investigation, read_object(DEBUG_INVESTIGATION_SCHEMA), base_path=DEBUG_INVESTIGATION_SCHEMA.resolve().parent)
+    if errors:
+        raise ValueError("repair investigation schema validation failed: " + "; ".join(errors))
+    if investigation.get("investigation_id") != investigation_id:
+        raise ValueError("repair dispatch investigation_id does not match canonical artifact")
+    for field in ("task_id", "run_id", "attempt_id"):
+        if investigation.get(field) != task.get(field):
+            raise ValueError(f"repair investigation {field} does not match task state")
+    current_revision = task.get("revision")
+    if isinstance(current_revision, bool) or not isinstance(current_revision, int):
+        raise ValueError("repair task state revision is invalid")
+    if investigation.get("task_revision") != current_revision + 1:
+        raise ValueError("repair investigation task_revision does not match the next dispatch revision")
+    if investigation.get("status") not in {"ROOT_CAUSE_CONFIRMED", "COMPLETED"}:
+        raise ValueError("repair dispatch requires a confirmed root cause")
+    return investigation
+
+
 def _validate_idempotent_retry(
     existing: dict[str, Any],
     dispatch: dict[str, Any],
@@ -193,7 +231,7 @@ def _validate_idempotent_retry(
     for field in immutable_fields:
         if existing.get(field) != dispatch.get(field):
             raise ValueError(f"idempotency key conflicts with existing dispatch field: {field}")
-    binding_fields = (*EXECUTION_IDENTITY_FIELDS, "lease_id", "plan_revision", "worktree_path", "branch_name", "base_commit", "write_scope_hash", "active_conflicts_checked_at", "isolation_status", "isolation_proof", "input_artifact_hashes")
+    binding_fields = (*EXECUTION_IDENTITY_FIELDS, "investigation_id", "lease_id", "plan_revision", "worktree_path", "branch_name", "base_commit", "write_scope_hash", "active_conflicts_checked_at", "isolation_status", "isolation_proof", "input_artifact_hashes")
     for field in binding_fields:
         submitted = dispatch.get(field)
         effective = submitted if submitted is not None else task.get(field)
@@ -276,6 +314,9 @@ def persist_dispatch(
                     value = existing.get(field, existing_task.get(field))
                     if value is not None:
                         repair_lease[field] = copy.deepcopy(value)
+                investigation_id = existing.get("investigation_id", existing_task.get("investigation_id"))
+                if investigation_id is not None:
+                    repair_lease["investigation_id"] = investigation_id
                 if existing.get("lease_id") is not None:
                     repair_lease["lease_id"] = existing["lease_id"]
                 validate_execution_identity(existing_task, repair_lease, None)
@@ -315,6 +356,7 @@ def persist_dispatch(
         current_status = str(current_task.get("status", "")).upper()
         if current_status not in {"READY", "REPAIR_REQUIRED", "QUEUED", "QUEUED_SYNC", "QUEUED_ASYNC"}:
             raise ValueError(f"task status is not dispatchable: {current_status}")
+        repair_investigation = require_repair_investigation(root, current_task, dispatch)
         active_lease = root / "work" / task_id / "lease.json"
         if active_lease.is_file():
             lease = read_object(active_lease)
@@ -347,6 +389,8 @@ def persist_dispatch(
         )
         if mode == "ASYNC":
             binding_metadata["lease_id"] = lease_id
+        if repair_investigation is not None:
+            binding_metadata["investigation_id"] = repair_investigation["investigation_id"]
         for field, value in {"run_id": run_id, "attempt_id": attempt_id, "dispatch_id": envelope["dispatch_id"], **binding_metadata}.items():
             if current_task.get(field) is not None and current_task.get(field) != value:
                 raise ValueError(f"dispatch {field} does not match existing task identity")

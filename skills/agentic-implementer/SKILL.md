@@ -15,6 +15,11 @@ Use this skill for the configured Implement role. The Primary Agent owns archite
 
 Require an active task contract containing objective, dependencies, read scope, write scope, acceptance criteria, verification, out-of-scope items, risk flags, and execution budget. If any mandatory field is missing, return `BLOCKED_INVALID_OUTPUT` or `BLOCKED`.
 
+For a `REPAIR_REQUIRED` task, also require the canonical
+`.agent/work/<task-id>/debug-investigation.json` with matching task/run/attempt
+identity, a confirmed root cause, and a passing regression check before repair
+work or a successful handoff.
+
 Read in order:
 
 1. `agentic-engineering-core`;
@@ -27,10 +32,10 @@ Read in order:
 
 1. Confirm dependencies and write scope.
 2. Inspect existing code before editing.
-3. Implement the smallest change that meets the acceptance criteria.
-4. Add or update targeted tests.
-5. Run required verification and record exact results.
-6. Submit checkpoint, handoff, and state payloads through `agentic-state-tools`.
+3. For repair work, read the confirmed investigation and checkpoint intent through `agentic-state-tools`.
+4. Implement the smallest root-cause change and add or update targeted tests.
+5. Run the regression check and broader verification, recording exact results.
+6. Submit an investigation-bound handoff and state payloads through `agentic-state-tools`.
 7. Read the generated state/result before reporting completion.
 
 ## Hard boundaries
@@ -38,6 +43,7 @@ Read in order:
 - Modify only approved source files and tests.
 - Do not edit canonical `.agent/` files directly.
 - Do not change architecture, public contracts, schemas, dependencies, or migrations unless explicitly authorized.
+- Do not report `FIXED` or `PASS` for repair work without linked root-cause and passing regression evidence.
 - Do not commit, push, deploy, or repeat an uncertain side effect without policy approval.
 - Do not approve your own work.
 

@@ -8,6 +8,7 @@ Canonical runtime files:
 .agent/runtime/events.jsonl       historical source of truth
 .agent/runtime/state.json         generated snapshot
 .agent/work/<id>/task-state.json  generated current task state
+.agent/work/<id>/debug-investigation.json generated task-bound repair investigation
 .agent/work/<id>/checkpoint.json  generated recovery checkpoint
 .agent/work/<id>/handoff.json     generated handoff
 .agent/work/<id>/review.json      generated review
@@ -24,6 +25,14 @@ Canonical runtime files:
 ```
 
 Agents provide payloads. Scripts add timestamps, IDs, revisions, and derived fields, then write atomically.
+
+`debug-investigation.json` is owned by `create_debug_investigation.py`. It is a
+versioned, task/run/attempt-bound evidence artifact. The writer preserves the
+investigation identity across revisions, rejects partial or stale updates, and
+emits `DEBUG_INVESTIGATION_CREATED` after validation. Repair dispatch and
+successful handoff writers consume this artifact; they are not alternate
+investigation writers. Passing regression evidence is workspace-bound and is
+rejected by the handoff writer when the current workspace hash is different.
 
 Batch contracts are canonical, approval-bound pins of the approved plan, exact
 batch membership, task revisions, and review contracts. Create or replace one

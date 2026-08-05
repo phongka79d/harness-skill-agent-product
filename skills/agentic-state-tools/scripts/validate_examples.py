@@ -33,6 +33,7 @@ SCHEMA_MAP = {
     "batch-review.json": "batch-review.schema.json",
     "batch-contract.json": "batch-contract.schema.json",
     "context.json": "context.schema.json",
+    "debug-investigation.json": "debug-investigation.schema.json",
     "event.json": "event.schema.json",
     "heartbeat.json": "lease.schema.json",
     "lock.json": "lock.schema.json",
@@ -215,6 +216,36 @@ def _positive_runtime_errors(path: Path, value: Any) -> list[str]:
         return _positive_recovery_errors(value)
     if path.name == "v1-dispatch.json":
         return _positive_dispatch_errors(value)
+    if path.name == "debug-investigation.json":
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            _init_project(project)
+            task_id = str(value["task_id"])
+            _write_json(
+                project / ".agent/work" / task_id / "task-state.json",
+                {
+                    "task_id": task_id,
+                    "batch_id": "B-DEBUG-EXAMPLE",
+                    "plan_revision": 1,
+                    "revision": int(value["task_revision"]) - 1,
+                    "status": "REPAIR_REQUIRED",
+                    "run_id": value["run_id"],
+                    "attempt_id": value["attempt_id"],
+                    "dispatch_id": "DISPATCH-DEBUG-EXAMPLE",
+                },
+            )
+            code, output = _project_cli(
+                "create_debug_investigation.py",
+                project,
+                value,
+                "--task-id",
+                task_id,
+                "--actor",
+                "validator",
+            )
+            if code:
+                return [f"create_debug_investigation.py: {output or f'exited {code}'}"]
+            return _positive_artifact_errors(path.name, value, project)
 
     scripts = {
         "task-state.json": "update_task_state.py",
@@ -301,6 +332,14 @@ def _positive_artifact_errors(name: str, value: dict[str, Any], project: Path) -
         generated = _read_json(project / ".agent/work" / value["task_id"] / "task-state.json")
         errors = _stable_field_errors(value, generated, dynamic_fields={"revision", "updated_at", "previous_revision"})
         return [f"update_task_state.py: {error}" for error in errors]
+    if name == "debug-investigation.json":
+        generated = _read_json(project / ".agent/work" / value["task_id"] / "debug-investigation.json")
+        errors = _stable_field_errors(
+            value,
+            generated,
+            dynamic_fields={"created_at", "updated_at", "revision", "previous_revision", "workspace_hash"},
+        )
+        return [f"create_debug_investigation.py: {error}" for error in errors]
     return []
 
 

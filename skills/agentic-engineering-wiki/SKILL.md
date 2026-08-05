@@ -20,7 +20,9 @@ Read `agentic-configuration/SKILL.md` before selecting models, role capabilities
 | Shared role boundaries | [roles](refs/roles/brainstorm-facilitator.md), [plan architect](refs/roles/plan-architect.md), [plan reviewer](refs/roles/plan-reviewer.md), [explorer](refs/roles/explorer.md), [implementer](refs/roles/implementer.md), [context builder](refs/roles/context-builder.md), [task reviewer](refs/roles/task-reviewer.md), [batch reviewer](refs/roles/batch-reviewer.md), [runtime recovery](refs/roles/runtime-recovery.md) |
 | Planning workflow | [planning](refs/workflows/planning.md), [planning contract](refs/contracts/planning.md) |
 | Execution and dispatch | [execution](refs/workflows/execution.md), [handoff contract](refs/contracts/handoff.md) |
+| Product/code debugging symptoms | `agentic-systematic-debugging` for evidence-first root-cause investigation |
 | Review and quality | [review](refs/workflows/review.md), [rubric contract](refs/contracts/rubric.md), [validation policy](refs/policies/validation.md) |
+| Interrupted runtime state or uncertain side effects | `agentic-runtime-recovery`; do not use product debugging to decide resume safety |
 | Recovery and cleanup | [recovery](refs/workflows/recovery.md), [delegation policy](refs/policies/delegation.md) |
 | Project profiles | [profiles](refs/profiles/profiles.md) |
 | Rubrics | [task rubric](refs/rubrics/task.md), [batch rubric](refs/rubrics/batch.md) |
@@ -31,6 +33,7 @@ Read `agentic-configuration/SKILL.md` before selecting models, role capabilities
 - The Primary Agent owns architecture, scope, delegation, approval, conflict decisions, and final validation.
 - Delegated model routing is limited by `agents.*.model_ref`, the deployment overlay, and `model_policy` in the central config; forbidden and unknown refs are rejected.
 - State changes use `agentic-state-tools`; agents do not hand-write canonical `.agent/` artifacts.
+- Product/code defects route through `agentic-systematic-debugging`; interrupted runs and uncertain side effects route through `agentic-runtime-recovery`.
 - Unaccepted dependencies are not runnable, and uncertain side effects are not repeated automatically.
 - A score never overrides a hard fail, missing evidence, or an unresolved major finding.
 - New reviews carry a resolved rubric; only explicitly marked legacy migration artifacts may omit it.

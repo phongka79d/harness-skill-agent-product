@@ -31,6 +31,7 @@ python scripts/append_event.py --project-root <project> --input <event.json>
 python scripts/update_task_state.py --project-root <project> --input <task-state.json>
 python scripts/create_checkpoint.py --project-root <project> --input <checkpoint.json>
 python scripts/create_handoff.py --project-root <project> --task-id <id> --input <handoff.json>
+python scripts/create_debug_investigation.py --project-root <project> --task-id <id> --input <payload.json> --actor <actor>
 python scripts/create_review.py --project-root <project> --input <review.json>
 python scripts/create_batch_contract.py --project-root <project> --plan <approved-plan.json> --plan-id <id> --plan-revision <n> --batch-id <id> --expected-revision <n> --actor primary-agent
 python scripts/create_batch_review.py --project-root <project> --input <batch-review.json>
@@ -77,6 +78,24 @@ python scripts/verify_terminal_cleanup.py --project-root <project> --task-id <id
 python scripts/plan_rollback.py --project-root <project> --input <rollback-request.json>
 python scripts/execute_rollback.py --project-root <project> --plan-id <id> --approval <approval.json> --outcomes <provider-outcomes.json>
 ```
+
+## Debugging investigations
+
+Create a repair investigation only through `create_debug_investigation.py`.
+The writer validates schema version `1`, task/run/attempt identity, the planned
+repair revision, hypothesis uniqueness, root-cause status, and regression
+evidence before atomically writing `.agent/work/<task-id>/debug-investigation.json`.
+It appends `DEBUG_INVESTIGATION_CREATED` only after the artifact is valid.
+When a passing regression check is recorded, the writer refreshes its
+`workspace_hash`; a successful repair handoff recomputes and compares that hash
+before accepting the claim.
+
+Exit codes are deterministic: `0` means written, `1` means rejected payload or
+stale/mismatched/contradictory evidence, and `2` means the runtime or task
+binding is unavailable. Validation failures do not create or partially update
+the artifact. Repair dispatches and successful repair handoffs must preserve
+the same `investigation_id`; a new schema version or migration projection is
+required for future contract changes.
 
 ## Guarantees
 

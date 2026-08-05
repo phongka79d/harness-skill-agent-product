@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agentic Systematic Debugging"
+  short_description: "Trace defects before repair"
+  default_prompt: "Use $agentic-systematic-debugging to investigate a failure before proposing a fix."

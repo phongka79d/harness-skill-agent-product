@@ -17,6 +17,7 @@
     "run_id": {"type": "string", "minLength": 1},
     "attempt_id": {"type": "string", "minLength": 1},
     "dispatch_id": {"type": "string", "minLength": 1},
+    "investigation_id": {"type": "string", "minLength": 1, "pattern": "^DBG-[A-Za-z0-9._-]+$"},
     "lease_id": {"type": "string", "minLength": 1},
     "worktree_path": {"type": "string", "minLength": 1},
     "branch_name": {"type": "string", "minLength": 1},

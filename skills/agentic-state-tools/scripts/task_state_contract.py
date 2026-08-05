@@ -10,7 +10,7 @@ IMMUTABLE_FIELDS = frozenset({
     "task_id", "plan_id", "plan_revision", "batch_id", "requirement_ids",
     "depends_on", "read_scope", "write_scope", "review_contract", "run_id",
     "attempt_id", "dispatch_id", "worktree_path", "branch_name",
-    "input_artifact_hashes",
+    "input_artifact_hashes", "investigation_id",
 })
 MUTABLE_FIELDS = frozenset({
     "status", "progress", "checkpoint", "error", "blocker", "result_summary",
@@ -18,6 +18,7 @@ MUTABLE_FIELDS = frozenset({
     "previous_revision",
 })
 EXECUTION_IDENTITY_FIELDS = ("run_id", "attempt_id", "dispatch_id")
+TASK_BINDING_FIELDS = (*EXECUTION_IDENTITY_FIELDS, "investigation_id")
 
 
 def merge_task_state(current: dict[str, object] | None, update: dict[str, object]) -> dict[str, object]:
@@ -49,7 +50,7 @@ def merge_task_state(current: dict[str, object] | None, update: dict[str, object
 def _identity_records(queue: dict[str, object], state: dict[str, object]) -> list[dict[str, Any]]:
     if not isinstance(queue, dict):
         return []
-    if any(field in queue for field in EXECUTION_IDENTITY_FIELDS):
+    if any(field in queue for field in TASK_BINDING_FIELDS):
         return [queue]
     task_id = state.get("task_id")
     records: list[dict[str, Any]] = []
@@ -78,7 +79,7 @@ def _identity_records(queue: dict[str, object], state: dict[str, object]) -> lis
 def _validate_record_identity(state: dict[str, object], record: dict[str, Any], source: str, *, require_fields: bool = True) -> None:
     if "task_id" in record and record.get("task_id") != state.get("task_id"):
         raise ValueError(f"{source} task_id does not match task state")
-    for field in EXECUTION_IDENTITY_FIELDS:
+    for field in TASK_BINDING_FIELDS:
         if field in state and (field in record or require_fields) and state.get(field) != record.get(field):
             raise ValueError(f"{source} {field} does not match task state")
 

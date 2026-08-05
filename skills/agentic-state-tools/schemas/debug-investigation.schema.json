@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "investigation_id", "task_id", "run_id", "attempt_id",
+    "task_revision", "symptom", "reproduction_status", "reproduction_steps",
+    "observed_output", "expected_output", "environment_facts", "recent_changes",
+    "data_flow_trace", "working_reference", "hypotheses", "current_hypothesis",
+    "experiment", "experiment_result", "root_cause", "regression_check",
+    "fix_attempt_count", "status", "created_at", "updated_at", "revision"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "minimum": 1, "maximum": 1},
+    "investigation_id": {"type": "string", "minLength": 1, "pattern": "^DBG-[A-Za-z0-9._-]+$"},
+    "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "run_id": {"type": "string", "minLength": 1},
+    "attempt_id": {"type": "string", "minLength": 1},
+    "task_revision": {"type": "integer", "minimum": 1},
+    "symptom": {"type": "string", "minLength": 1},
+    "reproduction_status": {"type": "string", "enum": ["REPRODUCED", "NOT_REPRODUCED", "IMPOSSIBLE"]},
+    "reproduction_steps": {"type": "array", "items": {"type": "string"}},
+    "observed_output": {"type": "string"},
+    "expected_output": {"type": "string"},
+    "environment_facts": {"type": "object"},
+    "recent_changes": {"type": "array", "items": {"type": "string"}},
+    "data_flow_trace": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "working_reference": {"type": ["string", "null"]},
+    "hypotheses": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["hypothesis_id", "statement", "predicted_observation", "experiment", "result", "outcome"],
+        "properties": {
+          "hypothesis_id": {"type": "string", "minLength": 1},
+          "statement": {"type": "string", "minLength": 1},
+          "predicted_observation": {"type": "string", "minLength": 1},
+          "experiment": {"type": "string", "minLength": 1},
+          "result": {"type": "string"},
+          "outcome": {"type": "string", "enum": ["CONFIRMED", "REJECTED", "INCONCLUSIVE"]}
+        }
+      }
+    },
+    "current_hypothesis": {"type": ["string", "null"]},
+    "experiment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "expected_observation"],
+      "properties": {
+        "command": {"type": "string", "minLength": 1},
+        "expected_observation": {"type": "string", "minLength": 1}
+      }
+    },
+    "experiment_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observed", "outcome", "recorded_at"],
+      "properties": {
+        "observed": {"type": "string"},
+        "outcome": {"type": "string", "enum": ["CONFIRMED", "REJECTED", "INCONCLUSIVE"]},
+        "recorded_at": {"type": "string", "minLength": 1}
+      }
+    },
+    "root_cause": {"type": ["string", "null"]},
+    "regression_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "exit_code", "workspace_hash", "status"],
+      "properties": {
+        "command": {"type": "string", "minLength": 1},
+        "exit_code": {"type": "integer"},
+        "workspace_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "status": {"type": "string", "enum": ["PASS", "FAIL", "NOT_RUN"]}
+      }
+    },
+    "fix_attempt_count": {"type": "integer", "minimum": 0, "maximum": 3},
+    "status": {"type": "string", "enum": ["INVESTIGATING", "ROOT_CAUSE_CONFIRMED", "VERIFICATION_PENDING", "COMPLETED", "BLOCKED", "ESCALATED"]},
+    "created_at": {"type": "string", "minLength": 1},
+    "updated_at": {"type": "string", "minLength": 1},
+    "revision": {"type": "integer", "minimum": 1},
+    "previous_revision": {"type": ["integer", "null"], "minimum": 0}
+  }
+}
