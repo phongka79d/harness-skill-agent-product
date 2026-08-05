@@ -3,6 +3,7 @@
   "type": "object",
   "required": ["handoff_id", "task_id", "run_id", "attempt_id", "from_role", "to_role", "task_revision", "plan_revision", "input_artifact_hashes", "output_artifact_hashes", "evidence", "created_at", "revision", "status", "summary", "files_read", "files_changed", "findings", "implementation_details", "validation_results", "risks", "next_steps"],
   "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
     "handoff_id": {"type": "string", "minLength": 1},
     "task_id": {"type": "string", "minLength": 1},
     "run_id": {"type": "string", "minLength": 1},
@@ -14,6 +15,10 @@
     "verification_evidence_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
     "completion_claim_id": {"type": "string", "minLength": 1},
     "legacy_migration": {"type": "boolean"},
+    "legacy_classification": {"type": "string", "minLength": 1},
+    "legacy_source_version": {"type": "integer", "minimum": 1},
+    "supersedes_id": {"type": "string", "minLength": 1},
+    "previous_revision": {"type": "integer", "minimum": 0},
     "investigation_id": {"type": "string", "minLength": 1, "pattern": "^DBG-[A-Za-z0-9._-]+$"},
     "from_role": {"type": "string", "minLength": 1},
     "to_role": {"type": "string", "minLength": 1},

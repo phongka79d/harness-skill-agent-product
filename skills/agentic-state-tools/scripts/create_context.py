@@ -11,6 +11,7 @@ from typing import Any
 
 from append_event import append_event_for_root
 from render_checklist import render_checklist_for_root
+from runtime_transaction import RuntimeTransaction, TransactionError
 from runtime_utils import (
     RuntimeLockedError,
     RuntimeNotInitializedError,
@@ -20,11 +21,10 @@ from runtime_utils import (
     next_revision,
     utc_now,
     validate_identifier,
-    write_text_atomic,
 )
-from write_artifact import write_validated
 from redaction import redaction_mode, sanitize_for_persistence
 from secret_scanner import context_security_errors, is_sensitive_path
+from validate_payload import normalize_artifact_version, preserve_projection_links
 
 
 SCHEMA = Path(__file__).resolve().parents[1] / "schemas/context.schema.json"
@@ -140,6 +140,7 @@ def normalize(
     config = load_config() if config is None else validate_config(config)
     configured_policy = redaction_policy or config.get("security", {}).get("redaction_mode", "REJECT")
     payload, _ = sanitize_for_persistence(payload, mode=redaction_mode(configured_policy))
+    payload, _ = normalize_artifact_version(payload, "context")
     task = payload.get("task")
     if not isinstance(task, dict):
         raise ValueError("context.task must be an object")
@@ -192,6 +193,7 @@ def normalize(
     result.setdefault("previous_context_id", None)
     result.setdefault("context_delta", None)
     result["budget"] = budget
+    result, _ = normalize_artifact_version(result, "context")
     return result
 
 
@@ -224,6 +226,12 @@ def main() -> int:
                     raise ValueError("context.previous_context_id does not match the current context")
                 payload["previous_context_id"] = existing.get("context_id")
                 payload["context_revision"] = int(existing.get("context_revision", existing_revision)) + 1
+                payload = preserve_projection_links(
+                    payload,
+                    previous_id=existing.get("context_id"),
+                    previous_revision=existing_revision,
+                    previous_field="previous_context_id",
+                )
             task_state_path = root / "work" / task_id / "task-state.json"
             if task_state_path.is_file():
                 task_state = read_object(task_state_path)
@@ -244,25 +252,27 @@ def main() -> int:
             record["revision"] = next_revision(record, existing_revision)
             policy = args.redaction_mode or config.get("security", {}).get("redaction_mode")
             record, _ = sanitize_for_persistence(record, mode=redaction_mode(policy))
+            record, _ = normalize_artifact_version(record, "context")
             target_path = root / "work" / task_id / "context.json"
             history_path = root / "work" / task_id / "contexts" / f"{record['context_id']}.json"
-            snapshots = {
-                target_path: target_path.read_bytes() if target_path.is_file() else None,
-                history_path: history_path.read_bytes() if history_path.is_file() else None,
-            }
-            try:
-                target = write_validated(args.project_root, f"work/{task_id}/context.json", record, SCHEMA)
-                write_validated(args.project_root, f"work/{task_id}/contexts/{record['context_id']}.json", record, SCHEMA)
-            except Exception:
-                for path, content in snapshots.items():
-                    if content is None:
-                        try:
-                            path.unlink()
-                        except FileNotFoundError:
-                            pass
-                    else:
-                        write_text_atomic(path, content.decode("utf-8"))
-                raise
+            if history_path.is_file():
+                existing_history = read_object(history_path)
+                if existing_history != record:
+                    raise ValueError("context history projection is immutable and already exists")
+                raise ValueError("context_id already exists in immutable context history")
+            target_relative = f"work/{task_id}/context.json"
+            history_relative = f"work/{task_id}/contexts/{record['context_id']}.json"
+            transaction = RuntimeTransaction(
+                args.project_root,
+                operation_type="CONTEXT",
+                idempotency_key=f"context:{task_id}:{record['context_id']}:{record['revision']}",
+                expected_revisions={target_relative: existing_revision, history_relative: 0},
+            )
+            transaction.prepare([target_relative, history_relative])
+            transaction.stage_json(target_relative, record, SCHEMA)
+            transaction.stage_json(history_relative, record, SCHEMA)
+            transaction.commit()
+            target = target_path
             append_event_for_root(
                 root,
                 {
@@ -276,7 +286,7 @@ def main() -> int:
     except RuntimeNotInitializedError as exc:
         print(f"CONTEXT_BLOCKED: {exc}", file=sys.stderr)
         return 2
-    except (RuntimeLockedError, OSError, ValueError, TypeError) as exc:
+    except (RuntimeLockedError, TransactionError, OSError, ValueError, TypeError) as exc:
         print(f"CONTEXT_REJECTED: {exc}", file=sys.stderr)
         return 1
     print(f"CONTEXT_WRITTEN: {target}")

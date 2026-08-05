@@ -13,7 +13,7 @@ from append_event import append_event
 from capture_workspace import capture_workspace
 from render_checklist import render_checklist
 from runtime_utils import RuntimeLockedError, RuntimeNotInitializedError, next_revision, parse_timestamp, read_object, read_payload, runtime_lock, utc_now, validate_identifier
-from validate_payload import validate
+from validate_payload import normalize_artifact_version, preserve_projection_links, validate
 from verification_contract import is_strict_profile
 from write_artifact import write_validated
 
@@ -148,6 +148,7 @@ def main() -> int:
         validate_identifier(args.task_id, "task_id")
         payload = dict(payload)
         payload["task_id"] = args.task_id
+        payload, _ = normalize_artifact_version(payload, "handoff")
         payload.setdefault("handoff_id", f"HANDOFF-{args.task_id}-{utc_now().replace(':', '').replace('-', '')}")
         payload.setdefault("created_at", utc_now())
         for field in ("run_id", "attempt_id", "from_role", "to_role"):
@@ -186,6 +187,18 @@ def main() -> int:
                     for field in ("run_id", "attempt_id", "task_revision", "plan_revision", "from_role", "to_role"):
                         if payload[field] != previous.get(field):
                             raise ValueError("handoff identity cannot be reused for another attempt or revision")
+                previous_id = previous.get("handoff_id")
+                if previous_id != payload.get("handoff_id"):
+                    payload = preserve_projection_links(
+                        payload,
+                        previous_id=previous_id,
+                        previous_revision=existing_revision,
+                        previous_field="supersedes_id",
+                    )
+                else:
+                    for field in ("supersedes_id", "previous_revision"):
+                        if field in previous:
+                            payload.setdefault(field, previous[field])
             payload["revision"] = next_revision(payload, existing_revision)
             target = write_validated(
                 args.project_root,

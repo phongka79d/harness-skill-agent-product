@@ -33,12 +33,14 @@ SCHEMA_MAP = {
     "batch-review.json": "batch-review.schema.json",
     "batch-contract.json": "batch-contract.schema.json",
     "context.json": "context.schema.json",
+    "context-current.json": "context.schema.json",
     "debug-investigation.json": "debug-investigation.schema.json",
     "event.json": "event.schema.json",
     "heartbeat.json": "lease.schema.json",
     "lock.json": "lock.schema.json",
     "operation.json": "operation.schema.json",
     "review.json": "review.schema.json",
+    "handoff-current.json": "handoff.schema.json",
     "review-resolution.json": "review-resolution.schema.json",
     "skill-routing.json": "skill-routing.schema.json",
     "task-state.json": "task-state.schema.json",
@@ -48,6 +50,7 @@ SCHEMA_MAP = {
     "transaction.json": "transaction.schema.json",
     "verification-evidence.json": "verification-evidence.schema.json",
     "completion-claim.json": "completion-claim.schema.json",
+    "example-expectations.json": "example-expectations.schema.json",
     "v1-dispatch.json": "dispatch.schema.json",
     "v1-recovery.json": "reconciliation.schema.json",
 }
@@ -55,6 +58,9 @@ SCHEMA_MAP = {
 EXAMPLE_CLASSIFICATIONS = {
     "checklist.md": "DOCUMENTATION_ONLY",
 }
+
+EXPECTATIONS_NAME = "example-expectations.json"
+EXPECTED_RESULTS = {"PASS", "REJECT", "BLOCKED", "RECOVERY_PENDING", "DOCUMENTATION_ONLY"}
 
 
 def _official_cli(
@@ -147,6 +153,42 @@ def _project_cli(script: str, project: Path, payload: Any, *arguments: str) -> t
 
 def _canonical_example(name: str) -> Any:
     return _read_json(Path(__file__).resolve().parents[1] / "examples" / name)
+
+
+def _expectation_registry_errors(examples: Path, files: list[Path]) -> list[str]:
+    """Require a machine-readable expected validator result for every example."""
+
+    registry_path = examples / EXPECTATIONS_NAME
+    if not registry_path.is_file():
+        official_root = Path(__file__).resolve().parents[1] / "examples"
+        if examples != official_root.resolve():
+            return []
+        return [f"missing {EXPECTATIONS_NAME} registry"]
+    try:
+        registry = _read_json(registry_path)
+    except ValueError as exc:
+        return [str(exc)]
+    entries = registry.get("examples") if isinstance(registry, dict) else None
+    if not isinstance(entries, dict):
+        return [f"{EXPECTATIONS_NAME}: examples must be an object"]
+    expected_names = {path.name for path in files}
+    actual_names = set(entries)
+    errors: list[str] = []
+    for name in sorted(expected_names - actual_names):
+        errors.append(f"{EXPECTATIONS_NAME}: missing expected result for {name}")
+    for name in sorted(actual_names - expected_names):
+        errors.append(f"{EXPECTATIONS_NAME}: entry has no example file {name}")
+    for name, entry in entries.items():
+        if not isinstance(entry, dict):
+            errors.append(f"{EXPECTATIONS_NAME}: {name} must be an object")
+            continue
+        result = entry.get("expected_result")
+        if result not in EXPECTED_RESULTS:
+            errors.append(f"{EXPECTATIONS_NAME}: {name} has invalid expected_result {result!r}")
+        kind = entry.get("kind")
+        if kind not in {"RUNTIME", "DOCUMENTATION_ONLY"}:
+            errors.append(f"{EXPECTATIONS_NAME}: {name} has invalid kind {kind!r}")
+    return errors
 
 
 def _independent_batch_review_hash(record: dict[str, Any]) -> str:
@@ -1490,8 +1532,9 @@ def validate_all_examples(
     config = load_config(configuration / "config/agentic-config.yaml")
     deployment = load_deployment_config(deployment_path, config)
     schema_root = Path(__file__).resolve().parents[1] / "schemas"
-    errors: list[str] = []
-    for path in sorted(path for path in examples.iterdir() if path.is_file()):
+    files = sorted(path for path in examples.iterdir() if path.is_file())
+    errors: list[str] = _expectation_registry_errors(examples, files)
+    for path in files:
         try:
             classification = EXAMPLE_CLASSIFICATIONS.get(path.name)
             if classification == "DOCUMENTATION_ONLY":

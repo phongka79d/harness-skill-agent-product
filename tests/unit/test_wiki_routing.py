@@ -20,6 +20,32 @@ class WikiRoutingTests(unittest.TestCase):
             (root / "SKILL.md").write_text("[bad](../outside.md)\n", encoding="utf-8")
             self.assertTrue(validate_links(root))
 
+    def test_installed_wiki_can_route_to_sibling_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            skills = Path(directory) / "skills"
+            wiki = skills / "agentic-engineering-wiki"
+            sibling = skills / "agentic-skill-authoring"
+            wiki.mkdir(parents=True)
+            sibling.mkdir()
+            (wiki / "SKILL.md").write_text(
+                "[skill](../agentic-skill-authoring/SKILL.md)\n",
+                encoding="utf-8",
+            )
+            (sibling / "SKILL.md").write_text("skill\n", encoding="utf-8")
+            self.assertEqual(validate_links(wiki), [])
+
+    def test_installed_wiki_cannot_route_outside_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skills = root / "skills"
+            wiki = skills / "agentic-engineering-wiki"
+            outside = root / "docs"
+            wiki.mkdir(parents=True)
+            outside.mkdir()
+            (wiki / "SKILL.md").write_text("[bad](../../docs/outside.md)\n", encoding="utf-8")
+            (outside / "outside.md").write_text("outside\n", encoding="utf-8")
+            self.assertTrue(validate_links(wiki))
+
 
 if __name__ == "__main__":
     unittest.main()

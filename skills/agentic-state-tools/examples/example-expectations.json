@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "examples": {
+    "batch-contract.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "batch-review.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "checklist.md": {"expected_result": "DOCUMENTATION_ONLY", "kind": "DOCUMENTATION_ONLY"},
+    "completion-claim.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "context-current.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "context.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "debug-investigation.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "delivery-decision.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "event.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "example-expectations.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "handoff-current.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "heartbeat.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "isolation-proof.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "lock.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "operation.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "review-resolution.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "review.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "skill-routing.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "task-state.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "transaction.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "v1-dispatch.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "v1-planning-bundle.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "v1-recovery.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "verification-evidence.json": {"expected_result": "PASS", "kind": "RUNTIME"},
+    "workspace-baseline.json": {"expected_result": "PASS", "kind": "RUNTIME"}
+  }
+}

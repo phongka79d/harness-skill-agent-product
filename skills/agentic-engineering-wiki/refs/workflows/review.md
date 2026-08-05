@@ -6,13 +6,6 @@
 4. Calculate the result from the stored rubric; do not invent criteria or override hard fails.
 5. Persist the review through `agentic-state-tools` and read the generated projection.
 
-For staged task reviews, `SPEC_COMPLIANCE` is the gate before `CODE_QUALITY`.
-Stage ordering, re-review invalidation, and the final artifact identity are checked
-by `review_contract.py`; a quality score cannot make a missing specification
-requirement pass. Batch consumers use the profile's required final stage: lightweight
-profiles may finish at specification compliance, while standard and strict profiles
-require both stages with the same implementation identity.
-reject with evidence, request clarification, supersede, or mark a correction
-`FIXED_PENDING_REREVIEW`; only a reviewer can mark it `CLOSED` after fresh re-review.
-reject with evidence, request clarification, supersede, or mark a correction
-`FIXED_PENDING_REREVIEW`; only a reviewer can mark it `CLOSED` after fresh re-review.
+For staged task reviews, follow the [review contract](../../../agentic-task-reviewer/references/review-contract.md): `SPEC_COMPLIANCE` gates `CODE_QUALITY`, and a later implementation revision invalidates the prior stages. The contract and resolved rubric remain canonical; a quality score cannot make a missing specification requirement pass.
+
+Resolve findings through [review feedback resolution](../../../agentic-implementer/references/review-feedback-resolution.md). Use evidence to accept, reject, clarify, supersede, or mark a correction `FIXED_PENDING_REREVIEW`; only a reviewer can mark it `CLOSED` after fresh re-review.

@@ -17,4 +17,6 @@ process. The route must explicitly disable the probabilistic “1% chance” rul
 
 Explorers are read-only. Implementers do not make architecture decisions, select another task, expand scope, or approve their own work.
 
+Route independent read-only questions through the [parallel read-only contract](../contracts/async-execution.md) and [exploration protocol](../../../agentic-explorer/references/exploration-protocol.md). Build attempt-bound context with the [context builder](../../../agentic-context-builder/SKILL.md), author or pressure-test skills with [agentic-skill-authoring](../../../agentic-skill-authoring/SKILL.md), and route accepted delivery decisions through the [delivery finalizer](../../../agentic-delivery-finalizer/SKILL.md).
+
 If a delegated agent returns malformed output or fails validation, allow one focused correction. If the correction fails, stop retrying that approach, capture the evidence, and classify the work as `BLOCKED` or `ESCALATED` without silently expanding scope.

@@ -1,4 +1,4 @@
-"""Validate that Wiki markdown links stay inside the installed Wiki package."""
+"""Validate that Wiki markdown links stay inside the installed skills tree."""
 
 from __future__ import annotations
 
@@ -15,6 +15,10 @@ def validate_links(root: str | Path) -> list[str]:
     base = Path(root).resolve()
     if not base.is_dir():
         return [f"Wiki root does not exist: {base}"]
+    # The Wiki routes to sibling skill packages, but never outside /skills.
+    # Keep temporary/test roots strict so this helper remains useful outside the
+    # installed agentic-engineering-wiki package.
+    boundary = base.parent if base.name == "agentic-engineering-wiki" else base
     errors: list[str] = []
     for document in sorted(base.rglob("*.md")):
         for raw_target in LINK_RE.findall(document.read_text(encoding="utf-8")):
@@ -23,13 +27,13 @@ def validate_links(root: str | Path) -> list[str]:
                 errors.append(f"{document.relative_to(base)} has non-local link: {raw_target}")
                 continue
             if target.replace("\\", "/").startswith(".agent/wiki/") or target.startswith("/"):
-                errors.append(f"{document.relative_to(base)} escapes Wiki boundary: {raw_target}")
+                errors.append(f"{document.relative_to(base)} escapes skills boundary: {raw_target}")
                 continue
             resolved = (document.parent / target).resolve()
             try:
-                resolved.relative_to(base)
+                resolved.relative_to(boundary)
             except ValueError:
-                errors.append(f"{document.relative_to(base)} escapes Wiki boundary: {raw_target}")
+                errors.append(f"{document.relative_to(base)} escapes skills boundary: {raw_target}")
                 continue
             if not resolved.is_file():
                 errors.append(f"{document.relative_to(base)} links to missing file: {raw_target}")

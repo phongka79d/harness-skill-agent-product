@@ -2,20 +2,12 @@
 
 1. Resolve runnable tasks from accepted dependencies and current state.
 2. Resolve the deterministic skill route in process -> role -> domain order and load every skill in `required_skills`.
-3. Select exactly one mode from the [execution modes contract](../contracts/async-execution.md):
-   - use `SYNC_WRITE` for implementation, repairs, recovery, conflicts, unaccepted dependencies, or any work whose async proof is incomplete;
-   - use `PARALLEL_READ_ONLY` only when each explorer has an independent question, writes are forbidden, context and capacity are available, explorers do not depend on one another, and reports can be reconciled deterministically;
-   - use `ASYNC_ISOLATED_WRITE` only when configuration opt-in, accepted dependencies, disjoint scopes, capacity, lease, and verified task-to-branch-to-worktree isolation are all present.
-4. For `PARALLEL_READ_ONLY`, collect protocol-compliant reports, preserve their inspected files and evidence, and reconcile conflicts or material unknowns before implementation. No worktree is required and no write may be delegated.
+3. Select exactly one mode using the [execution modes contract](../contracts/async-execution.md). Treat `SYNC_WRITE` as the safe default; the contract owns eligibility, fallback, and the disabled-by-default rule for async writes.
+4. For `PARALLEL_READ_ONLY`, follow the [exploration protocol](../../../agentic-explorer/references/exploration-protocol.md), preserve inspected files and evidence, and reconcile conflicts or material unknowns before implementation. No write may be delegated.
 5. Read the central config and deployment overlay, select the model from the configured role ref, and reject refs outside `model_policy.allowed_model_refs` or inside `model_policy.forbidden_model_refs`.
-6. For `ASYNC_ISOLATED_WRITE`, record a dispatch boundary with input revisions, owner, mode, approvals, evidence, and the verified isolation proof. A `REPAIR_REQUIRED` task also requires a canonical, task-bound debugging investigation whose status is `ROOT_CAUSE_CONFIRMED` or `COMPLETED`.
-7. Before implementation in an isolated worktree, capture and attach a workspace baseline. Confirm the baseline path, branch, base commit, and workspace hash match the worktree registry; stop on `BLOCKED` and preserve approved existing failures as `KNOWN_FAILURES_APPROVED`.
-8. Use locks, leases, checkpoints, operations, and events through `agentic-state-tools`.
-9. Preserve the investigation ID through the repair dispatch identity chain and require matching root-cause and passing regression evidence before a `COMPLETE` handoff.
-10. Build a fresh context for every attempt. Bind it to task/run/attempt/dispatch identity, retain immutable context lineage, and require a meaningful context delta before reissuing a failed or blocked attempt. Reviewers receive contract and evidence, never implementer private reasoning.
-11. Record one controlled delivery outcome through `agentic-delivery-finalizer`; persist final verification, review, approval, hashes, and cleanup intent before any merge, push, or discard side effect.
-12. Merge isolated writes sequentially only with the required approval and fresh target-branch validation. Neither async workers nor the Batch Reviewer performs an automatic merge.
-
-Async write remains disabled unless the current configuration explicitly enables
-it. Read-only parallel exploration and async implementation are independent
-capabilities: enabling the former never implies enabling the latter.
+6. For an isolated write, require the [workspace baseline schema](../../../agentic-state-tools/schemas/workspace-baseline.schema.json) and [baseline capture command](../../../agentic-state-tools/scripts/capture_workspace_baseline.py), then verify its identity against the worktree proof. A `REPAIR_REQUIRED` task also requires the task-bound debugging investigation defined by the [debugging skill](../../../agentic-systematic-debugging/SKILL.md).
+7. Build a fresh attempt package through the [context builder](../../../agentic-context-builder/SKILL.md), preserving task/run/attempt/dispatch identity and a meaningful context delta for reissues. Reviewers receive contract and evidence, never private reasoning.
+8. Use locks, leases, checkpoints, operations, and events through `agentic-state-tools`; preserve the investigation ID and require matching root-cause and regression evidence before a `COMPLETE` handoff.
+9. Apply the [testing contract](../contracts/testing.md) and [verification gate](../../../agentic-verification-before-completion/SKILL.md) for RED/GREEN/BROAD evidence and fresh completion claims.
+10. Record one controlled delivery outcome through the [delivery finalizer](../../../agentic-delivery-finalizer/SKILL.md) before any merge, push, or discard side effect.
+11. Merge isolated writes sequentially with required approval and fresh target-branch validation. Neither async workers nor the Batch Reviewer performs an automatic merge.

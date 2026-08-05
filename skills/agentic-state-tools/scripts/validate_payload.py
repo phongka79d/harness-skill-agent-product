@@ -23,6 +23,173 @@ TYPE_MAP = {
 }
 
 
+# The writers in HSP-802 own these versions.  Older artifacts may omit the
+# field or carry a lower version, but a writer always publishes the current
+# version and records the legacy classification when it performs that
+# compatibility projection.
+CURRENT_ARTIFACT_SCHEMA_VERSIONS = {
+    "context": 1,
+    "handoff": 1,
+    "review": 2,
+    "task-state": 1,
+}
+
+
+def _artifact_key(artifact_type: str) -> str:
+    if not isinstance(artifact_type, str) or not artifact_type.strip():
+        raise ValueError("artifact_type must be a non-empty string")
+    value = artifact_type.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if value.endswith(".schema.json"):
+        value = value[:-12]
+    return value
+
+
+def current_artifact_schema_version(artifact_type: str, expected_version: int | None = None) -> int:
+    """Return the supported version for an artifact family."""
+
+    if expected_version is not None:
+        if isinstance(expected_version, bool) or not isinstance(expected_version, int) or expected_version < 1:
+            raise ValueError("expected schema version must be a positive integer")
+        return expected_version
+    key = _artifact_key(artifact_type)
+    try:
+        return CURRENT_ARTIFACT_SCHEMA_VERSIONS[key]
+    except KeyError as exc:
+        raise ValueError(f"no current schema version is registered for {key}") from exc
+
+
+def classify_artifact_version(
+    value: Any,
+    artifact_type: str,
+    *,
+    expected_version: int | None = None,
+) -> dict[str, Any]:
+    """Classify an artifact without mutating it.
+
+    Missing and lower versions are readable legacy inputs.  A future version
+    is rejected so a newer artifact cannot be silently interpreted by an older
+    writer.
+    """
+
+    if not isinstance(value, dict):
+        raise ValueError("artifact payload must be an object")
+    key = _artifact_key(artifact_type)
+    current = current_artifact_schema_version(key, expected_version)
+    raw = value.get("schema_version")
+    declared_legacy = value.get("legacy_migration") is True
+    if value.get("legacy_migration") not in (None, False, True):
+        raise ValueError(f"{key}.legacy_migration must be a boolean")
+    if raw is None:
+        if value.get("legacy_migration") is False:
+            raise ValueError(f"{key} cannot mark an unversioned artifact as non-legacy")
+        return {
+            "artifact_type": key,
+            "current_version": current,
+            "source_version": None,
+            "classification": "LEGACY_UNVERSIONED",
+            "is_legacy": True,
+        }
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        raise ValueError(f"{key}.schema_version must be a positive integer")
+    if raw > current:
+        raise ValueError(f"{key}.schema_version {raw} is newer than supported version {current}")
+    is_legacy = raw < current or declared_legacy
+    if raw < current:
+        classification = f"LEGACY_V{raw}"
+    elif declared_legacy:
+        classification = "LEGACY_DECLARED"
+    else:
+        classification = "CURRENT"
+    return {
+        "artifact_type": key,
+        "current_version": current,
+        "source_version": raw,
+        "classification": classification,
+        "is_legacy": is_legacy,
+    }
+
+
+def normalize_artifact_version(
+    value: dict[str, Any],
+    artifact_type: str,
+    *,
+    expected_version: int | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return a current-version projection and its immutable legacy metadata."""
+
+    info = classify_artifact_version(value, artifact_type, expected_version=expected_version)
+    if value.get("legacy_migration") is False and info["is_legacy"]:
+        raise ValueError(f"{info['artifact_type']} legacy input cannot set legacy_migration=false")
+    result = dict(value)
+    result["schema_version"] = info["current_version"]
+    if info["is_legacy"]:
+        result["legacy_migration"] = True
+        result.setdefault("legacy_classification", info["classification"])
+        if info["source_version"] is not None:
+            result.setdefault("legacy_source_version", info["source_version"])
+    return result, info
+
+
+def preserve_projection_links(
+    value: dict[str, Any],
+    *,
+    previous_id: str | None = None,
+    previous_revision: int | None = None,
+    previous_field: str = "supersedes_id",
+) -> dict[str, Any]:
+    """Preserve immutable links when a current projection supersedes an older one."""
+
+    result = dict(value)
+    if previous_id is not None:
+        if not isinstance(previous_id, str) or not previous_id.strip():
+            raise ValueError("previous artifact identity must be a non-empty string")
+        for field in (previous_field, "supersedes_id"):
+            supplied = result.get(field)
+            if supplied is not None and supplied != previous_id:
+                raise ValueError(f"{field} does not match the superseded artifact")
+            result[field] = previous_id
+    if previous_revision is not None:
+        if isinstance(previous_revision, bool) or not isinstance(previous_revision, int) or previous_revision < 0:
+            raise ValueError("previous artifact revision must be a non-negative integer")
+        supplied = result.get("previous_revision")
+        if supplied is not None and supplied != previous_revision:
+            raise ValueError("previous_revision does not match the superseded artifact")
+        result["previous_revision"] = previous_revision
+    return result
+
+
+def validate_artifact_payload(
+    value: Any,
+    schema: dict[str, Any],
+    *,
+    base_path: Path | None = None,
+    artifact_type: str | None = None,
+    expected_version: int | None = None,
+    allow_legacy: bool = True,
+) -> tuple[list[str], dict[str, Any] | None]:
+    """Validate a payload while optionally applying a non-persisted legacy view."""
+
+    candidate = value
+    info: dict[str, Any] | None = None
+    if artifact_type is not None:
+        try:
+            info = classify_artifact_version(value, artifact_type, expected_version=expected_version)
+        except (TypeError, ValueError) as exc:
+            return [f"$: {exc}"], None
+        if info["is_legacy"] and not allow_legacy:
+            return [f"$: {info['artifact_type']} is {info['classification']} and requires migration"], info
+        # Review stage schemas may require schema_version even for a legacy
+        # artifact.  Validate a projected copy; never mutate the caller.
+        if info["is_legacy"] and isinstance(value, dict):
+            properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+            additional = schema.get("additionalProperties", True) if isinstance(schema, dict) else True
+            if "schema_version" in properties or additional is not False:
+                candidate = dict(value)
+                candidate.setdefault("schema_version", info["current_version"])
+    errors = validate(candidate, schema, base_path=base_path)
+    return errors, info
+
+
 def _resolve_local_reference(root_schema: dict[str, Any], reference: str) -> dict[str, Any]:
     if reference == "#":
         return root_schema
@@ -171,11 +338,21 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
     parser.add_argument("--schema", required=True)
+    parser.add_argument("--artifact-type")
+    parser.add_argument("--expected-version", type=int)
+    parser.add_argument("--require-current", action="store_true")
     args = parser.parse_args()
     try:
         payload = read_payload(args.input)
         schema = read_json(args.schema)
-        errors = validate(payload, schema, base_path=Path(args.schema).resolve().parent)
+        errors, _ = validate_artifact_payload(
+            payload,
+            schema,
+            base_path=Path(args.schema).resolve().parent,
+            artifact_type=args.artifact_type,
+            expected_version=args.expected_version,
+            allow_legacy=not args.require_current,
+        )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"INVALID: {exc}", file=sys.stderr)
         return 2

@@ -15,4 +15,6 @@ Planning begins with an approved direction, not an implementation guess. The Bra
    placeholders, symbols/interfaces, and bounded task size.
 9. Obtain the required approval before execution.
 
+For an implementation-ready task, link the relevant [context contract](../../../agentic-context-builder/references/context-contract.md), [testing contract](../contracts/testing.md), [review contract](../../../agentic-task-reviewer/references/review-contract.md), and [execution modes contract](../contracts/async-execution.md) instead of copying their rules into the plan. Isolated work also links the [workspace baseline schema](../../../agentic-state-tools/schemas/workspace-baseline.schema.json); accepted delivery work links the [delivery outcomes](../../../agentic-delivery-finalizer/references/delivery-outcomes.md). When authoring a skill, route pressure scenarios through [agentic-skill-authoring](../../../agentic-skill-authoring/SKILL.md).
+
 The detailed brainstorm protocol and self-review remain in `agentic-brainstorm-facilitator`; this Wiki entry is routing guidance. Plan changes create a new version and an immutable supersede link. Historical plan evidence is never edited in place.

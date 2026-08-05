@@ -55,6 +55,10 @@
     "completion_claim_id": {"type": "string", "minLength": 1},
     "completion_claim": {"type": "object"},
     "legacy_migration": {"type": "boolean"},
+    "legacy_classification": {"type": "string", "minLength": 1},
+    "legacy_source_version": {"type": "integer", "minimum": 1},
+    "supersedes_id": {"type": "string", "minLength": 1},
+    "previous_revision": {"type": "integer", "minimum": 0},
     "verdict": {"type": "string", "enum": ["PASS", "BLOCKED", "REPAIR_REQUIRED"]}
   },
   "allOf": [

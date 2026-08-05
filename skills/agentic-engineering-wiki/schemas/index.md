@@ -15,3 +15,14 @@ approval, review, lock, lease, checkpoint, operation, recovery,
 verification-evidence, and completion-claim schemas.
 Distributed and remote schemas are descriptive until a command and release
 test consume them.
+
+## Cross-package schema routes
+
+The Wiki indexes schema ownership; it does not duplicate executable definitions:
+
+- Skill behavior scenarios: [behavior-scenario schema](../../agentic-skill-authoring/schemas/behavior-scenario.schema.json) and [scenario runner](../../agentic-skill-authoring/scripts/run_behavior_scenarios.py).
+- Attempt context and lineage: [context contract](../../agentic-context-builder/references/context-contract.md) and [context schema](../../agentic-state-tools/schemas/context.schema.json).
+- Execution modes and isolation: [async contract](../refs/contracts/async-execution.md), [execution-policy schema](../../agentic-state-tools/schemas/execution-policy.schema.json), and [isolation-proof schema](../../agentic-state-tools/schemas/isolation-proof.schema.json).
+- Workspace baseline: [baseline schema](../../agentic-state-tools/schemas/workspace-baseline.schema.json) and [baseline capture](../../agentic-state-tools/scripts/capture_workspace_baseline.py).
+- Staged review and feedback: [review contract](../../agentic-task-reviewer/references/review-contract.md), [review schema](../../agentic-state-tools/schemas/review.schema.json), and [resolution schema](../../agentic-state-tools/schemas/review-resolution.schema.json).
+- Delivery and cleanup: [delivery decision schema](../../agentic-state-tools/schemas/delivery-decision.schema.json) and [delivery finalizer](../../agentic-delivery-finalizer/SKILL.md).

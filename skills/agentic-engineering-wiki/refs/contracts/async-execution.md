@@ -5,6 +5,8 @@ Policy status: ENFORCED (enforced by `skills/agentic-state-tools/scripts/resolve
 Harness has three execution modes. Selecting a mode does not grant permissions
 outside the task's approved read and write scopes.
 
+This is the canonical mode-eligibility contract. Use the [exploration protocol](../../../agentic-explorer/references/exploration-protocol.md) for read-only reports, the [context builder](../../../agentic-context-builder/SKILL.md) for attempt-bound context, and the [baseline capture command](../../../agentic-state-tools/scripts/capture_workspace_baseline.py) for isolated-worktree baseline evidence.
+
 | Mode | Purpose | Writes | Eligibility and default |
 | --- | --- | --- | --- |
 | `SYNC_WRITE` | Execute implementation, repair, recovery, or other work that changes the repository or runtime state. | Allowed only within the approved scope and state-tool boundaries. | Safe default for all work; required when async conditions are not proven. |
@@ -48,8 +50,7 @@ base commit, plan revision, write-scope hash, conflict-check timestamp, and
 `SYNC_WRITE` when fallback is allowed, or blocks an explicitly required async
 request.
 
-The baseline contract is owned by
-`skills/agentic-state-tools/scripts/capture_workspace_baseline.py`. It verifies
+The baseline contract is owned by the [baseline capture command](../../../agentic-state-tools/scripts/capture_workspace_baseline.py). It verifies
 the Git worktree identity before running explicitly approved, shell-free setup
 and baseline commands. Existing failures are listed separately and can only be
 carried forward through an explicit approval token; unexpected failures produce

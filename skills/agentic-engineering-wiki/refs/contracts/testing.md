@@ -2,6 +2,11 @@
 
 Policy status: VALIDATED_ONLY
 
+This is the canonical contract for behavior-change and bug-fix verification
+evidence. The [validation policy](../policies/validation.md) routes profile
+strictness, and the [verification skill](../../../agentic-verification-before-completion/SKILL.md)
+consumes current evidence before a positive completion claim.
+
 ## Evidence-backed verification
 
 For every behavior-change or bug-fix verification case, store one structured

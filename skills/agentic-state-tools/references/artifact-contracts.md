@@ -29,6 +29,31 @@ Canonical runtime files:
 
 Agents provide payloads. Scripts add timestamps, IDs, revisions, and derived fields, then write atomically.
 
+## Schema migration and legacy projections
+
+The current writer-owned versions are `context: 1`, `handoff: 1`, `review: 2`,
+and `task-state: 1`. New projections must carry `schema_version`; an input that
+omits the field or declares a lower supported version is classified as legacy by
+`validate_payload.classify_artifact_version`. A future version is rejected
+explicitly instead of being interpreted by an older writer.
+
+Legacy artifacts remain readable when their existing schema is otherwise safe,
+but `LEGACY_UNVERSIONED`, `LEGACY_V<n>`, or `LEGACY_DECLARED` is not current
+verification evidence. Strict review and completion gates must reject a legacy
+artifact as a passing proof. Use `normalize_artifact_version` only to create a
+new current projection; it records `legacy_migration` and the source
+classification and never mutates the historical input.
+
+When a writer supersedes an artifact, the new projection preserves the prior
+artifact ID and revision through `supersedes_id`/`previous_revision` or the
+artifact-specific `previous_*` link. Historical context snapshots are immutable
+and a colliding context ID is rejected. All scoped writers publish through a
+runtime transaction, so schema or migration failure leaves neither a partial
+current artifact nor a partial history projection.
+
+Use `validate_payload.py --artifact-type <type> --require-current` for a new-run
+gate; omit `--require-current` only for an explicit legacy inspection.
+
 Review findings are resolved by `create_review_resolution.py`. The artifact binds the
 finding to the current task review and task/run/attempt revision. `CLOSED` is a
 reviewer-only state and must retain correction and re-review evidence; implementers

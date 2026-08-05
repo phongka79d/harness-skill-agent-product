@@ -38,6 +38,7 @@ from validate_transition import is_allowed_transition, validate_transition
 from verification_contract import is_strict_profile, workspace_hash
 from verify_completion_claim import validate_claim
 from runtime_transaction import RuntimeTransaction, TransactionError
+from validate_payload import normalize_artifact_version, preserve_projection_links
 
 
 class CleanupRecoveryError(RuntimeError):
@@ -223,8 +224,23 @@ def main() -> int:
         payload = dict(payload)
         if args.rubric:
             payload["resolved_rubric"] = read_object(args.rubric)
+        supplied_schema_version = payload.get("schema_version")
+        explicitly_legacy = payload.get("legacy_migration") is True
+        payload, version_info = normalize_artifact_version(payload, "review")
         resolved_rubric = payload.get("resolved_rubric")
-        if not isinstance(resolved_rubric, dict) and payload.get("legacy_migration") is not True:
+        # Existing callers historically omitted schema_version while supplying
+        # a resolved rubric. Treat that shape as a new writer request for
+        # compatibility; an explicitly lower version or legacy marker remains
+        # migration-only and cannot satisfy a strict PASS gate.
+        unversioned_new_review = (
+            supplied_schema_version is None
+            and not explicitly_legacy
+            and isinstance(resolved_rubric, dict)
+        )
+        if unversioned_new_review:
+            for field in ("legacy_migration", "legacy_classification", "legacy_source_version"):
+                payload.pop(field, None)
+        if not isinstance(resolved_rubric, dict) and not explicitly_legacy:
             raise ValueError("new reviews require resolved_rubric; set legacy_migration=true only for existing legacy evidence")
         if isinstance(resolved_rubric, dict):
             for field in ("rubric_id", "rubric_version", "rubric_hash", "resolved_weights", "applicability"):
@@ -242,6 +258,19 @@ def main() -> int:
             existing_review_path = root / "work" / task_id / "review.json"
             existing_review = read_object(existing_review_path) if existing_review_path.is_file() else None
             existing_revision = int(existing_review.get("revision", 0)) if isinstance(existing_review, dict) else 0
+            if isinstance(existing_review, dict):
+                previous_id = existing_review.get("review_id")
+                if previous_id != payload.get("review_id"):
+                    payload = preserve_projection_links(
+                        payload,
+                        previous_id=previous_id,
+                        previous_revision=existing_revision,
+                        previous_field="previous_review_id",
+                    )
+                else:
+                    for field in ("supersedes_id", "previous_revision", "previous_review_id"):
+                        if field in existing_review:
+                            payload.setdefault(field, existing_review[field])
             current_task_revision = int(task_state.get("revision", 0))
             lease_path = root / "work" / task_id / "lease.json"
             queue_path = root / "runtime" / "queue.json"
@@ -253,6 +282,12 @@ def main() -> int:
                 profile_id = resolved_rubric.get("profile_id") or resolved_rubric.get("project_profile")
             if profile_id is not None:
                 payload["profile_id"] = profile_id
+            legacy_input = bool(
+                not unversioned_new_review
+                and (version_info["is_legacy"] or explicitly_legacy)
+            )
+            if is_strict_profile(profile_id) and legacy_input and payload.get("verdict") == "PASS":
+                raise ValueError("strict review cannot accept a legacy migration as passing evidence")
             completion_claim = payload.get("completion_claim")
             if is_strict_profile(profile_id) and payload.get("legacy_migration") is not True:
                 if not isinstance(completion_claim, dict):
@@ -394,6 +429,7 @@ def main() -> int:
                 assert_terminal_cleanup_safe(root, task_id)
 
             next_task_state = dict(task_state)
+            next_task_state, _ = normalize_artifact_version(next_task_state, "task-state")
             previous_revision = int(next_task_state.get("revision", 0))
             next_task_state.update(
                 {
