@@ -40,6 +40,7 @@ SCHEMA_MAP = {
     "operation.json": "operation.schema.json",
     "review.json": "review.schema.json",
     "review-resolution.json": "review-resolution.schema.json",
+    "skill-routing.json": "skill-routing.schema.json",
     "task-state.json": "task-state.schema.json",
     "isolation-proof.json": "isolation-proof.schema.json",
     "transaction.json": "transaction.schema.json",
@@ -237,6 +238,9 @@ def _positive_runtime_errors(path: Path, value: Any) -> list[str]:
             generated = _read_json(project / ".agent/work" / task_id / "review-resolution.json")
         errors = _stable_field_errors(value, generated, dynamic_fields={"created_at", "updated_at", "actor"})
         return [f"create_review_resolution.py: {error}" for error in errors]
+    if path.name == "skill-routing.json":
+        code, output = _official_cli("resolve_skill_route.py", value)
+        return [] if code == 0 else [f"resolve_skill_route.py: {output or f'exited {code}'}"]
     if path.name == "isolation-proof.json":
         return _positive_isolation_errors(value)
     if path.name == "transaction.json":

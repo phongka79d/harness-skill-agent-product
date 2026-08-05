@@ -12,11 +12,61 @@ from dispatch_contract import validate_dispatch_schema
 from dispatch_transaction import persist_dispatch
 from review_contract import validate_contract
 from risk_flags import normalize_risk_flags
+from resolve_skill_route import resolve_skill_route, validate_skill_route
 
 CONFIG_SKILL = Path(__file__).resolve().parents[2] / "agentic-configuration"
 sys.path.insert(0, str(CONFIG_SKILL / "scripts"))
 
 from load_config import load_config, load_deployment_config, resolve_agent, validate_dispatch_selection  # noqa: E402
+
+
+def _dispatch_skill_route(result: dict[str, object], config: dict[str, object]) -> dict[str, object]:
+    """Resolve routing before persistence while keeping legacy dispatch inputs valid."""
+    nested_task = result.get("planning_task", result.get("task"))
+    task = nested_task if isinstance(nested_task, dict) else {}
+    contract = task.get("review_contract") if isinstance(task, dict) else None
+    if not isinstance(contract, dict):
+        contract = result.get("review_contract") if isinstance(result.get("review_contract"), dict) else {}
+    raw_risk = result.get("risk_flags", task.get("risk_flags", contract.get("risk_flags", {})))
+    risk_flags = normalize_risk_flags(raw_risk)
+    current_state = result.get("current_state", result.get("task_state", result.get("task_status", result.get("planning_status", "UNSPECIFIED"))))
+    if not isinstance(current_state, str) or not current_state.strip():
+        current_state = "UNSPECIFIED"
+    task_type = result.get("task_type", task.get("task_type", contract.get("task_type", "standard")))
+    profile = result.get("project_profile", contract.get("project_profile", contract.get("profile_id", "personal")))
+    intent = result.get("intent_classification", result.get("intent", "unspecified"))
+    repair = bool(result.get("repair")) or str(current_state).upper() in {"REPAIR_REQUIRED", "FAILED", "BLOCKED"} or bool(result.get("investigation_id"))
+    requested_role = result.get("requested_role", result.get("agent_role"))
+    route_config = config.get("skill_routing", {})
+    if not isinstance(route_config, dict):
+        raise ValueError("skill_routing must be an object")
+    configured = route_config.get("available_skills", [])
+    if not isinstance(configured, list):
+        raise ValueError("skill_routing.available_skills must be an array")
+    context = {
+        "intent_classification": intent,
+        "current_state": current_state,
+        "task_type": task_type,
+        "repair": repair,
+        "risk_flags": risk_flags,
+        "project_profile": profile,
+        "requested_role": requested_role,
+    }
+    supplied = result.get("skill_route")
+    if supplied is None:
+        # Legacy dispatches receive the same deterministic route and load its full chain.
+        return resolve_skill_route(context, configured_skills=configured, config=config)
+    supplied_route = validate_skill_route(supplied, configured_skills=configured)
+    expected = resolve_skill_route(
+        context,
+        configured_skills=configured,
+        loaded_skills=supplied_route["loaded_skills"],
+        config=config,
+    )
+    for field in ("intent_classification", "task_type", "current_state", "risk_flags", "project_profile", "requested_role", "applicable_skills", "required_skills", "routing_policy_version"):
+        if supplied_route.get(field) != expected.get(field):
+            raise ValueError(f"skill_route.{field} does not match deterministic routing")
+    return supplied_route
 
 
 def normalize_dispatch(
@@ -82,6 +132,7 @@ def normalize_dispatch(
     architecture_owner = result["evidence"].get("architecture_owner")
     if architecture_owner is not None and architecture_owner != result["selected_owner"]:
         raise ValueError("dispatch cannot change architecture ownership")
+    result["skill_route"] = _dispatch_skill_route(result, config)
     result["status"] = "RECORDED"
     return result
 

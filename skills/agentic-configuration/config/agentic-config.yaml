@@ -98,6 +98,49 @@
       "forbidden": ["automatic_config_mutation", "runtime_state_writes"]
     }
   },
+  "skill_routing": {
+    "policy_version": "1",
+    "one_percent_rule": false,
+    "available_skills": [
+      "agentic-batch-reviewer",
+      "agentic-brainstorm-facilitator",
+      "agentic-configuration",
+      "agentic-context-builder",
+      "agentic-dashboard",
+      "agentic-engineering-core",
+      "agentic-engineering-wiki",
+      "agentic-explorer",
+      "agentic-implementer",
+      "agentic-plan-architect",
+      "agentic-plan-reviewer",
+      "agentic-runtime-recovery",
+      "agentic-state-tools",
+      "agentic-systematic-debugging",
+      "agentic-task-reviewer",
+      "agentic-verification-before-completion"
+    ],
+    "process_skills": {
+      "brainstorming": "agentic-brainstorm-facilitator",
+      "debugging": "agentic-systematic-debugging",
+      "planning": "agentic-plan-architect",
+      "verification": "agentic-verification-before-completion"
+    },
+    "role_skills": {
+      "agent-brainstorm": "agentic-brainstorm-facilitator",
+      "agent-plan-architect": "agentic-plan-architect",
+      "agent-plan-reviewer": "agentic-plan-reviewer",
+      "agent-explorer": "agentic-explorer",
+      "agent-context-builder": "agentic-context-builder",
+      "agent-executor": "agentic-implementer",
+      "agent-review": "agentic-task-reviewer",
+      "agent-batch-review": "agentic-batch-reviewer",
+      "agent-runtime-recovery": "agentic-runtime-recovery",
+      "agent-dashboard": "agentic-dashboard",
+      "agent-state-tools": "agentic-state-tools",
+      "agent-configuration": "agentic-configuration"
+    },
+    "domain_skills": {}
+  },
   "planning": {
     "owner_aliases": {
       "implementer": "agent-executor",

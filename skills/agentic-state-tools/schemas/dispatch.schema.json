@@ -11,6 +11,7 @@
     "selected_owner": {"type": "string", "minLength": 1},
     "selected_model": {"type": "string", "minLength": 1, "description": "Must match the selected agent_role after resolving the agentic-configuration deployment overlay."},
     "risk_flags": {"$ref": "risk-flags.schema.json"},
+    "skill_route": {"$ref": "skill-routing.schema.json"},
     "input_revisions": {"type": "object"},
     "approval_references": {"type": "array", "items": {"type": "string"}},
     "evidence": {"type": "object"},

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "routing_id",
+    "intent_classification",
+    "task_type",
+    "current_state",
+    "risk_flags",
+    "applicable_skills",
+    "required_skills",
+    "loaded_skills",
+    "routing_reason",
+    "routing_policy_version"
+  ],
+  "properties": {
+    "routing_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
+    "intent_classification": {"type": "string", "minLength": 1},
+    "task_type": {"type": "string", "minLength": 1},
+    "current_state": {"type": "string", "minLength": 1},
+    "repair": {"type": "boolean"},
+    "project_profile": {"type": "string", "minLength": 1},
+    "requested_role": {"type": "string", "minLength": 1},
+    "risk_flags": {"$ref": "risk-flags.schema.json"},
+    "applicable_skills": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "required_skills": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "loaded_skills": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "routing_reason": {"type": "string", "minLength": 1},
+    "routing_policy_version": {"type": "string", "minLength": 1}
+  }
+}

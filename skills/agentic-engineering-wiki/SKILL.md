@@ -20,6 +20,7 @@ Read `agentic-configuration/SKILL.md` before selecting models, role capabilities
 | Shared role boundaries | [roles](refs/roles/brainstorm-facilitator.md), [plan architect](refs/roles/plan-architect.md), [plan reviewer](refs/roles/plan-reviewer.md), [explorer](refs/roles/explorer.md), [implementer](refs/roles/implementer.md), [context builder](refs/roles/context-builder.md), [task reviewer](refs/roles/task-reviewer.md), [batch reviewer](refs/roles/batch-reviewer.md), [runtime recovery](refs/roles/runtime-recovery.md) |
 | Planning workflow | [planning](refs/workflows/planning.md), [planning contract](refs/contracts/planning.md) |
 | Execution and dispatch | [execution](refs/workflows/execution.md), [handoff contract](refs/contracts/handoff.md) |
+| Deterministic skill routing | `agentic-engineering-core/references/policies/skill-routing.md`, `agentic-state-tools/scripts/resolve_skill_route.py` |
 | Product/code debugging symptoms | `agentic-systematic-debugging` for evidence-first root-cause investigation |
 | Completion, readiness, merge, or release claims | `agentic-verification-before-completion` for fresh evidence and claim mapping |
 | Review and quality | [review](refs/workflows/review.md), [rubric contract](refs/contracts/rubric.md), [validation policy](refs/policies/validation.md) |
@@ -33,6 +34,7 @@ Read `agentic-configuration/SKILL.md` before selecting models, role capabilities
 
 - The Primary Agent owns architecture, scope, delegation, approval, conflict decisions, and final validation.
 - Delegated model routing is limited by `agents.*.model_ref`, the deployment overlay, and `model_policy` in the central config; forbidden and unknown refs are rejected.
+- Dispatch skill routing resolves process -> role -> domain precedence and cannot omit a mandatory process skill. The probabilistic “1% chance” rule is explicitly disabled.
 - State changes use `agentic-state-tools`; agents do not hand-write canonical `.agent/` artifacts.
 - Product/code defects route through `agentic-systematic-debugging`; interrupted runs and uncertain side effects route through `agentic-runtime-recovery`.
 - Positive completion claims route through `agentic-verification-before-completion`; summaries, prior-run results, and stale evidence are not proof.

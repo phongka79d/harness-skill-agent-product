@@ -11,6 +11,11 @@ Read the shared `agentic-engineering-wiki` package for canonical architecture, r
 
 Read [agentic-configuration](../agentic-configuration/SKILL.md) for the central agent map and use its config keys instead of copying routing or runtime defaults.
 
+Read [deterministic skill routing](references/policies/skill-routing.md) when
+dispatching work. Routing resolves process, role, and optional domain skills in
+that order; the dispatch boundary enforces the resulting mandatory process
+skills.
+
 ## Startup
 
 1. Read the relevant project architecture and instructions.
@@ -25,7 +30,7 @@ Use `agentic-state-tools` for every canonical write under `.agent/`. Agents may 
 
 The Primary Agent owns architecture, scope, delegation, conflict decisions, and final validation.
 
-Delegated model routing is defined by `agents.agent-explorer.model_ref`, `agents.agent-executor.model_ref`, the deployment overlay, and `model_policy` in the central config. Never bypass that config or dispatch a model resolved from `model_policy.forbidden_model_refs`; the state-tools dispatch boundary enforces it.
+Delegated model routing is defined by `agents.agent-explorer.model_ref`, `agents.agent-executor.model_ref`, the deployment overlay, and `model_policy` in the central config. Never bypass that config or dispatch a model resolved from `model_policy.forbidden_model_refs`; the state-tools dispatch boundary enforces it. Skill routing never carries provider model IDs.
 
 - Explorer: read and trace only; never modify files.
 - Brainstorm Facilitator: clarify goals, constraints, assumptions, and options; do not implement or approve architecture.
