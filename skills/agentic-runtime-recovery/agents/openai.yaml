@@ -1,4 +1,5 @@
 interface:
   display_name: "Agentic Runtime Recovery"
-  short_description: "Inspect and recover runtime state"
-  default_prompt: "Use $agentic-runtime-recovery to inspect interrupted runs and recover runtime state safely."
+  short_description: "Recover interrupted stateful work"
+  default_prompt: "Dispatch $agentic-runtime-recovery only from $agentic-engineering-core with the shared envelope and a bounded task contract."
+  # Dispatch with the role prompt and fresh isolated context.

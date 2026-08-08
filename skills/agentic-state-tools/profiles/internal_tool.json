@@ -1,0 +1,21 @@
+{
+  "profile_id": "internal_tool",
+  "version": "3.4.1",
+  "project_profile": {
+    "type": "internal_tool",
+    "delivery_mode": "standard",
+    "deployment": "internal",
+    "data_sensitivity": "medium",
+    "user_exposure": "team"
+  },
+  "quality_level": "standard",
+  "workflow_policy": {
+    "minimum_depth": "standard",
+    "focused_max_files": 3,
+    "focused_max_concerns": 1,
+    "persist_state": true,
+    "independent_review": "risk_based",
+    "batch_review": false,
+    "verification_level": "standard"
+  }
+}

@@ -1,4 +1,4 @@
 interface:
   display_name: "Agentic State Tools"
-  short_description: "Generate and validate runtime state"
-  default_prompt: "Use $agentic-state-tools to generate, validate, and rebuild project runtime state."
+  short_description: "Resolve workflows and manage minimal state"
+  default_prompt: "Use $agentic-state-tools to resolve a task route or write minimal state for standard and controlled execution."

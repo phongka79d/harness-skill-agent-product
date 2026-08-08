@@ -1,1 +1,0 @@
-{"extension_id":"infrastructure","version":"1.0","criteria":[{"id":"OPERABILITY","weight":10},{"id":"ROLLBACK","weight":10}]}

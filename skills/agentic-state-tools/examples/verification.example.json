@@ -1,0 +1,30 @@
+{
+  "schema_version": 3,
+  "task_id": "TASK-1",
+  "work_revision": 1,
+  "workflow_decision_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "status": "PASS",
+  "checks": [
+    {
+      "name": "A1",
+      "status": "PASS",
+      "evidence": "observed expected result"
+    },
+    {
+      "name": "A2",
+      "status": "PASS",
+      "evidence": "diff inspected"
+    }
+  ],
+  "workspace": {
+    "files": [
+      {
+        "path": "src/module.py",
+        "size": 128,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ]
+  },
+  "workspace_summary": "Current workspace after final implementation edit",
+  "recorded_at": "2026-08-06T00:00:00Z"
+}

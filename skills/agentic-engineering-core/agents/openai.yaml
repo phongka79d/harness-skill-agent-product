@@ -1,4 +1,6 @@
 interface:
-  display_name: "Agentic Engineering Core"
-  short_description: "Shared rules for agentic delivery"
-  default_prompt: "Use $agentic-engineering-core to load the shared agentic delivery rules."
+  display_name: "Agentic Engineering Primary"
+  short_description: "Start routed work with this agent as Primary"
+  default_prompt: "Use $agentic-engineering-core as the Primary Agent to route this request and run its required workflow automatically."
+policy:
+  allow_implicit_invocation: true

@@ -1,256 +1,331 @@
-"""Record and gate one controlled delivery outcome."""
-
+"""Record a delivery decision only after required current evidence passes."""
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from runtime_utils import (
-    RuntimeLockedError,
-    RuntimeNotInitializedError,
-    ensure_runtime_initialized,
-    parse_timestamp,
-    read_object,
-    read_payload,
-    runtime_lock,
+HERE = Path(__file__).resolve()
+CONFIG_SCRIPTS = HERE.parents[2] / "agentic-configuration" / "scripts"
+sys.path.insert(0, str(CONFIG_SCRIPTS))
+from schema_validation import validate_file  # noqa: E402
+from runtime_utils import (  # noqa: E402
+    append_event,
+    read_json,
+    refresh_checklist,
+    require_scope_coverage,
+    require_task_index_consistent,
+    runtime_root,
+    safe_child,
+    sha256_json,
+    task_artifact_path,
+    task_state_path,
+    validate_task_id,
+    verify_workspace_snapshot,
+    write_json_atomic,
 )
-from validate_payload import validate
-from write_artifact import write_validated
+
+STATE_SCHEMA = HERE.parents[1] / "schemas" / "state.schema.json"
+TASK_SCHEMA = HERE.parents[1] / "schemas" / "task-state.schema.json"
+VERIFICATION_SCHEMA = HERE.parents[1] / "schemas" / "verification-evidence.schema.json"
+CLAIM_SCHEMA = HERE.parents[1] / "schemas" / "completion-claim.schema.json"
+COMPLETION_GATE_SCHEMA = HERE.parents[1] / "schemas" / "completion-gate.schema.json"
+REVIEW_SCHEMA = HERE.parents[1] / "schemas" / "review.schema.json"
+BATCH_REVIEW_SCHEMA = HERE.parents[1] / "schemas" / "batch-review.schema.json"
+DELIVERY_SCHEMA = HERE.parents[1] / "schemas" / "delivery-decision.schema.json"
+INPUT_FIELDS = {
+    "schema_version",
+    "task_ids",
+    "action",
+    "outcome",
+    "summary",
+    "approval_reference",
+    "cleanup",
+}
 
 
-SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "delivery-decision.schema.json"
-OUTCOMES = {"MERGE_LOCAL", "PUSH_AND_CREATE_PR", "KEEP_BRANCH_AND_WORKTREE", "DISCARD_BRANCH_AND_WORKTREE"}
-RECORDED_STATUSES = {"RECORDED", "COMPLETED"}
-BLOCKED_STATUSES = {"BLOCKED", "NEEDS_RECONCILIATION"}
-DESTRUCTIVE_ACTIONS = {"DESTRUCTIVE_OPERATION", "DESTRUCTIVE_ACTION", "WORKTREE_CLEANUP", "DELIVERY_DECISION"}
-
-
-class DeliveryBlocked(ValueError):
-    """The delivery decision is unsafe or not ready to persist as successful."""
-
-
-def _canonical_hash(value: Any) -> str:
-    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _schema_errors(decision: Any) -> list[str]:
-    try:
-        schema = read_object(SCHEMA_PATH)
-    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise DeliveryBlocked(f"delivery decision schema is unreadable: {exc}") from exc
-    return validate(decision, schema, base_path=SCHEMA_PATH.parent)
-
-
-def _load_task(root: Path, task_id: str) -> dict[str, Any]:
-    path = root / "work" / task_id / "task-state.json"
+def _load_task(root: Path, state: dict[str, Any], task_id: str) -> dict[str, Any]:
+    path = task_state_path(root, task_id)
     if not path.is_file():
-        raise DeliveryBlocked(f"task state does not exist for {task_id}")
-    value = read_object(path)
-    if not isinstance(value, dict):
-        raise DeliveryBlocked("task state must be an object")
-    if value.get("task_id") != task_id:
-        raise DeliveryBlocked("task state task_id does not match delivery decision")
-    return value
+        raise ValueError(f"task state is missing: {task_id}")
+    task = read_json(path)
+    validate_file(task, TASK_SCHEMA, f"task {task_id}")
+    if task["task_id"] != task_id:
+        raise ValueError(f"task id mismatch: {task_id}")
+    if task_id not in state["tasks"]:
+        raise ValueError(f"task is missing from runtime index: {task_id}")
+    summary = state["tasks"][task_id]
+    for field in ("status", "status_revision", "work_revision", "summary"):
+        if task[field] != summary.get(field):
+            raise ValueError(f"runtime task summary mismatch for {task_id}: {field}")
+    return task
 
 
-def _check_task_identity(decision: dict[str, Any], task: dict[str, Any]) -> None:
-    fields = {
-        "task_id": "task_id",
-        "batch_id": "batch_id",
-        "plan_revision": "plan_revision",
-        "task_revision": "revision",
-        "run_id": "run_id",
-        "attempt_id": "attempt_id",
-        "dispatch_id": "dispatch_id",
-        "branch_name": "branch_name",
-        "worktree_path": "worktree_path",
-        "base_commit": "base_commit",
-    }
-    for decision_field, task_field in fields.items():
-        if task.get(task_field) is not None and decision.get(decision_field) != task.get(task_field):
-            raise DeliveryBlocked(f"delivery decision {decision_field} does not match task state")
-    task_verdict = task.get("review_verdict")
-    if task_verdict is not None and str(task_verdict).upper() != "PASS":
-        raise DeliveryBlocked("task review is not PASS")
-    task_status = str(task.get("status", "")).upper()
-    if decision["status"] in RECORDED_STATUSES and task_status not in {"ACCEPTED", "COMPLETED"}:
-        raise DeliveryBlocked(f"task status {task_status or '<missing>'} is not ready for delivery finalization")
+def _select_tasks(root: Path, state: dict[str, Any], supplied_ids: object) -> list[dict[str, Any]]:
+    if supplied_ids is not None:
+        if not isinstance(supplied_ids, list) or not supplied_ids:
+            raise ValueError("task_ids must be a non-empty array when supplied")
+        task_ids = [validate_task_id(item) for item in supplied_ids]
+        if len(task_ids) != len(set(task_ids)):
+            raise ValueError("task_ids must be unique")
+    else:
+        task_ids = []
+        for task_id in sorted(state.get("tasks", {})):
+            task = _load_task(root, state, validate_task_id(task_id))
+            if task["workflow_decision_hash"] == state["workflow_decision_hash"] and task["status"] != "CANCELLED":
+                task_ids.append(task_id)
+        if not task_ids:
+            raise ValueError(
+                "no tasks are bound to the current decision; supply task_ids for a standalone review or delivery route"
+            )
+
+    tasks = [_load_task(root, state, task_id) for task_id in sorted(task_ids)]
+    cross_decision_allowed = state["task_route"] in {"review", "delivery"}
+    if not cross_decision_allowed:
+        mismatched = [
+            task["task_id"]
+            for task in tasks
+            if task["workflow_decision_hash"] != state["workflow_decision_hash"]
+        ]
+        if mismatched:
+            raise ValueError(
+                "source-editing delivery may include only tasks bound to the current decision: "
+                + ", ".join(mismatched)
+            )
+    incomplete = [
+        task["task_id"] for task in tasks if task["status"] not in {"COMPLETED", "ACCEPTED"}
+    ]
+    if incomplete:
+        raise ValueError("delivery requires completed or accepted tasks: " + ", ".join(incomplete))
+    return tasks
 
 
-def _check_persisted_batch_review(root: Path, decision: dict[str, Any]) -> None:
-    path = root / "work" / decision["batch_id"] / "review.json"
+def _require_acceptance_mapping(claim: dict[str, Any], verification: dict[str, Any], task_id: str) -> None:
+    claim_ids = [str(item["id"]).strip() for item in claim["acceptance"]]
+    check_ids = [str(item["name"]).strip() for item in verification["checks"]]
+    if any(not item for item in claim_ids + check_ids):
+        raise ValueError(f"acceptance and verification IDs must not be blank: {task_id}")
+    if len(claim_ids) != len(set(claim_ids)) or len(check_ids) != len(set(check_ids)):
+        raise ValueError(f"acceptance and verification IDs must be unique: {task_id}")
+    if set(claim_ids) != set(check_ids):
+        raise ValueError(f"completion claim no longer maps to current verification checks: {task_id}")
+    if any(item["status"] != "PASS" or not item["evidence"].strip() for item in claim["acceptance"]):
+        raise ValueError(f"completion claim contains non-passing acceptance evidence: {task_id}")
+    if claim["verification_status"] != verification["status"]:
+        raise ValueError(f"completion claim verification status is stale: {task_id}")
+
+
+def _require_verification(project_root: str, root: Path, task: dict[str, Any]) -> None:
+    task_id = task["task_id"]
+    verification_path = task_artifact_path(root, task_id, "verification.json")
+    claim_path = task_artifact_path(root, task_id, "completion-claim.json")
+    gate_path = task_artifact_path(root, task_id, "completion-gate.json")
+    if not verification_path.is_file():
+        raise ValueError(f"verification artifact is missing: {task_id}")
+    if not claim_path.is_file():
+        raise ValueError(f"persisted completion claim is missing: {task_id}")
+    if not gate_path.is_file():
+        raise ValueError(f"passing completion gate is missing: {task_id}")
+
+    verification = read_json(verification_path)
+    validate_file(verification, VERIFICATION_SCHEMA, f"verification {task_id}")
+    if verification["task_id"] != task_id:
+        raise ValueError(f"verification is bound to another task: {task_id}")
+    if verification["work_revision"] != task["work_revision"]:
+        raise ValueError(f"verification is stale for task: {task_id}")
+    if verification["workflow_decision_hash"] != task["workflow_decision_hash"]:
+        raise ValueError(f"verification is bound to another decision: {task_id}")
+    if verification["status"] != "PASS":
+        raise ValueError(f"verification did not pass: {task_id}")
+    verified_files = verify_workspace_snapshot(project_root, verification["workspace"], task_id)
+    require_scope_coverage(project_root, task, verified_files)
+
+    claim = read_json(claim_path)
+    validate_file(claim, CLAIM_SCHEMA, f"completion claim {task_id}")
+    if claim["task_id"] != task_id or claim["work_revision"] != task["work_revision"]:
+        raise ValueError(f"completion claim is stale or mismatched: {task_id}")
+    _require_acceptance_mapping(claim, verification, task_id)
+
+    gate = read_json(gate_path)
+    validate_file(gate, COMPLETION_GATE_SCHEMA, f"completion gate {task_id}")
+    if (
+        gate["task_id"] != task_id
+        or gate["work_revision"] != task["work_revision"]
+        or gate["workflow_decision_hash"] != task["workflow_decision_hash"]
+        or gate["status"] != "PASS"
+        or gate["claim_hash"] != sha256_json(claim)
+    ):
+        raise ValueError(f"completion gate is stale or mismatched: {task_id}")
+
+
+def _require_review(project_root: str, root: Path, task: dict[str, Any]) -> None:
+    task_id = task["task_id"]
+    path = task_artifact_path(root, task_id, "review.json")
     if not path.is_file():
+        raise ValueError(f"required review artifact is missing: {task_id}")
+    review = read_json(path)
+    validate_file(review, REVIEW_SCHEMA, f"review {task_id}")
+    if (
+        review["task_id"] != task_id
+        or review["work_revision"] != task["work_revision"]
+        or review["workflow_decision_hash"] != task["workflow_decision_hash"]
+    ):
+        raise ValueError(f"review is stale or mismatched: {task_id}")
+    if review["outcome"] != "PASS":
+        raise ValueError(f"review did not pass: {task_id}")
+    verified_files = verify_workspace_snapshot(project_root, review["workspace"], task_id)
+    require_scope_coverage(project_root, task, verified_files)
+
+
+def _require_worktree_cleanup(root: Path, task: dict[str, Any]) -> None:
+    task_id = task["task_id"]
+    if task.get("worktree_identity") is None:
         return
-    review = read_object(path)
-    if not isinstance(review, dict) or str(review.get("verdict", "")).upper() != "PASS":
-        raise DeliveryBlocked("persisted Batch Reviewer result is not PASS")
+    path = task_artifact_path(root, task_id, "worktree-cleanup.json")
+    if not path.is_file():
+        raise ValueError(f"worktree cleanup decision is missing: {task_id}")
+    cleanup = read_json(path)
+    validate_file(cleanup, HERE.parents[1] / "schemas" / "worktree-cleanup.schema.json", f"worktree cleanup {task_id}")
+    if cleanup["task_id"] != task_id:
+        raise ValueError(f"worktree cleanup is bound to another task: {task_id}")
+    if cleanup["worktree"] != task["worktree_identity"]:
+        raise ValueError(f"worktree cleanup does not match the task identity: {task_id}")
 
 
-def _check_approval(root: Path, decision: dict[str, Any], *, require_persisted: bool, actor: dict[str, str] | None) -> None:
-    approval = decision["approval"]
-    if str(approval.get("decision", "")).upper() != "APPROVED":
-        raise DeliveryBlocked("delivery outcome requires an APPROVED typed approval")
-    if decision["outcome"] == "DISCARD_BRANCH_AND_WORKTREE":
-        if approval.get("actor_type") != "user":
-            raise DeliveryBlocked("discard requires a user typed approval")
-        if str(approval.get("action", "")).upper() not in DESTRUCTIVE_ACTIONS:
-            raise DeliveryBlocked("discard requires an explicit destructive approval action")
-    if actor is not None:
-        if approval.get("actor_type") != actor.get("actor_type") or approval.get("actor_id") != actor.get("actor_id"):
-            raise DeliveryBlocked("approval actor does not match the executing actor")
-    try:
-        issued = parse_timestamp(approval["issued_at"])
-        expires = parse_timestamp(approval["expires_at"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise DeliveryBlocked("approval timestamps are invalid") from exc
-    if issued > expires or expires <= datetime.now(timezone.utc):
-        raise DeliveryBlocked("delivery approval is expired or has an invalid interval")
-    if not require_persisted:
-        return
-    target_type = approval["target_type"]
-    target_id = approval["target_id"]
-    path = root / "approvals" / f"{target_type}-{target_id}.json"
-    if not path.is_file() or path.is_symlink():
-        raise DeliveryBlocked("required delivery approval artifact is missing")
-    try:
-        persisted = read_object(path)
-    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise DeliveryBlocked("required delivery approval artifact is unreadable") from exc
-    if persisted != approval:
-        raise DeliveryBlocked("delivery approval does not match the persisted approval artifact")
+def _task_bindings(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "task_id": task["task_id"],
+            "work_revision": task["work_revision"],
+            "workflow_decision_hash": task["workflow_decision_hash"],
+        }
+        for task in sorted(tasks, key=lambda item: item["task_id"])
+    ]
 
 
-def _check_verification(decision: dict[str, Any]) -> None:
-    verification = decision["verification"]
-    if str(verification.get("status", "")).upper() != "PASS":
-        raise DeliveryBlocked("fresh final verification is not PASS")
-    checks = verification.get("checks")
-    if not isinstance(checks, list) or not checks:
-        raise DeliveryBlocked("delivery decision requires at least one final verification check")
-    for check in checks:
-        if check.get("status") != "PASS" or check.get("exit_code") != 0:
-            raise DeliveryBlocked(f"final verification did not pass: {check.get('command')}")
-
-
-def _check_cleanup(decision: dict[str, Any]) -> None:
-    outcome = decision["outcome"]
-    cleanup = decision["cleanup"]
-    requested = cleanup["requested"]
-    status = cleanup["status"]
-    if outcome in {"PUSH_AND_CREATE_PR", "KEEP_BRANCH_AND_WORKTREE"}:
-        if requested or status != "PRESERVED":
-            raise DeliveryBlocked(f"{outcome} must preserve the branch and worktree")
-    elif outcome == "DISCARD_BRANCH_AND_WORKTREE":
-        if not requested or not cleanup["identity_proven"] or status not in {"PENDING", "CLEANED"}:
-            raise DeliveryBlocked("discard requires a pending or completed identity-proven cleanup record")
-    elif requested and (not cleanup["identity_proven"] or status not in {"PENDING", "CLEANED"}):
-        raise DeliveryBlocked("requested merge cleanup is not identity-proven")
-    if decision["status"] in BLOCKED_STATUSES and requested:
-        raise DeliveryBlocked("blocked delivery decisions cannot request cleanup")
-
-
-def validate_delivery_decision(
-    decision: Any,
-    project_root: str | Path | None = None,
-    *,
-    require_persisted_approval: bool = False,
-    actor: dict[str, str] | None = None,
-) -> bool:
-    """Validate schema, evidence, identity, approval, and cleanup fencing."""
-
-    errors = _schema_errors(decision)
-    if errors:
-        raise ValueError("delivery decision violates its schema: " + "; ".join(errors))
-    if not isinstance(decision, dict) or decision["outcome"] not in OUTCOMES:
-        raise ValueError("delivery decision outcome is unsupported")
-    if decision["status"] not in RECORDED_STATUSES | BLOCKED_STATUSES:
-        raise ValueError("delivery decision status is unsupported")
-    _check_cleanup(decision)
-    if decision["status"] in BLOCKED_STATUSES:
-        if "conflict" not in decision:
-            raise DeliveryBlocked("blocked delivery decisions require reconciliation evidence")
-    else:
-        _check_verification(decision)
-        if decision["review"]["task_verdict"] != "PASS" or decision["review"]["batch_verdict"] != "PASS":
-            raise DeliveryBlocked("delivery requires PASS task and Batch Reviewer verdicts")
-        if decision["review"]["batch_reviewer_performed_merge"]:
-            raise DeliveryBlocked("Batch Reviewer is not permitted to perform the merge")
-    if project_root is not None:
-        root = ensure_runtime_initialized(project_root)
-        task = _load_task(root, decision["task_id"])
-        _check_task_identity(decision, task)
-        _check_persisted_batch_review(root, decision)
-        _check_approval(root, decision, require_persisted=require_persisted_approval, actor=actor)
-    else:
-        _check_approval(Path("."), decision, require_persisted=False, actor=actor)
-    return True
-
-
-def finalize_delivery(
-    project_root: str | Path,
-    decision: dict[str, Any],
-    *,
-    actor: dict[str, str] | None = None,
-    require_persisted_approval: bool = True,
-) -> dict[str, Any]:
-    """Persist a validated delivery decision before any merge or cleanup side effect."""
-
-    project = Path(project_root).expanduser().resolve()
-    root = ensure_runtime_initialized(project)
-    with runtime_lock(project):
-        validate_delivery_decision(
-            decision,
-            project,
-            require_persisted_approval=require_persisted_approval,
-            actor=actor,
-        )
-        target = root / "work" / decision["task_id"] / "delivery-decision.json"
-        if target.is_file():
-            current = read_object(target)
-            if current.get("decision_id") == decision.get("decision_id") and current == decision:
-                return {**decision, "artifact_path": str(target)}
-            if decision["revision"] <= int(current.get("revision", 0)):
-                raise DeliveryBlocked("delivery decision revision is stale")
-        write_validated(str(project), f"work/{decision['task_id']}/delivery-decision.json", decision, SCHEMA_PATH)
-        return {**decision, "artifact_path": str(target)}
+def _require_batch_review(
+    project_root: str, root: Path, state: dict[str, Any], tasks: list[dict[str, Any]]
+) -> None:
+    path = safe_child(root, "batch-review.json")
+    if not path.is_file():
+        raise ValueError("required batch-review artifact is missing")
+    review = read_json(path)
+    validate_file(review, BATCH_REVIEW_SCHEMA, "batch review")
+    if review["workflow_decision_hash"] != state["workflow_decision_hash"]:
+        raise ValueError("batch review is bound to another delivery decision")
+    if review["outcome"] != "PASS":
+        raise ValueError("batch review did not pass")
+    expected = [
+        {
+            "task_id": item["task_id"],
+            "work_revision": item["work_revision"],
+            "task_workflow_decision_hash": item["workflow_decision_hash"],
+        }
+        for item in _task_bindings(tasks)
+    ]
+    actual = sorted(review["tasks"], key=lambda item: item["task_id"])
+    if actual != expected:
+        raise ValueError("batch review task bindings are stale or incomplete")
+    verified_files = verify_workspace_snapshot(project_root, review["workspace"], tasks[0]["task_id"])
+    for task in tasks:
+        require_scope_coverage(project_root, task, verified_files)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", required=True)
     parser.add_argument("--input", required=True)
-    parser.add_argument("--actor")
-    parser.add_argument("--actor-type", choices=("user", "primary_agent", "agent", "service"))
-    parser.add_argument("--allow-unpersisted-approval", action="store_true")
     args = parser.parse_args()
     try:
-        actor = None
-        if args.actor is not None or args.actor_type is not None:
-            if not args.actor or not args.actor_type:
-                raise ValueError("--actor and --actor-type must be supplied together")
-            actor = {"actor_id": args.actor, "actor_type": args.actor_type}
-        result = finalize_delivery(
-            args.project_root,
-            read_payload(args.input),
-            actor=actor,
-            require_persisted_approval=not args.allow_unpersisted_approval,
+        supplied = read_json(args.input)
+        unknown = sorted(set(supplied) - INPUT_FIELDS)
+        if unknown:
+            raise ValueError("caller must not supply derived delivery fields: " + ", ".join(unknown))
+        if supplied.get("schema_version") not in {3, 4}:
+            raise ValueError("delivery input schema_version must be 3 or 4")
+        root = runtime_root(args.project_root)
+        state = read_json(root / "state.json")
+        validate_file(state, STATE_SCHEMA, "state")
+        require_task_index_consistent(root, state)
+        if state["status"] != "IDLE" or state["active_task_id"] is not None:
+            raise ValueError("delivery is blocked while a task is active")
+        expected = state["delivery"]
+        if expected["action"] == "none":
+            raise ValueError("current workflow decision has no delivery action")
+
+        action = str(supplied.get("action", "")).strip()
+        outcome = str(supplied.get("outcome", "")).strip()
+        cleanup = str(supplied.get("cleanup", "")).strip()
+        summary = str(supplied.get("summary", "")).strip()
+        approval_reference = supplied.get("approval_reference")
+        if approval_reference is not None:
+            approval_reference = str(approval_reference).strip() or None
+        if action != expected["action"]:
+            raise ValueError(f"delivery action conflicts with workflow decision: expected {expected['action']}")
+        if outcome != expected["outcome"]:
+            raise ValueError(f"delivery outcome conflicts with workflow decision: expected {expected['outcome']}")
+        if cleanup != expected["cleanup"]:
+            raise ValueError(f"cleanup conflicts with workflow decision: expected {expected['cleanup']}")
+        if not summary:
+            raise ValueError("delivery summary must be non-empty")
+
+        tasks = _select_tasks(root, state, supplied.get("task_ids"))
+        requirements = state["evidence_requirements"]
+        for task in tasks:
+            if requirements["verification"]:
+                _require_verification(args.project_root, root, task)
+            if requirements["review"]:
+                _require_review(args.project_root, root, task)
+            _require_worktree_cleanup(root, task)
+        if requirements["batch_review"]:
+            _require_batch_review(args.project_root, root, state, tasks)
+
+        worktree_contract = state.get("worktree", {})
+        worktree_approval_required = bool(
+            isinstance(worktree_contract, dict)
+            and (
+                worktree_contract.get("delivery_approval_required")
+                or worktree_contract.get("cleanup_approval_required")
+            )
         )
-    except (RuntimeNotInitializedError, RuntimeLockedError) as exc:
-        print(f"DELIVERY_BLOCKED: {exc}", file=sys.stderr)
-        return 2
-    except DeliveryBlocked as exc:
-        print(f"DELIVERY_BLOCKED: {exc}", file=sys.stderr)
-        return 2
-    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        approval_required = bool(state["approval"]["required"] or worktree_approval_required)
+        approval_kind = "user" if worktree_approval_required else state["approval"]["kind"]
+        if approval_required and not approval_reference:
+            raise ValueError("approval_reference is required by the workflow decision")
+
+        decision = {
+            "schema_version": 4,
+            "workflow_decision_hash": state["workflow_decision_hash"],
+            "task_bindings": _task_bindings(tasks),
+            "evidence_requirements": requirements,
+            "action": action,
+            "outcome": outcome,
+            "summary": summary,
+            "approval_required": approval_required,
+            "approval_kind": approval_kind,
+            "approval_reference": approval_reference,
+            "cleanup": cleanup,
+        }
+        validate_file(decision, DELIVERY_SCHEMA, "delivery decision")
+        write_json_atomic(safe_child(root, "delivery-decision.json"), decision)
+        append_event(
+            args.project_root,
+            "DELIVERY_DECISION_WRITTEN",
+            {
+                "action": decision["action"],
+                "outcome": decision["outcome"],
+                "workflow_decision_hash": decision["workflow_decision_hash"],
+                "task_ids": [item["task_id"] for item in decision["task_bindings"]],
+                "approval_required": decision["approval_required"],
+            },
+        )
+        refresh_checklist(args.project_root)
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
         print(f"DELIVERY_REJECTED: {exc}", file=sys.stderr)
         return 1
-    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    print(json.dumps(decision, ensure_ascii=False, indent=2))
     return 0
 
 

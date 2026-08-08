@@ -1,45 +1,30 @@
 ---
 name: agentic-skill-authoring
-description: Use when creating, revising, or pressure-testing a Harness skill, especially when triggers are vague, boundaries leak, evidence goes stale, or agents rationalize unsafe shortcuts.
+description: Use only when dispatched by agentic-engineering-core to create, simplify, or validate skills within an explicit package scope.
 ---
 
-# Agentic Skill Authoring
+# Agentic Skill Author
 
-Use this skill to design and behavior-test a bounded Harness skill. Keep the
-entrypoint short, imperative, and trigger-driven; move detail into the linked
-references.
+## Contract
+
+- **Owner:** Primary Agent dispatches this role.
+- **Boundary:** Edits skill content only; validates layout and behavior.
+- **Prompt:** [skill-author.md](prompts/skill-author.md), appended after `agentic-engineering-core/prompts/subagent-envelope.md`.
+- **Return:** universal status, files, evidence, findings/implementation, risks, open questions, and next step.
 
 ## Workflow
 
-1. Read the active task, project profile, [agentic-engineering-core](../agentic-engineering-core/SKILL.md),
-   [agentic-state-tools](../agentic-state-tools/SKILL.md), and the relevant Wiki
-   contracts before changing a skill.
-2. Define concrete triggers, scope boundaries, stop conditions, rigid rules,
-   and profile-aware flexible guidance.
-3. Put high-frequency instructions in `SKILL.md`; put design detail,
-   behavioral-test procedure, and rationalization counters in the three
-   references below.
-4. Add or update pressure scenarios in `examples/pressure-scenarios.yaml` and
-   profile rules in `examples/skill-authoring-profile.yaml`.
-5. Validate scenarios against
-   [behavior-scenario.schema.json](schemas/behavior-scenario.schema.json) and
-   run them with [run_behavior_scenarios.py](scripts/run_behavior_scenarios.py).
-   Record the configured model reference,
-   deployment/config identity, scenario result, and evidence; never hard-code a
-   provider.
-6. Report `PASS`, `FAIL`, `BLOCKED`, or `INCONCLUSIVE` honestly. Prose
-   inspection alone cannot establish behavioral hardening.
+1. Validate the supplied task contract and scope.
+2. Read only the minimum required context.
+3. Establish a RED baseline without the skill, confirm GREEN with the skill, then REFACTOR to close loopholes or ambiguity. For a discipline-enforcing skill, run that cycle across at least three combined-pressure scenarios. For a pure reference skill with no observable behavior, pressure testing is conditional; use direct content/link validation for the evidence and record why scenarios are inapplicable. Reject test-after or untested skill changes; do not add fake automation.
+4. Perform the role-specific workflow in the prompt and keep the change within the assigned package scope.
+5. Self-check against acceptance and role boundaries; stop and escalate when required evidence is missing or scope widens.
+6. Return structured evidence and an honest handoff; use `BLOCKED` when safe progress is impossible.
 
-## Stop conditions
+## References
 
-Stop and report `BLOCKED` when the task scope, profile, scenario schema, or
-runner is unavailable; when a required scenario has no expected behavior or
-evidence rule; or when the runner cannot distinguish an agent violation from a
-harness failure. Do not broaden scope, edit the schema/runner without explicit
-authorization, or claim hardening from an unrun scenario.
-
-Read progressively:
-
+- [pressure-testing protocol](references/pressure-testing.md)
 - [skill design guidelines](references/skill-design-guidelines.md)
-- [behavioral testing](references/behavioral-testing.md)
-- [rationalization hardening](references/rationalization-hardening.md)
+- [workflow trimming](references/workflow-trimming.md)
+
+Do not infer missing permissions, inherit hidden conversation context, expand scope, or claim completion without evidence.

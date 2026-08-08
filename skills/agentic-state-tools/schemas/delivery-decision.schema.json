@@ -3,147 +3,130 @@
   "type": "object",
   "required": [
     "schema_version",
-    "decision_id",
-    "task_id",
-    "batch_id",
-    "plan_revision",
-    "task_revision",
-    "run_id",
-    "attempt_id",
-    "dispatch_id",
+    "workflow_decision_hash",
+    "task_bindings",
+    "evidence_requirements",
+    "action",
     "outcome",
-    "branch_name",
-    "worktree_path",
-    "base_commit",
-    "write_scope_hash",
-    "input_artifact_hashes",
-    "output_artifact_hashes",
-    "verification",
-    "review",
-    "approval",
-    "cleanup",
-    "status",
-    "created_at",
-    "revision"
+    "summary",
+    "approval_required",
+    "approval_kind",
+    "approval_reference",
+    "cleanup"
   ],
   "properties": {
-    "schema_version": {"type": "integer", "const": 1},
-    "decision_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
-    "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
-    "batch_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
-    "plan_revision": {"type": "integer", "minimum": 1},
-    "task_revision": {"type": "integer", "minimum": 1},
-    "run_id": {"type": "string", "minLength": 1},
-    "attempt_id": {"type": "string", "minLength": 1},
-    "dispatch_id": {"type": "string", "minLength": 1},
-    "outcome": {"type": "string", "enum": ["MERGE_LOCAL", "PUSH_AND_CREATE_PR", "KEEP_BRANCH_AND_WORKTREE", "DISCARD_BRANCH_AND_WORKTREE"]},
-    "branch_name": {"type": "string", "minLength": 1},
-    "worktree_path": {"type": "string", "minLength": 1},
-    "base_commit": {"type": "string", "pattern": "^[0-9a-fA-F]{40,64}$"},
-    "write_scope_hash": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
-    "target_branch": {"type": "string", "minLength": 1},
-    "target_hash": {"type": "string", "pattern": "^[0-9a-fA-F]{40,64}$"},
-    "input_artifact_hashes": {"$ref": "#/$defs/hash_map"},
-    "output_artifact_hashes": {"$ref": "#/$defs/hash_map"},
-    "verification": {"$ref": "#/$defs/verification"},
-    "review": {"$ref": "#/$defs/review"},
-    "approval": {"$ref": "#/$defs/approval"},
-    "cleanup": {"$ref": "#/$defs/cleanup"},
-    "conflict": {"$ref": "#/$defs/conflict"},
-    "status": {"type": "string", "enum": ["RECORDED", "COMPLETED", "BLOCKED", "NEEDS_RECONCILIATION"]},
-    "created_at": {"type": "string", "minLength": 1},
-    "recorded_at": {"type": "string", "minLength": 1},
-    "revision": {"type": "integer", "minimum": 1},
-    "previous_revision": {"type": ["integer", "null"], "minimum": 1}
-  },
-  "additionalProperties": false,
-  "$defs": {
-    "hash_map": {
-      "type": "object",
-      "additionalProperties": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"}
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        4
+      ]
     },
-    "verification": {
+    "workflow_decision_hash": {
+      "type": "string",
+      "pattern": "[0-9a-f]{64}"
+    },
+    "task_bindings": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": [
+          "task_id",
+          "work_revision",
+          "workflow_decision_hash"
+        ],
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+          },
+          "work_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "workflow_decision_hash": {
+            "type": "string",
+            "pattern": "[0-9a-f]{64}"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence_requirements": {
       "type": "object",
-      "required": ["status", "workspace_hash", "verified_at", "checks"],
+      "required": [
+        "verification",
+        "review",
+        "batch_review"
+      ],
       "properties": {
-        "status": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED"]},
-        "workspace_hash": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
-        "verified_at": {"type": "string", "minLength": 1},
-        "checks": {
-          "type": "array",
-          "minItems": 1,
-          "items": {"$ref": "#/$defs/check"}
+        "verification": {
+          "type": "boolean"
+        },
+        "review": {
+          "type": "boolean"
+        },
+        "batch_review": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
     },
-    "check": {
-      "type": "object",
-      "required": ["evidence_id", "command", "exit_code", "status"],
-      "properties": {
-        "evidence_id": {"type": "string", "minLength": 1},
-        "command": {"type": "string", "minLength": 1},
-        "exit_code": {"type": ["integer", "null"], "minimum": 0},
-        "status": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED", "SKIPPED"]}
-      },
-      "additionalProperties": false
+    "action": {
+      "type": "string",
+      "enum": [
+        "none",
+        "keep_local",
+        "merge_local",
+        "push_branch",
+        "create_review_request",
+        "production_action",
+        "destructive_cleanup"
+      ]
     },
-    "review": {
-      "type": "object",
-      "required": ["task_verdict", "batch_verdict", "batch_reviewer_performed_merge"],
-      "properties": {
-        "task_verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED"]},
-        "batch_verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED"]},
-        "batch_reviewer_id": {"type": "string", "minLength": 1},
-        "batch_reviewer_performed_merge": {"type": "boolean"}
-      },
-      "additionalProperties": false
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "NO_ACTION",
+        "KEEP_LOCAL",
+        "MERGE_LOCAL",
+        "PUSH_BRANCH",
+        "CREATE_REVIEW_REQUEST",
+        "PRODUCTION_ACTION",
+        "DESTRUCTIVE_CLEANUP"
+      ]
     },
-    "approval": {
-      "type": "object",
-      "required": ["approval_id", "target_type", "target_id", "decision", "approver", "actor_type", "actor_id", "action", "target_revision", "target_hash", "policy_version", "issued_at", "expires_at", "evidence", "created_at", "revision"],
-      "properties": {
-        "approval_id": {"type": "string", "minLength": 1},
-        "target_type": {"type": "string", "minLength": 1},
-        "target_id": {"type": "string", "minLength": 1},
-        "decision": {"type": "string", "enum": ["APPROVED", "REJECTED", "DEFERRED"]},
-        "approver": {"type": "string", "minLength": 1},
-        "actor_type": {"type": "string", "enum": ["user", "primary_agent", "agent", "service"]},
-        "actor_id": {"type": "string", "minLength": 1},
-        "action": {"type": "string", "minLength": 1},
-        "target_revision": {"type": "integer", "minimum": 1},
-        "target_hash": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
-        "policy_version": {"type": "string", "minLength": 1},
-        "issued_at": {"type": "string", "minLength": 1},
-        "expires_at": {"type": "string", "minLength": 1},
-        "evidence": {"type": "string", "minLength": 1},
-        "created_at": {"type": "string", "minLength": 1},
-        "revision": {"type": "integer", "minimum": 1}
-      },
-      "additionalProperties": false
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "approval_required": {
+      "type": "boolean"
+    },
+    "approval_kind": {
+      "type": "string",
+      "enum": [
+        "automatic",
+        "user"
+      ]
+    },
+    "approval_reference": {
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "cleanup": {
-      "type": "object",
-      "required": ["requested", "status", "identity_proven", "evidence_id", "recorded_at"],
-      "properties": {
-        "requested": {"type": "boolean"},
-        "status": {"type": "string", "enum": ["PRESERVED", "PENDING", "CLEANED", "BLOCKED", "NEEDS_RECONCILIATION"]},
-        "identity_proven": {"type": "boolean"},
-        "evidence_id": {"type": "string", "minLength": 1},
-        "operation_id": {"type": "string", "minLength": 1},
-        "recorded_at": {"type": "string", "minLength": 1}
-      },
-      "additionalProperties": false
-    },
-    "conflict": {
-      "type": "object",
-      "required": ["classification", "details"],
-      "properties": {
-        "classification": {"type": "string", "enum": ["CONFLICTED", "BLOCKED", "NEEDS_RECONCILIATION"]},
-        "details": {"type": "string", "minLength": 1},
-        "evidence_id": {"type": "string", "minLength": 1}
-      },
-      "additionalProperties": false
+      "type": "string",
+      "enum": [
+        "KEEP",
+        "SAFE_REMOVE",
+        "NOT_APPLICABLE"
+      ]
     }
-  }
+  },
+  "additionalProperties": false
 }

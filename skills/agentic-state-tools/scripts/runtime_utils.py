@@ -1,667 +1,498 @@
-"""Shared, dependency-free helpers for agentic runtime state scripts."""
-
+"""Shared helpers for minimal project-local runtime state."""
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import re
 import tempfile
-import threading
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Any, Iterator
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+from typing import Any
 
-from state_machine import load_state_machine, event_status_map, status_event_map, transition_map
-
-
-class RuntimeNotInitializedError(FileNotFoundError):
-    """Raised when a mutating command targets a project without initialized runtime state."""
-
-
-class RuntimeLockedError(RuntimeError):
-    """Raised when another state mutation holds the runtime lock."""
-
-
-_STATE_MACHINE = load_state_machine()
-EVENT_TYPE_TO_STATUS = event_status_map(_STATE_MACHINE)
-STATUS_TO_EVENT_TYPE = status_event_map(_STATE_MACHINE)
-NON_STATE_EVENT_TYPES = set(_STATE_MACHINE["non_state_events"])
-TERMINAL_STATUSES = set(_STATE_MACHINE["terminal_statuses"])
-
-LOCK_DIRECTORIES = {
-    "task": "tasks",
-    "file": "files",
-    "resource": "resources",
+TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+RESERVED_WORKSPACE_ROOTS = {".phongka", ".agent"}
+REDACTED_VALUE = "[REDACTED]"
+SECURITY_DEFAULTS = {
+    "redact_environment_values": True,
+    "redact_tokens": True,
+    "forbid_secret_persistence": True,
+}
+PRIVATE_KEY_RE = re.compile(
+    r"-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?-----END [^-\r\n]*PRIVATE KEY-----",
+    re.IGNORECASE,
+)
+BEARER_TOKEN_RE = re.compile(
+    r"\bBearer[ \t]+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE
+)
+JWT_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])"
+)
+KNOWN_API_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"sk-(?:proj-)?[A-Za-z0-9_-]{12,}|"
+    r"sk_(?:live|test)_[A-Za-z0-9_-]{12,}|"
+    r"ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+    r"glpat-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|"
+    r"AIza[0-9A-Za-z_-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|"
+    r"npm_[A-Za-z0-9]{20,}|pypi-[A-Za-z0-9_-]{20,}"
+    r")(?![A-Za-z0-9_-])"
+)
+ENV_ASSIGNMENT_RE = re.compile(
+    r"(?P<prefix>(?:(?:\$(?:env|Env):|export[ \t]+))?)"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*(?:API[_-]?KEY|ACCESS[_-]?TOKEN|"
+    r"CLIENT[_-]?SECRET|AUTH[_-]?TOKEN|PASSWORD|PASSWD|SECRET|TOKEN|CREDENTIALS?))"
+    r"(?P<separator>[ \t]*=[ \t]*)(?P<value>[^\s,;]+)",
+    re.IGNORECASE,
+)
+SENSITIVE_ASSIGNMENT_RE = re.compile(
+    r"\b(?:api[_-]?key|access[_-]?token|client[_-]?secret)\b"
+    r"[ \t]*[:=][ \t]*[^\s,;]+",
+    re.IGNORECASE,
+)
+SENSITIVE_FIELD_NAMES = {
+    "secret",
+    "token",
+    "password",
+    "api_key",
+    "private_key",
+    "access_token",
+    "client_secret",
 }
 
-_RUNTIME_LOCK_DEPTH: dict[str, int] = {}
-_RUNTIME_LOCK_OWNER: dict[str, int] = {}
+
+class SecretPersistenceError(ValueError):
+    """Raised without echoing the detected secret material."""
+
+
+def _security_settings() -> dict[str, bool]:
+    config_path = os.environ.get("AGENTIC_CONFIG_FILE")
+    if config_path:
+        path = Path(config_path).expanduser()
+    else:
+        path = Path(__file__).resolve().parents[2] / "agentic-configuration" / "config" / "agentic-config.json"
+    settings = dict(SECURITY_DEFAULTS)
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+        security = config.get("security", {})
+        if isinstance(security, dict):
+            for name in settings:
+                if name in security:
+                    settings[name] = bool(security[name])
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        # Keep the persistence boundary fail-closed if configuration is unavailable.
+        pass
+    return settings
+
+
+def _normalized_field_name(value: str) -> str:
+    split_camel = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+    return re.sub(r"[^A-Za-z0-9]+", "_", split_camel).strip("_").lower()
+
+
+def _is_sensitive_field(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = _normalized_field_name(value)
+    return any(
+        normalized == name
+        or normalized.startswith(name + "_")
+        or normalized.endswith("_" + name)
+        or ("_" + name + "_") in ("_" + normalized + "_")
+        for name in SENSITIVE_FIELD_NAMES
+    )
+
+
+def _contains_private_key(value: Any) -> bool:
+    if isinstance(value, str):
+        return PRIVATE_KEY_RE.search(value) is not None
+    if isinstance(value, dict):
+        return any(_contains_private_key(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_private_key(item) for item in value)
+    return False
+
+
+def _reject_secret() -> None:
+    raise SecretPersistenceError("secret-like value rejected at persistence boundary")
+
+
+def _redact_or_reject(settings: dict[str, bool], setting: str) -> str | None:
+    if settings[setting]:
+        return REDACTED_VALUE
+    if settings["forbid_secret_persistence"]:
+        _reject_secret()
+    return None
+
+
+def _sanitize_string(value: str, settings: dict[str, bool]) -> str:
+    if PRIVATE_KEY_RE.search(value):
+        _reject_secret()
+    result = value
+
+    def replace_environment(match: re.Match[str]) -> str:
+        replacement = _redact_or_reject(settings, "redact_environment_values")
+        if replacement is None:
+            return match.group(0)
+        return (
+            match.group("prefix")
+            + match.group("name")
+            + match.group("separator")
+            + replacement
+        )
+
+    result = ENV_ASSIGNMENT_RE.sub(replace_environment, result)
+    token_patterns = (BEARER_TOKEN_RE, JWT_RE, KNOWN_API_TOKEN_RE, SENSITIVE_ASSIGNMENT_RE)
+    for pattern in token_patterns:
+        if pattern.search(result) is None:
+            continue
+        replacement = _redact_or_reject(settings, "redact_tokens")
+        if replacement is None:
+            continue
+        result = pattern.sub(replacement, result)
+    return result
+
+
+def sanitize_for_persistence(value: Any) -> Any:
+    """Return a recursively safe value or reject it without exposing raw secrets."""
+    settings = _security_settings()
+
+    def sanitize(item: Any) -> Any:
+        if isinstance(item, dict):
+            sanitized: dict[Any, Any] = {}
+            for key, child in item.items():
+                if _is_sensitive_field(key):
+                    if _contains_private_key(child):
+                        _reject_secret()
+                    replacement = _redact_or_reject(settings, "redact_tokens")
+                    if replacement is not None:
+                        sanitized[key] = replacement
+                        continue
+                sanitized[key] = sanitize(child)
+            return sanitized
+        if isinstance(item, list):
+            return [sanitize(child) for child in item]
+        if isinstance(item, str):
+            return _sanitize_string(item, settings)
+        return item
+
+    return sanitize(value)
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def project_path(project_root: str | Path) -> Path:
-    return Path(project_root).expanduser().resolve()
+def canonical(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def validate_identifier(value: Any, field: str = "identifier") -> str:
-    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", value):
-        raise ValueError(f"{field} must contain only letters, digits, dot, underscore, or hyphen")
-    return value
+def sha256_json(value: Any) -> str:
+    return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
 
 
-def next_revision(payload: dict[str, Any], current: int) -> int:
-    expected = payload.pop("expected_revision", current)
-    if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
-        raise ValueError("expected_revision must be a non-negative integer")
-    if expected != current:
-        raise ValueError(f"stale revision: expected {expected}, current {current}")
-    return current + 1
-
-
-def task_dependencies(task: dict[str, Any]) -> list[str]:
-    """Read dependencies from either the legacy task shape or queue snapshots."""
-
-    snapshot = task.get("dependency_snapshot")
-    value = snapshot.get("depends_on", []) if isinstance(snapshot, dict) else task.get("depends_on", [])
-    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-        raise ValueError("task dependencies must be an array of strings")
-    return sorted(set(value))
-
-
-def task_write_scopes(task: dict[str, Any]) -> list[str]:
-    """Read normalized write scopes from either a task or a queue snapshot."""
-
-    snapshot = task.get("scope_snapshot")
-    value = snapshot.get("write_scope", []) if isinstance(snapshot, dict) else task.get("write_scope", [])
-    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-        raise ValueError("task write_scope must be an array of strings")
-    scopes: list[str] = []
-    for item in value:
-        normalized = item.replace("\\", "/").strip()
-        while normalized.startswith("./"):
-            normalized = normalized[2:]
-        normalized = normalized.rstrip("/") or "."
-        if normalized not in scopes:
-            scopes.append(normalized)
-    return sorted(scopes)
-
-
-def agent_path(project_root: str | Path) -> Path:
-    return project_path(project_root) / ".agent"
-
-
-def ensure_runtime_initialized(project_root: str | Path) -> Path:
-    root = agent_path(project_root)
-    required = (root / "runtime" / "state.json", root / "runtime" / "events.jsonl")
-    if not all(path.is_file() for path in required):
-        raise RuntimeNotInitializedError(
-            f"runtime is not initialized at {root}; run init_runtime.py first"
-        )
-    return root
-
-
-def process_is_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    if os.name == "nt":
-        # Windows does not reliably implement os.kill(pid, 0) as a liveness
-        # probe. A signaled process handle is the authoritative check here.
-        import ctypes
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.OpenProcess.restype = ctypes.c_void_p
-        access = 0x00100000 | 0x00001000  # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
-        handle = kernel32.OpenProcess(access, False, pid)
-        if not handle:
-            error = ctypes.get_last_error()
-            return error == 5  # Access denied: conservatively treat it as alive.
-        try:
-            result = kernel32.WaitForSingleObject(handle, 0)
-            return result == 0x00000102  # WAIT_TIMEOUT
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def remove_dead_runtime_lock(lock_path: Path) -> bool:
-    """Remove a lock only when its recorded owner process is definitely gone."""
-
-    try:
-        metadata = read_json(lock_path)
-        pid = metadata.get("pid") if isinstance(metadata, dict) else None
-        if not isinstance(pid, int) or process_is_alive(pid):
-            return False
-    except (OSError, ValueError, json.JSONDecodeError):
-        return False
-    try:
-        lock_path.unlink()
-    except FileNotFoundError:
-        pass
-    return True
-
-
-@contextmanager
-def runtime_lock(project_root: str | Path) -> Iterator[Path]:
-    """Acquire a short-lived exclusive lock for one runtime mutation."""
-
-    root = ensure_runtime_initialized(project_root)
-    lock_key = str(root.resolve())
-    thread_id = threading.get_ident()
-    nested_depth = _RUNTIME_LOCK_DEPTH.get(lock_key, 0)
-    if nested_depth and _RUNTIME_LOCK_OWNER.get(lock_key) == thread_id:
-        _RUNTIME_LOCK_DEPTH[lock_key] = nested_depth + 1
-        try:
-            yield root
-        finally:
-            if _RUNTIME_LOCK_DEPTH.get(lock_key, 0) <= 1:
-                _RUNTIME_LOCK_DEPTH.pop(lock_key, None)
-            else:
-                _RUNTIME_LOCK_DEPTH[lock_key] -= 1
-        return
-
-    lock_path = root / "locks" / "runtime-state.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
-    except FileExistsError as exc:
-        if not remove_dead_runtime_lock(lock_path):
-            raise RuntimeLockedError(f"runtime is busy: {lock_path}") from exc
-        try:
-            descriptor = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
-        except FileExistsError as retry_exc:
-            raise RuntimeLockedError(f"runtime is busy: {lock_path}") from retry_exc
-
-    try:
-        _RUNTIME_LOCK_DEPTH[lock_key] = 1
-        _RUNTIME_LOCK_OWNER[lock_key] = thread_id
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            descriptor = None
-            json.dump({"pid": os.getpid(), "acquired_at": utc_now()}, handle)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        yield root
-    finally:
-        _RUNTIME_LOCK_DEPTH.pop(lock_key, None)
-        _RUNTIME_LOCK_OWNER.pop(lock_key, None)
-        if descriptor is not None:
-            os.close(descriptor)
-        try:
-            lock_path.unlink()
-        except FileNotFoundError:
-            pass
-
-
-def read_json(path: str | Path) -> Any:
-    with Path(path).open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def read_object(path: str | Path) -> dict[str, Any]:
-    value = read_json(path)
+def read_json(path: str | Path) -> dict[str, Any]:
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(value, dict):
-        raise ValueError(f"JSON artifact must be an object: {path}")
+        raise ValueError(f"expected JSON object: {path}")
     return value
-
-
-def inspect_terminal_cleanup(root: Path, task_id: str) -> dict[str, Any]:
-    """Inspect terminal cleanup evidence without deleting any artifact."""
-
-    reasons: list[str] = []
-    remaining_leases: list[str] = []
-    remaining_locks: list[str] = []
-    unresolved_operations: list[str] = []
-    lease_path = root / "work" / task_id / "lease.json"
-    if lease_path.is_file():
-        try:
-            read_object(lease_path)
-            remaining_leases.append(str(lease_path))
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            reasons.append(f"MALFORMED_LEASE:{lease_path.name}:{exc}")
-    for kind, directory in LOCK_DIRECTORIES.items():
-        for lock_path in sorted((root / "locks" / directory).glob("*.json")):
-            try:
-                record = read_object(lock_path)
-            except (OSError, ValueError, json.JSONDecodeError) as exc:
-                reasons.append(f"MALFORMED_LOCK:{lock_path.name}:{exc}")
-                continue
-            owned = record.get("task_id") == task_id or (kind == "task" and record.get("key") == task_id)
-            if owned:
-                remaining_locks.append(str(lock_path))
-    operations_path = root / "work" / task_id / "operations.jsonl"
-    if operations_path.is_file():
-        latest_operations: dict[str, dict[str, Any]] = {}
-        try:
-            for line_number, line in enumerate(operations_path.read_text(encoding="utf-8").splitlines(), start=1):
-                if not line.strip():
-                    continue
-                try:
-                    operation = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    reasons.append(f"MALFORMED_OPERATION:{line_number}:{exc}")
-                    continue
-                if not isinstance(operation, dict):
-                    reasons.append(f"MALFORMED_OPERATION:{line_number}:record is not an object")
-                    continue
-                operation_id = operation.get("operation_id")
-                if not isinstance(operation_id, str) or not operation_id:
-                    reasons.append(f"MALFORMED_OPERATION:{line_number}:operation_id is missing")
-                    continue
-                latest_operations[operation_id] = operation
-        except (OSError, UnicodeError) as exc:
-            reasons.append(f"UNREADABLE_OPERATIONS:{exc}")
-        unresolved_operations.extend(
-            operation_id
-            for operation_id, operation in latest_operations.items()
-            if str(operation.get("status", "")).upper() in {"STARTED", "UNKNOWN"}
-        )
-    if remaining_leases:
-        reasons.append("OWNED_LEASE_REMAINS")
-    if remaining_locks:
-        reasons.append("OWNED_LOCK_REMAINS")
-    if unresolved_operations:
-        reasons.append("UNRESOLVED_OPERATION_REMAINS")
-    return {
-        "task_id": task_id,
-        "valid": not reasons,
-        "classification": "CLEAN" if not reasons else "NEEDS_RECONCILIATION",
-        "reasons": sorted(set(reasons)),
-        "remaining_leases": remaining_leases,
-        "remaining_locks": remaining_locks,
-        "unresolved_operations": unresolved_operations,
-    }
-
-
-def assert_terminal_cleanup_safe(root: Path, task_id: str) -> dict[str, Any]:
-    evidence = inspect_terminal_cleanup(root, task_id)
-    preflight_reasons = [reason for reason in evidence["reasons"] if reason not in {"OWNED_LEASE_REMAINS", "OWNED_LOCK_REMAINS"}]
-    if preflight_reasons:
-        raise ValueError("terminal cleanup preflight NEEDS_RECONCILIATION: " + "; ".join(preflight_reasons))
-    return evidence
-
-
-def read_payload(path: str) -> Any:
-    if path == "-":
-        import sys
-
-        return json.load(sys.stdin)
-    return read_json(path)
-
-
-def write_text_atomic(path: str | Path, content: str) -> None:
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=f"{target.name}.", suffix=".tmp", dir=target.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, target)
-    except Exception:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
-        raise
 
 
 def write_json_atomic(path: str | Path, value: Any) -> None:
-    write_text_atomic(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
-
-
-def write_json_exclusive(path: str | Path, value: Any) -> None:
-    """Create one JSON file without replacing an existing file."""
-
     target = Path(path)
+    safe_value = sanitize_for_persistence(value)
     target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+    fd, temporary = tempfile.mkstemp(
+        prefix=target.name + ".", suffix=".tmp", dir=target.parent
+    )
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            descriptor = -1
-            json.dump(value, handle, ensure_ascii=False, indent=2)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(safe_value, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-    except Exception:
-        if descriptor >= 0:
-            os.close(descriptor)
-        try:
-            target.unlink()
-        except FileNotFoundError:
-            pass
-        raise
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
-def stage_validated_json(transaction: Any, relative_path: str, payload: dict[str, Any], schema_path: str | Path) -> Any:
-    """Adapt legacy callers to RuntimeTransaction's internal schema validation."""
-
-    return transaction.stage_json(relative_path, payload, schema_path)
-
-
-def lock_artifact_path(root: Path, kind: str, key: str) -> Path:
-    directory = LOCK_DIRECTORIES.get(kind)
-    if directory is None:
-        raise ValueError(f"unsupported lock kind: {kind}")
-    if not isinstance(key, str) or not key.strip():
-        raise ValueError("lock key must be a non-empty string")
-    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
-    return root / "locks" / directory / f"{digest}.json"
-
-
-def cleanup_task_runtime(root: Path, task_id: str) -> dict[str, list[dict[str, Any]]]:
-    """Remove terminal task leases and owned locks; callers append evidence events."""
-
-    removed_leases: list[dict[str, Any]] = []
-    removed_locks: list[dict[str, Any]] = []
-    lease_path = root / "work" / task_id / "lease.json"
-    if lease_path.is_file():
-        lease = read_object(lease_path)
-        lease_path.unlink()
-        removed_leases.append(lease)
-    for kind, directory in LOCK_DIRECTORIES.items():
-        for lock_path in sorted((root / "locks" / directory).glob("*.json")):
-            record = read_object(lock_path)
-            if record.get("task_id") != task_id and not (kind == "task" and record.get("key") == task_id):
-                continue
-            lock_path.unlink()
-            removed_locks.append(record)
-    return {"leases": removed_leases, "locks": removed_locks}
-
-
-def lease_expiry(seconds: int) -> str:
-    if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds <= 0:
-        raise ValueError("lease_seconds must be a positive integer")
-    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
-
-
-def parse_timestamp(value: Any) -> datetime:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("timestamp must be a non-empty string")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"invalid timestamp: {value}") from exc
-    if parsed.tzinfo is None:
-        raise ValueError("timestamp must include a timezone")
-    return parsed.astimezone(timezone.utc)
-
-
-def append_jsonl(path: str | Path, value: Any) -> None:
-    """Append one durable JSONL record. The caller must hold runtime_lock()."""
-
+def write_text_atomic(path: str | Path, value: str) -> None:
+    """Write a text artifact atomically inside the runtime boundary."""
+    if not isinstance(value, str):
+        raise TypeError("text artifact must be a string")
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n"
-    with target.open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(line)
-        handle.flush()
-        os.fsync(handle.fileno())
-
-
-def set_task_status_in_state(state: dict[str, Any], task_id: str, status: str) -> None:
-    """Keep task indexes consistent for every terminal or active status."""
-
-    state.setdefault("task_statuses", {})[task_id] = status
-    for key in ("running_tasks", "blocked_tasks", "completed_tasks"):
-        if task_id in state.setdefault(key, []):
-            state[key].remove(task_id)
-    if status in {"RUNNING", "CHECKPOINTED", "RESUMING"}:
-        state["running_tasks"].append(task_id)
-    elif status in {"BLOCKED", "REPAIR_REQUIRED", "WAITING_DEPENDENCY", "WAITING_RESOURCE_LOCK", "STALE", "RECOVERY_PENDING", "DEFERRED", "ESCALATED", "ABORTED_UNSAFE"}:
-        state["blocked_tasks"].append(task_id)
-    elif status in {"COMPLETED", "ACCEPTED", "CANCELLED", "SUPERSEDED", "ARCHIVED"}:
-        state["completed_tasks"].append(task_id)
-
-
-def iter_events(path: str | Path) -> list[dict[str, Any]]:
-    target = Path(path)
-    if not target.exists():
-        return []
-    events: list[dict[str, Any]] = []
-    with target.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"invalid event JSON at line {line_number}: {exc}") from exc
-            if not isinstance(value, dict):
-                raise ValueError(f"event at line {line_number} must be an object")
-            validate_event(value)
-            events.append(value)
-    return events
-
-
-def validate_event(event: dict[str, Any]) -> None:
-    for field in ("event_id", "timestamp", "type", "actor"):
-        if not isinstance(event.get(field), str) or not event[field].strip():
-            raise ValueError(f"event.{field} must be a non-empty string")
-    if re.fullmatch(r"EVT-[0-9]{6,}", event["event_id"]) is None:
-        raise ValueError("event.event_id must match EVT- followed by at least six digits")
-    if event["type"] != event["type"].upper():
-        raise ValueError("event.type must use uppercase canonical values")
-    event_type = event["type"].upper()
-    if event_type not in EVENT_TYPE_TO_STATUS and event_type not in NON_STATE_EVENT_TYPES:
-        raise ValueError(f"unknown event type: {event['type']}")
-    if "task_id" in event and not isinstance(event["task_id"], str):
-        raise ValueError("event.task_id must be a string")
-    if "run_id" in event and not isinstance(event["run_id"], str):
-        raise ValueError("event.run_id must be a string")
-    if "data" in event and not isinstance(event["data"], dict):
-        raise ValueError("event.data must be an object")
-
-
-def validate_event_preconditions(
-    root: Path,
-    event: dict[str, Any],
-    *,
-    artifact_overrides: dict[str, dict[str, Any] | None] | None = None,
-) -> None:
-    """Validate artifact-backed gates before an event becomes immutable history."""
-
-    def artifact(relative_path: str) -> dict[str, Any] | None:
-        if artifact_overrides is not None and relative_path in artifact_overrides:
-            value = artifact_overrides[relative_path]
-            if value is None:
-                return None
-            if not isinstance(value, dict):
-                raise ValueError(f"event precondition artifact must be an object: {relative_path}")
-            return value
-        path = root / relative_path
-        if not path.is_file():
-            return None
-        return read_object(path)
-
-    event_type = event.get("type")
-    data = event.get("data") if isinstance(event.get("data"), dict) else {}
-    if event_type == "REVIEW_CREATED":
-        task_id = event.get("task_id")
-        review_id = data.get("review_id")
-        if not isinstance(task_id, str) or not isinstance(review_id, str) or not review_id.strip():
-            raise ValueError("REVIEW_CREATED requires task_id and review_id evidence")
-        review = artifact(f"work/{task_id}/review.json")
-        if review is None or review.get("review_id") != review_id:
-            raise ValueError("REVIEW_CREATED requires a matching persisted review artifact")
-        return
-    if event_type == "BATCH_REVIEW_CREATED":
-        batch_id = data.get("batch_id")
-        review_id = data.get("review_id")
-        if not isinstance(batch_id, str) or not isinstance(review_id, str) or not review_id.strip():
-            raise ValueError("BATCH_REVIEW_CREATED requires batch_id and review_id evidence")
-        review = artifact(f"work/{batch_id}/review.json")
-        if review is None or review.get("review_id") != review_id:
-            raise ValueError("BATCH_REVIEW_CREATED requires a matching persisted batch review artifact")
-        return
-    if event_type == "CHECKPOINT_CREATED":
-        task_id = event.get("task_id")
-        checkpoint_id = data.get("checkpoint_id")
-        if not isinstance(task_id, str) or not isinstance(checkpoint_id, str):
-            raise ValueError("CHECKPOINT_CREATED requires task_id and checkpoint_id evidence")
-        checkpoint = artifact(f"work/{task_id}/checkpoint.json")
-        if checkpoint is None or checkpoint.get("checkpoint_id") != checkpoint_id:
-            raise ValueError("CHECKPOINT_CREATED requires a matching persisted checkpoint artifact")
-        return
-    if event_type == "APPROVAL_RECORDED":
-        approval_id = data.get("approval_id")
-        target_type = data.get("target_type")
-        target_id = data.get("target_id")
-        if not all(isinstance(item, str) and item.strip() for item in (approval_id, target_type, target_id)):
-            raise ValueError("APPROVAL_RECORDED requires approval target evidence")
-        approval = artifact(f"approvals/{target_type}-{target_id}.json")
-        if approval is None or approval.get("approval_id") != approval_id:
-            raise ValueError("APPROVAL_RECORDED requires a matching persisted approval artifact")
-        return
-    if event_type != "TASK_ACCEPTED":
-        return
-    task_id = event.get("task_id")
-    if not isinstance(task_id, str) or not task_id.strip():
-        raise ValueError("TASK_ACCEPTED requires task_id")
-    review_id = data.get("review_id")
-    if not isinstance(review_id, str) or not review_id.strip():
-        raise ValueError("TASK_ACCEPTED requires review_id evidence")
-    review = artifact(f"work/{task_id}/review.json")
-    if review is None:
-        raise ValueError("TASK_ACCEPTED requires a persisted review artifact")
-    if review.get("task_id") != task_id or review.get("review_id") != review_id:
-        raise ValueError("TASK_ACCEPTED review identity does not match task")
-    if str(review.get("verdict", "")).upper() != "PASS":
-        raise ValueError("TASK_ACCEPTED requires a PASS review")
-    task_state = artifact(f"work/{task_id}/task-state.json")
-    if task_state is None:
-        raise ValueError("TASK_ACCEPTED requires persisted task state")
-    if str(task_state.get("status", "")).upper() != "ACCEPTED" or task_state.get("review_id") != review_id:
-        raise ValueError("TASK_ACCEPTED task state is not linked to the passing review")
-
-
-def next_event_id(events: list[dict[str, Any]]) -> str:
-    highest = 0
-    for event in events:
-        event_id = event.get("event_id")
-        match = re.fullmatch(r"EVT-([0-9]+)", event_id) if isinstance(event_id, str) else None
-        if match:
-            highest = max(highest, int(match.group(1)))
-    return f"EVT-{highest + 1:06d}"
-
-
-def prepare_event_log(
-    root: Path,
-    event: dict[str, Any],
-    *,
-    artifact_overrides: dict[str, dict[str, Any] | None] | None = None,
-    prior_events: list[dict[str, Any]] | None = None,
-) -> tuple[str, int, str, dict[str, Any]]:
-    """Prepare a complete, validated event journal for transactional staging.
-
-    ``artifact_overrides`` lets a caller validate an event against artifacts that
-    are staged in the same transaction but are not published yet.  Existing
-    journal bytes are preserved and only the new validated event lines are
-    appended to the returned content.
-    """
-
-    events_path = root / "runtime" / "events.jsonl"
-    existing_events = iter_events(events_path)
-    staged_events = list(prior_events or [])
-    for prior in staged_events:
-        if not isinstance(prior, dict):
-            raise ValueError("prior event must be an object")
-        validate_event(prior)
-        validate_event_preconditions(root, prior, artifact_overrides=artifact_overrides)
-    all_events = [*existing_events, *staged_events]
-    record = dict(event)
-    record.setdefault("event_id", next_event_id(all_events))
-    record.setdefault("timestamp", utc_now())
-    validate_event(record)
-    if any(item.get("event_id") == record["event_id"] for item in all_events):
-        raise ValueError(f"event_id already exists: {record['event_id']}")
-    validate_event_preconditions(root, record, artifact_overrides=artifact_overrides)
-    replayed = empty_state()
-    for existing in all_events:
-        replayed = apply_event(replayed, existing)
-    apply_event(replayed, record)
-
-    try:
-        existing_content = events_path.read_text(encoding="utf-8") if events_path.is_file() else ""
-    except (OSError, UnicodeError) as exc:
-        raise ValueError(f"event journal is unreadable: {exc}") from exc
-    prefix = existing_content
-    new_events = [*staged_events, record]
-    if prefix and not prefix.endswith("\n"):
-        prefix += "\n"
-    content = prefix + "".join(
-        json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n"
-        for item in new_events
+    fd, temporary = tempfile.mkstemp(
+        prefix=target.name + ".", suffix=".tmp", dir=target.parent
     )
-    return "runtime/events.jsonl", len(existing_events), content, record
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
-def validate_state_event_transition(state: dict[str, Any], event: dict[str, Any]) -> None:
-    """Reject event replay that invents an impossible task status."""
-
-    next_status = EVENT_TYPE_TO_STATUS.get(str(event.get("type", "")).upper())
-    task_id = event.get("task_id")
-    if next_status is None or not task_id:
-        return
-    statuses = state.get("task_statuses", {})
-    current_status = statuses.get(task_id)
-    if current_status is None:
-        if next_status == "ACCEPTED":
-            raise ValueError("TASK_ACCEPTED cannot be the first task state event")
-        return
-    current_status = str(current_status).upper()
-    executor_targets = transition_map("executor").get(current_status, set())
-    reviewer_targets = transition_map("reviewer").get(current_status, set())
-    if next_status not in executor_targets and next_status not in reviewer_targets:
-        raise ValueError(f"invalid replay transition: {current_status} -> {next_status}")
+def runtime_root(project_root: str | Path) -> Path:
+    project = Path(project_root).expanduser().resolve()
+    root = project / ".phongka"
+    if root.is_symlink():
+        raise ValueError("runtime root must not be a symbolic link")
+    return root
 
 
-def apply_event(state: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
-    """Apply one valid event to the deterministic state snapshot."""
-
-    validate_state_event_transition(state, event)
-
-    next_state = dict(state)
-    previous_revision = int(next_state.get("revision", 0))
-    next_state["previous_revision"] = previous_revision
-    next_state["revision"] = previous_revision + 1
-    next_state["last_event_id"] = event["event_id"]
-    next_state["updated_at"] = event["timestamp"]
-
-    for key in ("running_tasks", "blocked_tasks", "completed_tasks"):
-        next_state.setdefault(key, [])
-    next_state.setdefault("task_statuses", {})
-
-    task_id = event.get("task_id")
-    status = EVENT_TYPE_TO_STATUS.get(event["type"].upper())
-    if task_id and status:
-        next_state["task_statuses"][task_id] = status
-        set_task_status_in_state(next_state, task_id, status)
-
-    return next_state
+def safe_child(root: str | Path, *parts: str) -> Path:
+    base = Path(root).resolve()
+    target = base.joinpath(*parts).resolve()
+    if target != base and base not in target.parents:
+        raise ValueError("resolved path escapes its allowed root")
+    return target
 
 
-def empty_state() -> dict[str, Any]:
+def validate_task_id(value: Any) -> str:
+    task_id = str(value or "").strip()
+    if TASK_ID_RE.fullmatch(task_id) is None:
+        raise ValueError(
+            "task_id must be 1-64 characters using letters, numbers, dot, underscore, or hyphen"
+        )
+    return task_id
+
+
+def ensure_casefold_unique_task_ids(values: list[str], label: str = "task IDs") -> None:
+    seen: dict[str, str] = {}
+    for value in values:
+        normalized = validate_task_id(value)
+        key = normalized.casefold()
+        previous = seen.get(key)
+        if previous is not None and previous != normalized:
+            raise ValueError(
+                f"{label} collide case-insensitively: {previous}, {normalized}"
+            )
+        seen[key] = normalized
+
+
+def task_state_path(root: str | Path, task_id: Any) -> Path:
+    return safe_child(root, "tasks", f"{validate_task_id(task_id)}.json")
+
+
+def task_artifact_path(root: str | Path, task_id: Any, filename: str) -> Path:
+    if not filename or Path(filename).name != filename:
+        raise ValueError("artifact filename must be a non-empty basename")
+    return safe_child(root, "artifacts", validate_task_id(task_id), filename)
+
+
+def normalize_workspace_path(
+    project_root: str | Path, relative_path: Any
+) -> tuple[Path, str]:
+    root = Path(project_root).expanduser().resolve()
+    raw = str(relative_path or "").strip().replace("\\", "/")
+    if not raw:
+        raise ValueError("workspace path must be a non-empty relative path")
+    pure = PurePosixPath(raw)
+    if pure.is_absolute() or not pure.parts or ".." in pure.parts:
+        raise ValueError("workspace path must stay inside the project root")
+    parts = tuple(part for part in pure.parts if part not in {"", "."})
+    if not parts:
+        raise ValueError("workspace path must be a non-empty relative path")
+    if parts[0].lower() in RESERVED_WORKSPACE_ROOTS:
+        raise ValueError("workspace evidence must not include runtime state")
+    normalized = PurePosixPath(*parts).as_posix()
+    return safe_child(root, *parts), normalized
+
+
+def workspace_file(project_root: str | Path, relative_path: Any) -> Path:
+    return normalize_workspace_path(project_root, relative_path)[0]
+
+
+def resolve_workspace_context(
+    project_root: str | Path,
+    task_id: Any = None,
+    supplied_identity: Any = None,
+    *,
+    allow_dirty: bool = True,
+) -> tuple[Path, dict[str, Any] | None]:
+    """Resolve artifact hashing to the bound worktree when controlled state requires it."""
+    project = Path(project_root).expanduser().resolve()
+    runtime = runtime_root(project)
+    state_path = runtime / "state.json"
+    state: dict[str, Any] | None = read_json(state_path) if state_path.is_file() else None
+    state_identity = state.get("worktree_identity") if state else None
+    task_identity = None
+    task_decision_hash = None
+    if task_id is not None and state:
+        task_path = task_state_path(runtime, task_id)
+        if task_path.is_file():
+            task = read_json(task_path)
+            task_identity = task.get("worktree_identity")
+            task_decision_hash = task.get("workflow_decision_hash")
+    identity = task_identity or state_identity
+    if task_identity and state_identity and task_identity != state_identity:
+        raise ValueError("runtime and task worktree identities disagree")
+    enabled = bool(state and isinstance(state.get("worktree"), dict) and state["worktree"].get("enabled"))
+    if enabled and identity is None:
+        raise ValueError("controlled workspace is not bound to a worktree")
+    if identity is not None:
+        expected_decision_hash = task_decision_hash or state.get("workflow_decision_hash")
+        if identity.get("workflow_decision_hash") != expected_decision_hash:
+            raise ValueError("worktree identity is bound to another workflow decision")
+        if task_id is not None and identity.get("task_id") != str(task_id):
+            raise ValueError("worktree identity is bound to another task")
+    if supplied_identity is not None and supplied_identity != identity:
+        raise ValueError("workspace worktree identity is stale or mismatched")
+    if identity is None:
+        if supplied_identity is not None:
+            raise ValueError("worktree identity is not allowed for an unbound runtime")
+        return project, None
+    from worktree import verify_identity  # noqa: PLC0415
+
+    verified = verify_identity(project, identity, allow_dirty=allow_dirty)
+    return project / verified["path"], verified
+
+
+def bound_worktree_identity(project_root: str | Path, task_id: Any = None) -> dict[str, Any] | None:
+    return resolve_workspace_context(project_root, task_id=task_id, allow_dirty=True)[1]
+
+
+def normalize_scope_paths(project_root: str | Path, values: Any) -> list[str]:
+    if not isinstance(values, list) or not values:
+        raise ValueError("scope must contain at least one repo-relative file path")
+    normalized: list[str] = []
+    for index, value in enumerate(values):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"scope[{index}] must be a non-empty string")
+        _, rel = normalize_workspace_path(project_root, value)
+        normalized.append(rel)
+    if len(normalized) != len(set(normalized)):
+        raise ValueError("scope paths must be unique")
+    return normalized
+
+
+def fingerprint_file(project_root: str | Path, relative_path: Any) -> dict[str, Any]:
+    path, normalized = normalize_workspace_path(project_root, relative_path)
+    if not path.is_file():
+        raise ValueError(f"workspace file is missing: {relative_path}")
+    data = path.read_bytes()
     return {
-        "schema_version": 1,
-        "revision": 0,
-        "previous_revision": None,
-        "last_event_id": None,
-        "updated_at": utc_now(),
-        "running_tasks": [],
-        "blocked_tasks": [],
-        "completed_tasks": [],
-        "task_statuses": {},
+        "path": normalized,
+        "size": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
     }
+
+
+def verify_workspace_snapshot(
+    project_root: str | Path,
+    workspace: Any,
+    task_id: Any = None,
+    *,
+    allow_dirty: bool = True,
+) -> list[dict[str, Any]]:
+    if not isinstance(workspace, dict):
+        raise ValueError("workspace must be an object")
+    files = workspace.get("files")
+    if not isinstance(files, list) or not files:
+        raise ValueError("workspace.files must contain at least one file")
+
+    workspace_root, identity = resolve_workspace_context(
+        project_root,
+        task_id=task_id,
+        supplied_identity=workspace.get("worktree"),
+        allow_dirty=allow_dirty,
+    )
+    verified: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(files):
+        if not isinstance(item, dict):
+            raise ValueError(f"workspace.files[{index}] must be an object")
+        current = fingerprint_file(workspace_root, item.get("path"))
+        if current["path"] in seen:
+            raise ValueError(f"duplicate workspace path: {current['path']}")
+        seen.add(current["path"])
+        if item.get("size") != current["size"] or item.get("sha256") != current["sha256"]:
+            raise ValueError(f"workspace evidence is stale for: {current['path']}")
+        verified.append(current)
+    return verified
+
+
+def require_scope_coverage(
+    project_root: str | Path, task: dict[str, Any], workspace_files: Any
+) -> None:
+    scope = normalize_scope_paths(project_root, task.get("scope"))
+    if not isinstance(workspace_files, list):
+        raise ValueError("workspace files must be an array")
+    observed = {
+        normalize_workspace_path(project_root, item.get("path"))[1]
+        for item in workspace_files
+        if isinstance(item, dict)
+    }
+    missing = sorted(set(scope) - observed)
+    if missing:
+        raise ValueError("workspace evidence omits scoped files: " + ", ".join(missing))
+
+
+def task_index_diff(root: str | Path, state: dict[str, Any]) -> dict[str, list[str]]:
+    runtime = Path(root).resolve()
+    expected_raw = state.get("tasks", {})
+    if not isinstance(expected_raw, dict):
+        raise ValueError("state.tasks must be an object")
+    expected_ids = [validate_task_id(task_id) for task_id in expected_raw]
+    ensure_casefold_unique_task_ids(expected_ids, "state task IDs")
+    expected = set(expected_ids)
+    tasks_dir = safe_child(runtime, "tasks")
+    actual_ids: list[str] = []
+    if tasks_dir.exists():
+        if tasks_dir.is_symlink() or not tasks_dir.is_dir():
+            raise ValueError("runtime tasks path must be a real directory")
+        for path in tasks_dir.iterdir():
+            if path.suffix != ".json":
+                continue
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"task state must be a regular file: {path.name}")
+            actual_ids.append(validate_task_id(path.stem))
+    ensure_casefold_unique_task_ids(actual_ids, "task files")
+    actual = set(actual_ids)
+    return {
+        "missing_files": sorted(expected - actual),
+        "orphan_files": sorted(actual - expected),
+    }
+
+
+def require_task_index_consistent(root: str | Path, state: dict[str, Any]) -> None:
+    diff = task_index_diff(root, state)
+    problems: list[str] = []
+    if diff["missing_files"]:
+        problems.append("missing task files: " + ", ".join(diff["missing_files"]))
+    if diff["orphan_files"]:
+        problems.append("orphan task files: " + ", ".join(diff["orphan_files"]))
+    if problems:
+        raise ValueError("runtime task index is inconsistent; " + "; ".join(problems))
+
+
+def refresh_checklist(project_root: str | Path) -> None:
+    """Best-effort refresh of the human progress view without failing the caller."""
+    try:
+        from render_checklist import render_checklist  # noqa: PLC0415
+
+        render_checklist(project_root)
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        pass
+
+
+def append_event(
+    project_root: str | Path, event_type: str, payload: dict[str, Any]
+) -> None:
+    safe_payload = sanitize_for_persistence(payload)
+    root = runtime_root(project_root)
+    root.mkdir(parents=True, exist_ok=True)
+    target = safe_child(root, "events.jsonl")
+    event = {
+        "schema_version": 2,
+        "event_type": event_type,
+        "recorded_at": utc_now(),
+        "payload": safe_payload,
+    }
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(canonical(event) + "\n")

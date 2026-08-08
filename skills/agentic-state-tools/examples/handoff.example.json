@@ -1,0 +1,36 @@
+{
+  "schema_version": 3,
+  "task_id": "TASK-1",
+  "status": "COMPLETED",
+  "summary": "Implemented the bounded change",
+  "files_changed": [
+    "src/module.py"
+  ],
+  "verification": [
+    {
+      "name": "targeted command",
+      "status": "PASS",
+      "evidence": "exit 0"
+    },
+    {
+      "name": "diff inspection",
+      "status": "PASS",
+      "evidence": "scope unchanged"
+    }
+  ],
+  "risks": [],
+  "execution_receipt": {
+    "status": "COMPLETED",
+    "task_id": "TASK-1",
+    "workflow_decision_hash": "5f2d842c0def94cccbe2b961fc518ea4b4f59dfd5f9a76dfc7fbae5eea0ae214",
+    "stage": "implement",
+    "role": "agentic-implementer",
+    "attempt": 1,
+    "max_attempts": 2,
+    "repair_rounds": 0,
+    "max_repair_rounds": 1,
+    "outcome": "NONE",
+    "evidence": "targeted tests passed and the bounded diff was inspected"
+  },
+  "next_step": "Primary Agent reports outcome"
+}

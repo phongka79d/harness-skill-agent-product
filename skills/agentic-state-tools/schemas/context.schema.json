@@ -1,71 +1,105 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["context_id", "created_at", "revision", "task", "required_documents", "code_context", "constraints", "review_history", "budget"],
+  "required": [
+    "schema_version",
+    "task_id",
+    "summary",
+    "files",
+    "constraints",
+    "file_count",
+    "byte_count",
+    "context_budget"
+  ],
   "properties": {
-    "schema_version": {"type": "integer", "minimum": 1},
-    "context_id": {"type": "string", "minLength": 1},
-    "created_at": {"type": "string", "minLength": 1},
-    "revision": {"type": "integer", "minimum": 1},
-    "context_revision": {"type": "integer", "minimum": 1},
-    "context_purpose": {"type": "string", "minLength": 1},
-    "recipient_role": {"type": "string", "minLength": 1},
-    "run_id": {"type": "string", "minLength": 1},
-    "attempt_id": {"type": "string", "minLength": 1},
-    "dispatch_id": {"type": "string", "minLength": 1},
-    "model_ref": {"type": "string", "minLength": 1},
-    "forbidden_scope": {"type": "array", "items": {"type": "string"}},
-    "task": {
-      "type": "object",
-      "required": ["task_id", "objective"],
-      "properties": {
-        "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
-        "objective": {"type": "string", "minLength": 1}
-      }
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        3
+      ]
     },
-    "required_documents": {"type": "array", "items": {"type": "string"}},
-    "source_items": {"type": "array"},
-    "source_hashes": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "files": {
       "type": "array",
-      "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
-    },
-    "inclusion_reasons": {"type": "array", "items": {"type": "string"}},
-    "excluded_sensitive_items": {"type": "array", "items": {"type": "string"}},
-    "previous_context_id": {"type": ["string", "null"], "minLength": 1},
-    "context_delta": {"type": ["object", "null"], "minProperties": 1},
-    "legacy_migration": {"type": "boolean"},
-    "legacy_classification": {"type": "string", "minLength": 1},
-    "legacy_source_version": {"type": "integer", "minimum": 1},
-    "supersedes_id": {"type": "string", "minLength": 1},
-    "previous_revision": {"type": "integer", "minimum": 0},
-    "code_context": {
-      "type": "object",
-      "required": ["files_to_read", "symbols_to_inspect", "existing_patterns"],
-      "properties": {
-        "files_to_read": {"type": "array", "items": {"type": "string"}},
-        "symbols_to_inspect": {"type": "array", "items": {"type": "string"}},
-        "existing_patterns": {"type": "array", "items": {"type": "string"}}
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
       }
+    },
+    "file_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "byte_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "context_budget": {
+      "type": "object",
+      "required": [
+        "max_files",
+        "max_bytes",
+        "allow_unbounded_scan"
+      ],
+      "properties": {
+        "max_files": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "allow_unbounded_scan": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "worktree": {
+      "type": "object",
+      "required": [
+        "task_id",
+        "path",
+        "branch",
+        "base_commit",
+        "head_commit",
+        "workflow_decision_hash",
+        "repo_path"
+      ],
+      "properties": {
+        "task_id": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "minLength": 1},
+        "branch": {"type": "string", "minLength": 1},
+        "base_commit": {"type": "string", "minLength": 1},
+        "head_commit": {"type": "string", "minLength": 1},
+        "workflow_decision_hash": {"type": "string", "minLength": 1},
+        "repo_path": {"type": "string", "pattern": "^\\.$"}
+      },
+      "additionalProperties": false
     },
     "constraints": {
-      "type": "object",
-      "required": ["inherited", "task_specific"],
-      "properties": {
-        "inherited": {"type": "array"},
-        "task_specific": {"type": "array"}
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
       }
     },
-    "examples": {"type": "array"},
-    "review_history": {"type": "array"},
-    "budget": {
-      "type": "object",
-      "required": ["max_files", "max_reference_documents", "max_examples"],
-      "properties": {
-        "max_files": {"type": "integer", "minimum": 1},
-        "max_reference_documents": {"type": "integer", "minimum": 0},
-        "max_examples": {"type": "integer", "minimum": 0},
-        "max_review_history_items": {"type": "integer", "minimum": 0}
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
       }
     }
-  }
+  },
+  "additionalProperties": false
 }

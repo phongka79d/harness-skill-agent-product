@@ -1,4 +1,4 @@
 interface:
   display_name: "Agentic Delivery Finalizer"
-  short_description: "Finalize approved delivery outcomes safely"
-  default_prompt: "Use $agentic-delivery-finalizer to select and verify a controlled delivery outcome without bypassing approval or cleanup safety."
+  short_description: "Control high-impact delivery actions"
+  default_prompt: "Use $agentic-delivery-finalizer only when merge, push, deployment, release, or destructive cleanup needs an explicit decision."

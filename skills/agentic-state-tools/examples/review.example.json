@@ -1,0 +1,55 @@
+{
+  "schema_version": 5,
+  "task_id": "TASK-1",
+  "review_mode": "task",
+  "review_rubric_id": "task",
+  "review_rubric_version": 1,
+  "criteria": [
+    {
+      "id": "acceptance_spec",
+      "status": "PASS",
+      "evidence": "Acceptance criteria A1 and A2 are implemented and observed."
+    },
+    {
+      "id": "correctness_error_paths",
+      "status": "PASS",
+      "evidence": "Normal and invalid-input paths were exercised successfully."
+    },
+    {
+      "id": "state_security_data_integrity",
+      "status": "PASS",
+      "evidence": "The bounded state transition preserves the existing integrity and security checks."
+    },
+    {
+      "id": "maintainability_scope",
+      "status": "PASS",
+      "evidence": "The change is limited to the requested module and follows the existing pattern."
+    },
+    {
+      "id": "compatibility_tests",
+      "status": "PASS",
+      "evidence": "The focused compatibility checks pass for the public behavior."
+    },
+    {
+      "id": "evidence_freshness",
+      "status": "PASS",
+      "evidence": "The workspace snapshot was captured after the final task edit."
+    }
+  ],
+  "work_revision": 1,
+  "workflow_decision_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "outcome": "PASS",
+  "summary": "Independent review found no blocking issue",
+  "findings": [],
+  "recorded_at": "2026-08-06T00:00:00Z",
+  "workspace": {
+    "files": [
+      {
+        "path": "src/module.py",
+        "size": 128,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ]
+  },
+  "workspace_summary": "Workspace reviewed after final task edit"
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["profile_id", "version", "project_profile", "quality_level", "workflow_policy"],
+  "properties": {
+    "profile_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "[a-z0-9_]+"
+    },
+    "version": {"type": "string", "minLength": 1},
+    "project_profile": {"type": "object"},
+    "quality_level": {"type": "string", "enum": ["focused", "standard", "strict"]},
+    "workflow_policy": {
+      "type": "object",
+      "required": [
+        "minimum_depth",
+        "focused_max_files",
+        "focused_max_concerns",
+        "persist_state",
+        "independent_review",
+        "batch_review",
+        "verification_level"
+      ],
+      "properties": {
+        "minimum_depth": {"type": "string", "enum": ["focused", "standard", "controlled"]},
+        "focused_max_files": {"type": "integer", "minimum": 0},
+        "focused_max_concerns": {"type": "integer", "minimum": 0},
+        "persist_state": {"type": "boolean"},
+        "independent_review": {"type": "string", "enum": ["optional", "risk_based", "required"]},
+        "batch_review": {"type": "boolean"},
+        "verification_level": {"type": "string", "enum": ["focused", "standard", "strict"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,106 +1,32 @@
-# Artifact Contracts
+# Minimal artifact contracts
 
-Policy status: ENFORCED (enforced by `skills/agentic-state-tools/scripts/write_artifact.py`)
+State mode is resolved from execution depth, project profile, route override, delivery needs, and explicit persistence needs. The bundled focused, standard, and controlled defaults are required; explicit route or custom-policy `off` and `optional` modes remain supported.
 
-Canonical runtime files:
+`.phongka/settings.json` is user-editable runtime policy, not task evidence. Initialization creates it from central defaults only when missing, validates it on later initialization, and never overwrites valid user values.
 
-```text
-.agent/runtime/events.jsonl       historical source of truth
-.agent/runtime/state.json         generated snapshot
-.agent/work/<id>/task-state.json  generated current task state
-.agent/work/<id>/debug-investigation.json generated task-bound repair investigation
-.agent/work/<id>/checkpoint.json  generated recovery checkpoint
-.agent/work/<id>/handoff.json     generated handoff
-.agent/work/<id>/verification/<evidence-id>.json generated task-bound verification evidence
-.agent/work/<id>/review.json      generated review
-.agent/work/<id>/review-resolution.json generated latest finding resolution
-.agent/work/<id>/lease.json       generated heartbeat lease
-.agent/locks/{tasks,files,resources}/*.json  generated ownership locks
-.agent/work/<id>/context.json     generated bounded context package
-.agent/work/<id>/operations.jsonl generated side-effect operation ledger
-.agent/work/<id>/workspace-baseline.json generated pre-implementation baseline
-.agent/work/<batch-id>/batch-contract.json generated approval-bound batch contract
-.agent/approvals/<target-type>-<target-id>.json generated approval record
-.agent/recovery/rollback-plan-<plan-id>.json generated dry-run compensation plan
-.agent/recovery/rollback-ledger-<ledger-id>.json generated provider-outcome ledger
-.agent/recovery/rollback-evidence-<evidence-id>.json generated rollback evidence
-.agent/checklist.md               generated user-facing projection
-```
+A stateful task may use these task artifacts:
 
-Agents provide payloads. Scripts add timestamps, IDs, revisions, and derived fields, then write atomically.
+- `context.json`: bounded files, constraints, and notes.
+- `handoff.json`: outcome, changed files, verification summary, risks, next step.
+- `verification.json`: checks plus generated work revision, workflow-decision binding, and current file hashes.
+- `review.json`: independent outcome bound to current work and exact reviewed workspace when review is required.
+- `completion-claim.json`: the accepted claim persisted so later delivery can recheck its mapping and hash.
+- `completion-gate.json`: generated only after current verification, full-scope evidence, and acceptance mapping pass.
 
-## Schema migration and legacy projections
+Controlled integrated work may also use `.phongka/batch-review.json`, bound to the current delivery decision, exact task revisions, and integrated workspace hashes.
 
-The current writer-owned versions are `context: 1`, `handoff: 1`, `review: 2`,
-and `task-state: 1`. New projections must carry `schema_version`; an input that
-omits the field or declares a lower supported version is classified as legacy by
-`validate_payload.classify_artifact_version`. A future version is rejected
-explicitly instead of being interpreted by an older writer.
+Task `scope` is a non-empty unique list of normalized repository-relative file paths. Absolute paths, parent traversal, `.phongka`, and `.agent` are rejected. Every review, batch review, and verification snapshot must include every scoped path for the task or task set. Additional relevant files may be included.
 
-Legacy artifacts remain readable when their existing schema is otherwise safe,
-but `LEGACY_UNVERSIONED`, `LEGACY_V<n>`, or `LEGACY_DECLARED` is not current
-verification evidence. Strict review and completion gates must reject a legacy
-artifact as a passing proof. Use `normalize_artifact_version` only to create a
-new current projection; it records `legacy_migration` and the source
-classification and never mutates the historical input.
+`record_verification_evidence.py` adds the current `work_revision`, workflow decision hash, and recording time. Every verification `checks[].name` is a stable acceptance ID and must be unique. Its `workspace.files` entries must come from the current project and contain `path`, `size`, and `sha256`; the recorder rechecks all files before writing.
 
-When a writer supersedes an artifact, the new projection preserves the prior
-artifact ID and revision through `supersedes_id`/`previous_revision` or the
-artifact-specific `previous_*` link. Historical context snapshots are immutable
-and a colliding context ID is rejected. All scoped writers publish through a
-runtime transaction, so schema or migration failure leaves neither a partial
-current artifact nor a partial history projection.
+`verify_completion_claim.py` accepts a claim only when its work revision and verification artifact still match the task, the full scope still matches, verification status is `PASS`, the task is `COMPLETED` or `ACCEPTED`, and the claim acceptance IDs exactly match the verification check IDs. It persists the accepted claim and a claim-hash-bound gate.
 
-Use `validate_payload.py --artifact-type <type> --require-current` for a new-run
-gate; omit `--require-current` only for an explicit legacy inspection.
+`finalize_delivery.py` rechecks all evidence required by the resolved route, including the persisted claim and its gate hash. It never treats artifact presence alone as acceptance.
 
-Review findings are resolved by `create_review_resolution.py`. The artifact binds the
-finding to the current task review and task/run/attempt revision. `CLOSED` is a
-reviewer-only state and must retain correction and re-review evidence; implementers
-can only reach `FIXED_PENDING_REREVIEW` after passing targeted verification.
+A status-only transition advances `status_revision` but does not invalidate evidence. Summary, scope, risk metadata, decision binding, or file changes do. Review and batch-review snapshots make post-review file changes fail closed even when task metadata was not updated.
 
-`debug-investigation.json` is owned by `create_debug_investigation.py`. It is a
-versioned, task/run/attempt-bound evidence artifact. The writer preserves the
-investigation identity across revisions, rejects partial or stale updates, and
-emits `DEBUG_INVESTIGATION_CREATED` after validation. Repair dispatch and
-successful handoff writers consume this artifact; they are not alternate
-investigation writers. Passing regression evidence is workspace-bound and is
-rejected by the handoff writer when the current workspace hash is different.
+State and task files form one index. Validators reject missing indexed task files and orphan task files. Recovery reports `RECONCILE_TASK_INDEX` and never deletes or retries automatically.
 
-Batch contracts are canonical, approval-bound pins of the approved plan, exact
-batch membership, task revisions, and review contracts. Create or replace one
-with `scripts/create_batch_contract.py` and an explicit expected revision; do
-not write `batch-contract.json` directly. Legacy migration reviews may consume
-explicitly marked legacy evidence, but new batch reviews require the generated
-schema-valid contract and its current plan approval.
+Do not create empty artifacts merely to satisfy a route shape. Each artifact must reduce ambiguity or support recovery.
 
-Batch review artifacts use `.agent/work/<batch-id>/review.json` and are distinct
-from task reviews because their directory key is a batch ID.
-
-Updates may include `expected_revision`. The script compares it with the current
-artifact revision and rejects stale payloads instead of overwriting newer state.
-
-Task and handoff artifacts bind task, plan, batch, run, attempt, dispatch, and
-revision identity. A handoff with the wrong run or attempt is rejected by
-`create_handoff.py`; a batch review with a stale contract revision or hash is
-rejected at the commit boundary. Schema validation is necessary but not by
-itself evidence that an artifact was created through the owning writer.
-
-Verification evidence is owned by `record_verification_evidence.py`. Each
-record stores the exact command, exit code, phase, timestamp, content-aware
-workspace hash, task/run/attempt/revision identity, and acceptance mapping.
-The writer publishes it atomically with a `VERIFICATION_EVIDENCE_RECORDED`
-event. `verify_completion_claim.py` recomputes freshness and rejects prior-run,
-stale, unmapped, summary-only, skipped, or failed evidence. Legacy handoffs
-remain readable as `LEGACY_UNVERIFIED` but cannot satisfy strict production or
-high-risk completion gates.
-
-Workspace baselines are owned by `capture_workspace_baseline.py` and are bound
-to task ID, run ID, worktree path, branch, base commit, and a content-aware
-workspace hash. The artifact records setup and profile-required baseline
-commands separately from `known_failures`. `CLEAN` means all required checks
-passed; `KNOWN_FAILURES_APPROVED` preserves explicitly approved existing
-failures; `BLOCKED` means an unexpected failure, identity mismatch, missing
-verification command, or changed base. A baseline may be attached to a
-worktree only when its path, branch, and base commit match the registry. A
-`BLOCKED` baseline cannot authorize implementation.
+Batch review accepts implemented tasks in `IN_PROGRESS`, `COMPLETED`, or `ACCEPTED` state because it precedes final verification; delivery still requires all selected tasks to be completed or accepted.

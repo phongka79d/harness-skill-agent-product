@@ -1,0 +1,27 @@
+{
+  "schema_version": 4,
+  "review_rubric_id": "plan",
+  "review_rubric_version": 1,
+  "goal": "Add one bounded behavior without changing public interfaces",
+  "scope": ["src/module.py", "tests/test_module.py"],
+  "tasks": [
+    {
+      "id": "T1",
+      "review_rubric_id": "task",
+      "review_rubric_version": 1,
+      "objective": "Add the behavior and its regression coverage",
+      "files": ["src/module.py", "tests/test_module.py"],
+      "steps": [
+        "Add a failing regression test for the requested behavior",
+        "Implement the smallest source change that makes the test pass",
+        "Inspect the final diff for scope compliance"
+      ],
+      "dependencies": [],
+      "acceptance": ["The requested behavior passes", "Existing behavior remains unchanged"],
+      "verification": ["Run the targeted test file", "Inspect the bounded diff"],
+      "rollback": "Revert the two bounded file edits"
+    }
+  ],
+  "acceptance": ["All task acceptance criteria pass"],
+  "verification": ["Run the targeted test suite after the final edit"]
+}

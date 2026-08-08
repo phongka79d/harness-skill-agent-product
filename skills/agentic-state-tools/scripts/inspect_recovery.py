@@ -1,857 +1,115 @@
-"""Classify a task's recovery safety from state and checkpoint evidence."""
-
+"""Classify validated runtime state after interruption; never retry a side effect."""
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
-from capture_workspace import capture_workspace
-from operation_ledger import read_operation_ledger
-from rebuild_state import rebuild_state_for_root
-from runtime_utils import (
-    ensure_runtime_initialized,
-    RuntimeLockedError,
-    RuntimeNotInitializedError,
-    parse_timestamp,
-    prepare_event_log,
-    read_object,
-    runtime_lock,
-    inspect_terminal_cleanup,
-    utc_now,
-    validate_identifier,
+HERE = Path(__file__).resolve()
+CONFIG_SCRIPTS = HERE.parents[2] / "agentic-configuration" / "scripts"
+sys.path.insert(0, str(CONFIG_SCRIPTS))
+from schema_validation import validate_file  # noqa: E402
+from runtime_utils import (  # noqa: E402
+    read_json,
+    resolve_workspace_context,
+    runtime_root,
+    task_index_diff,
+    task_state_path,
 )
-from task_state_contract import validate_execution_identity
-from runtime_transaction import RuntimeTransaction, TransactionError, recover_transactions
-from validate_payload import validate
-
-
-OPERATION_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/operation.schema.json"
-RECONCILIATION_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/reconciliation.schema.json"
-
-
-def _policy(resume: str, *, requires_lease: bool, inspect_git: bool, rollback: bool, terminal: bool) -> dict[str, object]:
-    return {
-        "resume": resume,
-        "requires_lease": requires_lease,
-        "inspect_git": inspect_git,
-        "rollback": rollback,
-        "terminal": terminal,
-        "unsupported": False,
-    }
-
-
-RECOVERY_POLICIES = {
-    "PENDING": _policy("SAFE_TO_RESUME", requires_lease=False, inspect_git=False, rollback=False, terminal=False),
-    "READY": _policy("SAFE_TO_RESUME", requires_lease=False, inspect_git=False, rollback=False, terminal=False),
-    "QUEUED": _policy("SAFE_TO_RESUME", requires_lease=True, inspect_git=True, rollback=False, terminal=False),
-    "QUEUED_ASYNC": _policy("SAFE_TO_RESUME", requires_lease=True, inspect_git=True, rollback=False, terminal=False),
-    "QUEUED_SYNC": _policy("SAFE_TO_RESUME", requires_lease=True, inspect_git=True, rollback=False, terminal=False),
-    "WAITING": _policy("SAFE_TO_RESUME", requires_lease=False, inspect_git=False, rollback=False, terminal=False),
-    "WAITING_DEPENDENCY": _policy("SAFE_TO_RESUME", requires_lease=False, inspect_git=False, rollback=False, terminal=False),
-    "WAITING_RESOURCE_LOCK": _policy("SAFE_TO_RESUME", requires_lease=False, inspect_git=True, rollback=False, terminal=False),
-    "RUNNING": _policy("NEEDS_RECONCILIATION", requires_lease=True, inspect_git=True, rollback=True, terminal=False),
-    "CHECKPOINTED": _policy("NEEDS_RECONCILIATION", requires_lease=True, inspect_git=True, rollback=True, terminal=False),
-    "BLOCKED": _policy("NEEDS_RECONCILIATION", requires_lease=False, inspect_git=True, rollback=False, terminal=False),
-    "STALE": _policy("NEEDS_RECONCILIATION", requires_lease=True, inspect_git=True, rollback=True, terminal=False),
-    "RECOVERY_PENDING": _policy("NEEDS_RECONCILIATION", requires_lease=True, inspect_git=True, rollback=True, terminal=False),
-    "RESUMING": _policy("NEEDS_RECONCILIATION", requires_lease=True, inspect_git=True, rollback=True, terminal=False),
-    "REVIEWING": _policy("NEEDS_RECONCILIATION", requires_lease=False, inspect_git=True, rollback=False, terminal=False),
-    "REPAIR_REQUIRED": _policy("NEEDS_RECONCILIATION", requires_lease=False, inspect_git=True, rollback=False, terminal=False),
-    "COMPLETED": _policy("SAFE_TO_RESUME", requires_lease=False, inspect_git=True, rollback=False, terminal=False),
-    "ACCEPTED": _policy("TERMINAL", requires_lease=False, inspect_git=False, rollback=False, terminal=True),
-    "PAUSED": _policy("NEEDS_RECONCILIATION", requires_lease=False, inspect_git=True, rollback=False, terminal=False),
-    "DEFERRED": _policy("NEEDS_RECONCILIATION", requires_lease=False, inspect_git=False, rollback=False, terminal=False),
-    "ESCALATED": _policy("NEEDS_RECONCILIATION", requires_lease=False, inspect_git=True, rollback=True, terminal=False),
-    "CANCELLED": _policy("TERMINAL", requires_lease=False, inspect_git=True, rollback=False, terminal=True),
-    "SUPERSEDED": _policy("TERMINAL", requires_lease=False, inspect_git=True, rollback=False, terminal=True),
-    "ARCHIVED": _policy("TERMINAL", requires_lease=False, inspect_git=False, rollback=False, terminal=True),
-    "ABORTED_UNSAFE": _policy("TERMINAL", requires_lease=True, inspect_git=True, rollback=True, terminal=True),
-}
-
-
-def recovery_policy(status: str) -> dict[str, object]:
-    normalized = str(status).upper()
-    policy = RECOVERY_POLICIES.get(normalized)
-    if policy is None:
-        return {
-            "resume": "UNSAFE_TO_RESUME",
-            "requires_lease": False,
-            "inspect_git": True,
-            "rollback": True,
-            "terminal": False,
-            "unsupported": True,
-        }
-    return dict(policy)
-
-
-def inspect_workspace(root: Path, checkpoint: dict | None) -> dict:
-    snapshot = capture_workspace(
-        root,
-        expected_files=[value for value in (checkpoint or {}).get("files_modified", []) if isinstance(value, str)],
-        expected_base=(checkpoint or {}).get("base_commit"),
-    )
-    snapshot["status"] = snapshot["workspace_status"]
-    return snapshot
-
-
-def validate_checkpoint_binding(task: dict, checkpoint: dict) -> list[str]:
-    """Compare optional checkpoint identity fields with the current task snapshot."""
-
-    errors: list[str] = []
-    if checkpoint.get("task_id") != task.get("task_id"):
-        errors.append("checkpoint task_id does not match task state")
-    task_revision = checkpoint.get("task_revision")
-    if "revision" in task and task_revision != task.get("revision"):
-        errors.append("checkpoint task revision does not match task state")
-    for field in ("run_id", "attempt_id", "dispatch_id"):
-        if field in task and checkpoint.get(field) != task.get(field):
-            errors.append(f"checkpoint {field} does not match task state")
-    checkpoint_hashes = checkpoint.get("input_artifact_hashes")
-    task_hashes = task.get("input_artifact_hashes")
-    if task_hashes is not None:
-        if not isinstance(checkpoint_hashes, dict) or not isinstance(task_hashes, dict):
-            errors.append("checkpoint input artifact hashes cannot be verified")
-        elif checkpoint_hashes != task_hashes:
-            errors.append("checkpoint input artifact hashes do not match task state")
-    return errors
-
-
-def validate_lease_binding(task: dict, lease: dict) -> list[str]:
-    """Ensure a lease belongs to the current task revision and execution attempt."""
-
-    errors: list[str] = []
-    if lease.get("task_id") != task.get("task_id"):
-        errors.append("lease task_id does not match task state")
-    if "revision" in task and lease.get("task_revision") != task.get("revision"):
-        errors.append("lease task revision does not match task state")
-    for field in ("run_id", "attempt_id", "dispatch_id"):
-        expected = task.get(field)
-        actual = lease.get(field)
-        if expected is not None and actual != expected:
-            errors.append(f"lease {field} does not match task state")
-    if not isinstance(lease.get("owner_identity"), str) or not lease["owner_identity"].strip():
-        errors.append("lease owner_identity is missing")
-    return errors
-
-
-def reconcile_runtime_artifacts(root: Path, task_id: str, task_status: str) -> list[str]:
-    """Compare task state with available durable snapshot, queue, and graph evidence."""
-
-    reasons: list[str] = []
-    runtime_root = root / "runtime"
-    state_path = runtime_root / "state.json"
-    if state_path.is_file():
-        try:
-            snapshot = read_object(state_path)
-            snapshot_status = snapshot.get("task_statuses", {}).get(task_id) if isinstance(snapshot.get("task_statuses"), dict) else None
-            if snapshot_status is not None and str(snapshot_status).upper() != task_status:
-                reasons.append(f"state snapshot status mismatch: {snapshot_status} != {task_status}")
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            reasons.append(f"runtime state snapshot is unreadable: {exc}")
-
-    queue_path = runtime_root / "queue.json"
-    queue_entry = None
-    queue = None
-    if queue_path.is_file():
-        try:
-            queue = read_object(queue_path)
-            task_entries = queue.get("tasks", [])
-            if isinstance(task_entries, list):
-                queue_entry = next((item for item in task_entries if isinstance(item, dict) and item.get("task_id") == task_id), None)
-            else:
-                reasons.append("queue tasks collection is malformed")
-            if queue_entry is not None:
-                queue_state = str(queue_entry.get("queue_state", "")).upper()
-                if task_status in {"RUNNING", "QUEUED", "QUEUED_ASYNC", "QUEUED_SYNC"} and queue_state not in {"DISPATCHED", "RUNNING", "QUEUED"}:
-                    reasons.append(f"queue state does not match active task: {queue_state}")
-            task_path = root / "work" / task_id / "task-state.json"
-            if task_path.is_file() and isinstance(queue, dict):
-                try:
-                    validate_execution_identity(read_object(task_path), None, queue)
-                except ValueError as exc:
-                    reasons.append(f"queue execution identity mismatch: {exc}")
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            reasons.append(f"queue is unreadable: {exc}")
-
-    graph_path = runtime_root / "graph.json"
-    if queue_entry is not None and graph_path.is_file():
-        try:
-            graph = read_object(graph_path)
-            if task_id not in graph.get("nodes", []):
-                reasons.append("execution graph is missing the queued task node")
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            reasons.append(f"execution graph is unreadable: {exc}")
-    return sorted(set(reasons))
-
-
-ASYNC_RECOVERY_CLASSIFICATIONS = {
-    "RESUMABLE",
-    "MERGE_PENDING",
-    "CONFLICTED",
-    "STALE_SAFE_TO_CLEAN",
-    "STALE_REQUIRES_REVIEW",
-    "ABORTED_UNSAFE",
-}
-
-
-def _git_output(path: Path, *arguments: str) -> tuple[bool, str]:
-    try:
-        result = subprocess.run(
-            ["git", *arguments],
-            cwd=path,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=30,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False, ""
-    return result.returncode == 0, result.stdout.strip()
-
-
-def _queue_entry_for_task(project_root: Path, task_id: str) -> dict[str, Any]:
-    try:
-        queue = read_object(project_root / ".agent/runtime/queue.json")
-    except (OSError, ValueError, json.JSONDecodeError):
-        return {}
-    if not isinstance(queue, dict):
-        return {}
-    entries = queue.get("tasks", [])
-    if not isinstance(entries, list):
-        return {}
-    return next((item for item in entries if isinstance(item, dict) and item.get("task_id") == task_id), {})
-
-
-def _async_worktree_fields(project_root: Path, task: dict[str, Any]) -> tuple[str | None, str | None, str | None, dict[str, Any]]:
-    queue_entry = _queue_entry_for_task(project_root, str(task.get("task_id", "")))
-    policy = task.get("execution_policy")
-    proof = policy.get("isolation_proof") if isinstance(policy, dict) else None
-    proof = proof if isinstance(proof, dict) else {}
-    worktree_path = task.get("worktree_path") or proof.get("worktree_path") or proof.get("path") or queue_entry.get("worktree_path")
-    branch_name = task.get("branch_name") or proof.get("branch_name") or proof.get("branch") or queue_entry.get("branch_name")
-    base_commit = task.get("base_commit") or proof.get("base_commit") or queue_entry.get("base_commit")
-    return (
-        str(worktree_path) if isinstance(worktree_path, str) and worktree_path.strip() else None,
-        str(branch_name) if isinstance(branch_name, str) and branch_name.strip() else None,
-        str(base_commit) if isinstance(base_commit, str) and base_commit.strip() else None,
-        queue_entry,
-    )
-
-
-def _async_mode(task: dict[str, Any], queue_entry: dict[str, Any]) -> bool:
-    policy = task.get("execution_policy")
-    if isinstance(policy, dict) and str(policy.get("resolved_mode", "")).upper() == "ASYNC":
-        return True
-    return str(task.get("execution_mode", "")).upper() == "ASYNC" or str(queue_entry.get("execution_mode", "")).upper() == "ASYNC" or str(task.get("status", "")).upper() == "QUEUED_ASYNC"
-
-
-def _has_conflict_artifact(project_root: Path, task_id: str, task: dict[str, Any]) -> bool:
-    if str(task.get("status", "")).upper() in {"RECOVERY_PENDING", "ABORTED_UNSAFE"}:
-        return True
-    recovery_root = project_root / ".agent/recovery"
-    return any(recovery_root.glob(f"RECOVERY_PENDING-{task_id}-*.json"))
-
-
-def _plan_is_superseded(task: dict[str, Any], queue_entry: dict[str, Any]) -> bool:
-    task_revision = task.get("plan_revision")
-    for value in (task.get("superseded_by_plan_revision"), queue_entry.get("superseding_plan_revision")):
-        if isinstance(value, int) and isinstance(task_revision, int) and value > task_revision:
-            return True
-    return str(task.get("status", "")).upper() == "SUPERSEDED"
-
-
-def classify_async_worktree(project_root: str | Path, task: dict[str, Any], *, now: datetime | None = None) -> str | None:
-    """Classify async worktree safety using durable lease, Git, and task evidence."""
-
-    if not isinstance(task, dict):
-        return "ABORTED_UNSAFE"
-    project = Path(project_root).expanduser().resolve()
-    task_id = task.get("task_id")
-    if not isinstance(task_id, str) or not task_id.strip():
-        return "ABORTED_UNSAFE"
-    queue_entry = _queue_entry_for_task(project, task_id)
-    if not _async_mode(task, queue_entry):
-        return None
-    worktree_path, branch_name, base_commit, queue_entry = _async_worktree_fields(project, task)
-    if not worktree_path or not branch_name or not base_commit:
-        return "ABORTED_UNSAFE"
-    worktree = Path(worktree_path).expanduser().resolve()
-    if not worktree.is_dir():
-        return "ABORTED_UNSAFE"
-    ok, current_branch = _git_output(worktree, "branch", "--show-current")
-    if not ok or current_branch != branch_name:
-        return "ABORTED_UNSAFE"
-    ok, status = _git_output(worktree, "status", "--porcelain", "--untracked-files=all")
-    if not ok:
-        return "ABORTED_UNSAFE"
-    if status:
-        return "STALE_REQUIRES_REVIEW"
-    if _has_conflict_artifact(project, task_id, task):
-        return "CONFLICTED"
-    ok, source_head = _git_output(worktree, "rev-parse", "HEAD")
-    if not ok:
-        return "ABORTED_UNSAFE"
-    ok, target_branch = _git_output(project, "branch", "--show-current")
-    if not ok or not target_branch:
-        target_branch = str(task.get("target_branch") or queue_entry.get("target_branch") or "")
-    ok, target_head = _git_output(project, "rev-parse", "HEAD")
-    if not ok:
-        return "ABORTED_UNSAFE"
-
-    lease_path = project / ".agent/work" / task_id / "lease.json"
-    lease = _read_optional_for_recovery(lease_path)
-    current = now or datetime.now(timezone.utc)
-    lease_active = False
-    if lease is not None:
-        for field in ("run_id", "attempt_id", "dispatch_id"):
-            if task.get(field) is not None and lease.get(field) != task.get(field):
-                return "ABORTED_UNSAFE"
-        try:
-            lease_active = parse_timestamp(lease.get("expires_at")) > current.astimezone(timezone.utc)
-        except (TypeError, ValueError):
-            return "ABORTED_UNSAFE"
-
-    if _plan_is_superseded(task, queue_entry):
-        return "STALE_REQUIRES_REVIEW"
-
-    source_advanced = source_head != base_commit
-    target_changed = target_head != base_commit
-    review_pass = str(task.get("review_verdict", "")).upper() == "PASS"
-    reconciled_commit = task.get("merged_commit") or task.get("reconciled_commit") or task.get("output_commit")
-    reconciled = source_head == target_head or (isinstance(reconciled_commit, str) and reconciled_commit == source_head)
-
-    if source_advanced and target_changed and not reconciled:
-        return "STALE_REQUIRES_REVIEW"
-    if source_advanced and review_pass and not reconciled:
-        return "MERGE_PENDING"
-    if source_advanced and not reconciled:
-        return "STALE_REQUIRES_REVIEW"
-    if not lease_active:
-        if str(task.get("status", "")).upper() in {"STALE", "CANCELLED", "SUPERSEDED", "ACCEPTED"} and not source_advanced:
-            return "STALE_SAFE_TO_CLEAN"
-        return "STALE_REQUIRES_REVIEW"
-    if str(task.get("status", "")).upper() in {"COMPLETED", "ACCEPTED"} and review_pass:
-        return "MERGE_PENDING" if source_advanced and not reconciled else "RESUMABLE"
-    return "RESUMABLE"
-
-
-def _read_optional_for_recovery(path: Path) -> dict[str, Any] | None:
-    if not path.is_file():
-        return None
-    try:
-        value = read_object(path)
-    except (OSError, ValueError, json.JSONDecodeError):
-        return None
-    return value if isinstance(value, dict) else None
-
-
-def transaction_recovery_evidence(record: dict[str, Any]) -> dict[str, Any]:
-    evidence = record.get("evidence") if isinstance(record.get("evidence"), dict) else {}
-    return {
-        "operation_id": record.get("operation_id"),
-        "operation_type": record.get("operation_type"),
-        "idempotency_key": record.get("idempotency_key"),
-        "status": record.get("status"),
-        "target_paths": list(record.get("target_files", [])),
-        "previous_hashes": dict(evidence.get("previous_hashes", {})),
-        "target_hashes": dict(evidence.get("target_hashes", {})),
-        "classification": evidence.get("classification", record.get("status")),
-        "rollback_reason": record.get("rollback_reason"),
-    }
-
-def _build_reconciliation_record(result: dict) -> tuple[dict, dict]:
-    task_id = result["task_id"]
-    record = {
-        "schema_version": 1,
-        "reconciliation_id": "pending",
-        "task_id": task_id,
-        "classification": result["classification"],
-        "status": result.get("status", ""),
-        "next_action": result.get("next_action"),
-        "reasons": list(result.get("reasons", [])),
-        "workspace": result.get("workspace", {}),
-        "transactions": list(result.get("transactions", [])),
-        "created_at": utc_now(),
-    }
-    canonical = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    evidence_hash = hashlib.sha256(canonical).hexdigest()
-    record["reconciliation_id"] = f"REC-{task_id}-{evidence_hash[:12]}"
-    canonical = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    record["evidence_hash"] = hashlib.sha256(canonical).hexdigest()
-    errors = validate(record, read_object(RECONCILIATION_SCHEMA), base_path=RECONCILIATION_SCHEMA.parent)
-    if errors:
-        raise ValueError("invalid reconciliation record: " + "; ".join(errors))
-    enriched = dict(result)
-    enriched["reconciliation_id"] = record["reconciliation_id"]
-    enriched["reconciliation_hash"] = record["evidence_hash"]
-    return record, enriched
-
-
-def persist_reconciliation(root: Path, result: dict) -> dict:
-    """Enrich a reconciliation result without publishing it."""
-
-    _record, enriched = _build_reconciliation_record(result)
-    return enriched
-
-
-def _json_artifact_revision(path: Path) -> int:
-    if not path.is_file():
-        return 0
-    try:
-        value = read_object(path)
-    except (OSError, ValueError, json.JSONDecodeError):
-        return 0
-    revision = value.get("revision") if isinstance(value, dict) else None
-    return revision if isinstance(revision, int) and not isinstance(revision, bool) and revision >= 0 else 0
-
-
-def _event_journal_snapshot(root: Path, results: list[dict]) -> tuple[str, int, str]:
-    event_relative = "runtime/events.jsonl"
-    event_content: str | None = None
-    event_revision = 0
-    prior_events: list[dict[str, Any]] = []
-    for result in results:
-        event = {
-            "type": "RECOVERY_INSPECTED",
-            "actor": "agentic-state-tools",
-            "data": dict(result),
-        }
-        if isinstance(result.get("task_id"), str) and result["task_id"].strip():
-            event["task_id"] = result["task_id"]
-        event_relative, event_revision, event_content, validated_event = prepare_event_log(
-            root,
-            event,
-            prior_events=prior_events,
-        )
-        prior_events.append(validated_event)
-    if event_content is None:
-        events_path = root / event_relative
-        try:
-            event_content = events_path.read_text(encoding="utf-8") if events_path.is_file() else ""
-        except (OSError, UnicodeError) as exc:
-            raise ValueError(f"event journal is unreadable: {exc}") from exc
-        event_revision = sum(1 for line in event_content.splitlines() if line.strip())
-    return event_relative, event_revision, event_content
-
-
-def _stage_inspection_transaction(
-    project_root: Path,
-    root: Path,
-    output: dict,
-    reconciliation_records: list[tuple[str, dict]],
-    event_relative: str,
-    event_revision: int,
-    event_content: str,
-) -> dict:
-    recovery_relative = "recovery/recovery-state.json"
-    target_files = [relative for relative, _record in reconciliation_records]
-    target_files.append(recovery_relative)
-    target_files.append(event_relative)
-    expected_revisions = {
-        relative: _json_artifact_revision(root / relative)
-        for relative, _record in reconciliation_records
-    }
-    expected_revisions[recovery_relative] = _json_artifact_revision(root / recovery_relative)
-    expected_revisions[event_relative] = event_revision
-    operation_payload = {
-        "output": output,
-        "reconciliation_records": [record for _relative, record in reconciliation_records],
-        "event_content": event_content,
-    }
-    operation_hash = hashlib.sha256(
-        json.dumps(operation_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    transaction = RuntimeTransaction(
-        project_root,
-        operation_type="RECOVERY_INSPECTION",
-        idempotency_key=f"recovery-inspection:{operation_hash}",
-        expected_revisions=expected_revisions,
-    )
-    transaction.prepare(target_files)
-    for relative, record in reconciliation_records:
-        transaction.stage_json(relative, record, RECONCILIATION_SCHEMA)
-    transaction.stage_text(
-        recovery_relative,
-        json.dumps(output, ensure_ascii=False, indent=2) + "\n",
-    )
-    transaction.stage_text(event_relative, event_content)
-    return transaction.commit()
-
-
-def _recovery_failure_evidence(args: argparse.Namespace, exc: Exception) -> dict:
-    evidence = {
-        "operation_id": getattr(exc, "operation_id", None),
-        "operation_type": getattr(exc, "operation_type", None),
-        "idempotency_key": getattr(exc, "idempotency_key", None),
-        "target_paths": list(getattr(exc, "target_paths", []) or []),
-        "previous_hashes": dict(getattr(exc, "previous_hashes", {}) or {}),
-        "target_hashes": dict(getattr(exc, "target_hashes", {}) or {}),
-        "classification": "RECOVERY_PENDING",
-    }
-    return {
-        "schema_version": 1,
-        "inspected_at": utc_now(),
-        "classification": "RECOVERY_PENDING",
-        "error_type": type(exc).__name__,
-        "error": str(exc),
-        **evidence,
-        "transactions": [evidence],
-        "results": ([{"task_id": args.task_id, **evidence}] if args.task_id else []),
-    }
-
-
-def _persist_recovery_failure(project_root: Path, failure: dict) -> dict:
-    root = ensure_runtime_initialized(project_root)
-    event = {
-        "type": "RECOVERY_INSPECTED",
-        "actor": "agentic-state-tools",
-        "data": failure,
-    }
-    task_id = failure.get("results", [{}])[0].get("task_id") if failure.get("results") else None
-    if isinstance(task_id, str) and task_id.strip():
-        event["task_id"] = task_id
-    event_relative, event_revision, event_content, _validated_event = prepare_event_log(root, event)
-    recovery_relative = "recovery/recovery-state.json"
-    expected_revisions = {
-        recovery_relative: _json_artifact_revision(root / recovery_relative),
-        event_relative: event_revision,
-    }
-    operation_hash = hashlib.sha256(
-        json.dumps({"failure": failure, "event_content": event_content}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    transaction = RuntimeTransaction(
-        project_root,
-        operation_type="RECOVERY_INSPECTION_ERROR",
-        idempotency_key=f"recovery-inspection-error:{operation_hash}",
-        expected_revisions=expected_revisions,
-    )
-    transaction.prepare([recovery_relative, event_relative])
-    transaction.stage_text(recovery_relative, json.dumps(failure, ensure_ascii=False, indent=2) + "\n")
-    transaction.stage_text(event_relative, event_content)
-    transaction.commit()
-    return failure
-
-
-def inspect_task(root: Path, task_id: str) -> dict:
-    validate_identifier(task_id, "task_id")
-    task_path = root / "work" / task_id / "task-state.json"
-    if not task_path.is_file():
-        return {"task_id": task_id, "classification": "UNSAFE_TO_RESUME", "reasons": ["task state is missing"]}
-    try:
-        task = read_object(task_path)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        return {"task_id": task_id, "classification": "UNSAFE_TO_RESUME", "reasons": [f"task state is unreadable: {exc}"]}
-
-    status = str(task.get("status", "")).upper()
-    async_classification = classify_async_worktree(root.parent, task)
-    if async_classification in ASYNC_RECOVERY_CLASSIFICATIONS:
-        next_actions = {
-            "RESUMABLE": "resume after lease validation",
-            "MERGE_PENDING": "obtain merge approval and merge sequentially",
-            "CONFLICTED": "resolve merge conflict through recovery",
-            "STALE_SAFE_TO_CLEAN": "clean only after explicit cleanup operation",
-            "STALE_REQUIRES_REVIEW": "primary review required before resume or cleanup",
-            "ABORTED_UNSAFE": "abort and reconcile external worktree state",
-        }
-        return {
-            "task_id": task_id,
-            "classification": async_classification,
-            "status": status,
-            "next_action": next_actions[async_classification],
-            "inspected_at": utc_now(),
-            "workspace": {"status": "ASYNC_WORKTREE_INSPECTED", "mismatch": async_classification in {"STALE_REQUIRES_REVIEW", "ABORTED_UNSAFE", "CONFLICTED"}, "reasons": []},
-            "reasons": [f"async worktree classified as {async_classification}"],
-        }
-    policy = recovery_policy(status)
-    if policy["unsupported"]:
-        return {
-            "task_id": task_id,
-            "classification": "UNSAFE_TO_RESUME",
-            "status": status,
-            "next_action": task.get("next_action"),
-            "inspected_at": utc_now(),
-            "reasons": [f"unsupported task status {status or '<missing>'}"],
-        }
-    checkpoint_path = task_path.parent / "checkpoint.json"
-    checkpoint: dict | None = None
-    checkpoint_error: Exception | None = None
-    if checkpoint_path.is_file():
-        try:
-            checkpoint = read_object(checkpoint_path)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            checkpoint_error = exc
-    workspace = {"status": "NOT_INSPECTED", "mismatch": False, "reasons": ["workspace inspection is not required for this status"]}
-    try:
-        operations = read_operation_ledger(task_path.parent / "operations.jsonl", task_id, OPERATION_SCHEMA)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        return {
-            "task_id": task_id,
-            "classification": "UNSAFE_TO_RESUME",
-            "status": status,
-            "next_action": task.get("next_action"),
-            "inspected_at": utc_now(),
-            "reasons": [f"operation ledger is unreadable: {exc}"],
-        }
-    unresolved_operations = [
-        operation
-        for operation in operations
-        if operation["status"] in {"STARTED", "UNKNOWN"}
-    ]
-    operation_reasons = [
-        f"operation {operation['operation_id']} has unresolved status {operation['status']}"
-        for operation in unresolved_operations
-    ]
-    runtime_reasons = reconcile_runtime_artifacts(root, task_id, status)
-    if runtime_reasons and not policy["terminal"]:
-        runtime_workspace = inspect_workspace(root, checkpoint) if policy["inspect_git"] else workspace
-        recovery_reasons = [*runtime_reasons, *operation_reasons]
-        if checkpoint_error is not None:
-            recovery_reasons.append(f"checkpoint is unreadable: {checkpoint_error}")
-        return {
-            "task_id": task_id,
-            "classification": "NEEDS_RECONCILIATION",
-            "status": status,
-            "next_action": task.get("next_action"),
-            "inspected_at": utc_now(),
-            "workspace": runtime_workspace,
-            "reasons": recovery_reasons,
-        }
-
-    if policy["terminal"]:
-        cleanup = inspect_terminal_cleanup(root, task_id)
-        terminal_reasons = [*runtime_reasons, *cleanup["reasons"]]
-        if terminal_reasons:
-            return {
-                "task_id": task_id,
-                "classification": "NEEDS_RECONCILIATION",
-                "status": status,
-                "next_action": "reconcile terminal cleanup",
-                "inspected_at": utc_now(),
-                "workspace": workspace,
-                "reasons": terminal_reasons + operation_reasons,
-            }
-        return {
-            "task_id": task_id,
-            "classification": "SAFE_TO_RESUME",
-            "status": status,
-            "next_action": "none",
-            "inspected_at": utc_now(),
-            "workspace": workspace,
-            "reasons": [f"status {status} is terminal; resume is not applicable", *operation_reasons],
-        }
-
-    if status == "REVIEWING":
-        review_path = task_path.parent / "review.json"
-        if not review_path.is_file():
-            return {
-                "task_id": task_id,
-                "classification": "NEEDS_RECONCILIATION",
-                "status": status,
-                "next_action": task.get("next_action"),
-                "inspected_at": utc_now(),
-                "workspace": workspace,
-                "reasons": ["reviewing task has no review artifact", *operation_reasons],
-            }
-        return {
-            "task_id": task_id,
-            "classification": "NEEDS_RECONCILIATION",
-            "status": status,
-            "next_action": task.get("next_action"),
-            "inspected_at": utc_now(),
-            "workspace": inspect_workspace(root, checkpoint),
-            "reasons": ["review artifact exists but state transition is not reconciled", *operation_reasons],
-        }
-
-    if status in {"QUEUED_ASYNC", "QUEUED_SYNC"} and policy["requires_lease"]:
-        lease_path = task_path.parent / "lease.json"
-        if not lease_path.is_file():
-            return {
-                "task_id": task_id,
-                "classification": "NEEDS_RECONCILIATION",
-                "status": status,
-                "next_action": task.get("next_action"),
-                "inspected_at": utc_now(),
-                "workspace": workspace,
-                "reasons": ["dispatched queued task has no lease", *operation_reasons],
-            }
-        try:
-            lease = read_object(lease_path)
-            lease_errors = validate_lease_binding(task, lease)
-            expiry = parse_timestamp(lease.get("expires_at"))
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            return {
-                "task_id": task_id,
-                "classification": "UNSAFE_TO_RESUME",
-                "status": status,
-                "next_action": task.get("next_action"),
-                "inspected_at": utc_now(),
-                "workspace": workspace,
-                "reasons": [f"queued task lease is unreadable: {exc}"],
-            }
-        if lease_errors or expiry <= datetime.now(timezone.utc):
-            reasons = lease_errors or ["dispatched queued task lease has expired"]
-            return {
-                "task_id": task_id,
-                "classification": "NEEDS_RECONCILIATION",
-                "status": status,
-                "next_action": task.get("next_action"),
-                "inspected_at": utc_now(),
-                "workspace": workspace,
-                "reasons": [*reasons, *operation_reasons],
-            }
-
-    if status in {"REPAIR_REQUIRED", "BLOCKED", "PAUSED", "DEFERRED", "ESCALATED", "WAITING_DEPENDENCY", "WAITING_RESOURCE_LOCK", "QUEUED_ASYNC", "QUEUED_SYNC"}:
-        classification = "NEEDS_RECONCILIATION" if policy["resume"] != "SAFE_TO_RESUME" else "SAFE_TO_RESUME"
-        return {
-            "task_id": task_id,
-            "classification": classification,
-            "status": status,
-            "next_action": task.get("next_action"),
-            "inspected_at": utc_now(),
-            "workspace": inspect_workspace(root, checkpoint) if policy["inspect_git"] else workspace,
-            "reasons": [f"status {status} has explicit recovery policy", *operation_reasons],
-        }
-
-    if status in {"PENDING", "READY", "QUEUED", "WAITING", "COMPLETED", "ACCEPTED"}:
-        classification = "NEEDS_RECONCILIATION" if operation_reasons else "SAFE_TO_RESUME"
-        reasons = operation_reasons or [f"status {status} has no active side effect"]
-    elif status in {"RUNNING", "CHECKPOINTED", "STALE", "RECOVERY_PENDING", "RESUMING"}:
-        lease_path = task_path.parent / "lease.json"
-        if not lease_path.is_file():
-            return {
-                "task_id": task_id,
-                "classification": "NEEDS_RECONCILIATION",
-                "status": status,
-                "next_action": task.get("next_action"),
-                "inspected_at": utc_now(),
-                "workspace": workspace,
-                "reasons": ["active task has no lease", *operation_reasons],
-            }
-        try:
-            lease = read_object(lease_path)
-            expires_at = parse_timestamp(lease.get("expires_at"))
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            return {
-                "task_id": task_id,
-                "classification": "UNSAFE_TO_RESUME",
-                "status": status,
-                "next_action": task.get("next_action"),
-                "inspected_at": utc_now(),
-                "reasons": [f"lease is unreadable: {exc}"],
-            }
-        lease_binding_errors = validate_lease_binding(task, lease)
-        if lease_binding_errors:
-            return {
-                "task_id": task_id,
-                "classification": "NEEDS_RECONCILIATION",
-                "status": status,
-                "next_action": task.get("next_action"),
-                "inspected_at": utc_now(),
-                "workspace": workspace,
-                "reasons": lease_binding_errors,
-            }
-        if expires_at <= datetime.now(timezone.utc):
-            return {
-                "task_id": task_id,
-                "classification": "NEEDS_RECONCILIATION",
-                "status": status,
-                "next_action": task.get("next_action"),
-                "inspected_at": utc_now(),
-                "workspace": inspect_workspace(root, checkpoint),
-                "reasons": ["active task lease has expired", *operation_reasons],
-            }
-        if checkpoint_error is not None:
-            return {
-                "task_id": task_id,
-                "classification": "UNSAFE_TO_RESUME",
-                "status": status,
-                "next_action": task.get("next_action"),
-                "inspected_at": utc_now(),
-                "reasons": [f"checkpoint is unreadable: {checkpoint_error}"],
-            }
-        if checkpoint is None:
-            classification = "NEEDS_RECONCILIATION"
-            reasons = ["active task has no checkpoint", *operation_reasons]
-        else:
-            binding_errors = validate_checkpoint_binding(task, checkpoint)
-            workspace = inspect_workspace(root, checkpoint)
-            safe = checkpoint.get("resume_safe", True)
-            classification = "SAFE_TO_RESUME" if safe and not binding_errors and not operation_reasons and not workspace["mismatch"] else "NEEDS_RECONCILIATION"
-            if not safe:
-                reasons = ["checkpoint explicitly forbids automatic resume", *operation_reasons]
-            elif binding_errors:
-                reasons = binding_errors + operation_reasons
-            elif operation_reasons:
-                reasons = operation_reasons
-            elif workspace["mismatch"]:
-                reasons = ["workspace does not agree with checkpoint", *workspace["reasons"]]
-            else:
-                reasons = ["checkpoint and task state are readable"]
-    else:
-        classification = "UNSAFE_TO_RESUME"
-        reasons = [f"unsupported task status {status or '<missing>'}"]
-
-    return {
-        "task_id": task_id,
-        "classification": classification,
-        "status": status,
-        "next_action": task.get("next_action"),
-        "inspected_at": utc_now(),
-        "workspace": workspace,
-        "reasons": reasons,
-    }
+from validate_state import validate_runtime  # noqa: E402
+from worktree import WorktreeError  # noqa: E402
+
+STATE_SCHEMA = HERE.parents[1] / "schemas" / "state.schema.json"
+TASK_SCHEMA = HERE.parents[1] / "schemas" / "task-state.schema.json"
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", required=True)
-    parser.add_argument("--task-id")
     args = parser.parse_args()
     try:
-        with runtime_lock(args.project_root) as root:
-            transaction_records = recover_transactions(args.project_root)
-            transactions = [transaction_recovery_evidence(record) for record in transaction_records]
-            task_ids = [args.task_id] if args.task_id else [path.parent.name for path in sorted((root / "work").glob("*/task-state.json"))]
-            results: list[dict] = []
-            reconciliation_records: list[tuple[str, dict]] = []
-            for task_id in task_ids:
-                result = inspect_task(root, task_id)
-                result["transactions"] = transactions
-                record, enriched = _build_reconciliation_record(result)
-                results.append(enriched)
-                reconciliation_records.append((f"recovery/reconciliation-{task_id}.json", record))
-            output = {"schema_version": 1, "inspected_at": utc_now(), "transactions": transactions, "results": results}
-            event_relative, event_revision, event_content = _event_journal_snapshot(root, results)
-            _stage_inspection_transaction(
-                Path(args.project_root).expanduser().resolve(),
-                root,
-                output,
-                reconciliation_records,
-                event_relative,
-                event_revision,
-                event_content,
-            )
-        # Recovery inspection appends a journal event; refresh the derived state revision after publication.
-        rebuild_state_for_root(root)
-    except RuntimeNotInitializedError as exc:
-        print(f"RECOVERY_BLOCKED: {exc}", file=sys.stderr)
-        return 2
-    except (RuntimeLockedError, TransactionError, OSError, ValueError, TypeError) as exc:
-        failure = _recovery_failure_evidence(args, exc)
+        root = runtime_root(args.project_root)
+        state = read_json(root / "state.json")
+        validate_file(state, STATE_SCHEMA, "state")
         try:
-            _persist_recovery_failure(Path(args.project_root).expanduser().resolve(), failure)
-        except (RuntimeLockedError, RuntimeNotInitializedError, TransactionError, OSError, ValueError, TypeError) as persistence_error:
-            failure["persistence_error_type"] = type(persistence_error).__name__
-            failure["persistence_error"] = str(persistence_error)
-        print(json.dumps(failure, ensure_ascii=False, indent=2))
+            index_issues = task_index_diff(root, state)
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            result = {
+                "status": "RECOVERY_REQUIRED",
+                "active_task": None,
+                "next_action": "RECONCILE_TASK_INDEX",
+                "index_issues": {"missing_files": [], "orphan_files": []},
+                "reason": str(exc),
+                "rule": "inspect task files and state index; never delete or retry automatically",
+            }
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if index_issues["missing_files"] or index_issues["orphan_files"]:
+            result = {
+                "status": "RECOVERY_REQUIRED",
+                "active_task": None,
+                "next_action": "RECONCILE_TASK_INDEX",
+                "index_issues": index_issues,
+                "rule": "inspect task files and state index; never delete or retry automatically",
+            }
+        else:
+            try:
+                validate_runtime(root, state)
+            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+                result = {
+                    "status": "RECOVERY_REQUIRED",
+                    "active_task": None,
+                    "next_action": "RECONCILE_RUNTIME_STATE",
+                    "index_issues": index_issues,
+                    "reason": str(exc),
+                    "rule": "reconcile runtime invariants before inspecting workspace or retrying",
+                }
+            else:
+                active = state["active_task_id"]
+                if active:
+                    task = read_json(task_state_path(root, active))
+                    validate_file(task, TASK_SCHEMA, f"task {active}")
+                    if task["task_id"] != active:
+                        raise ValueError("active task id does not match its task artifact")
+                    action = (
+                        "INSPECT_WORKSPACE"
+                        if task["status"] in {"TODO", "IN_PROGRESS", "BLOCKED"}
+                        else "NO_ACTION"
+                    )
+                    reason = None
+                    contract = state.get("worktree", {})
+                    if contract.get("required") and task["status"] in {"TODO", "IN_PROGRESS", "BLOCKED"}:
+                        if task.get("worktree_identity") is None:
+                            action = "PREPARE_WORKTREE"
+                            reason = "controlled task has no bound worktree"
+                        else:
+                            try:
+                                resolve_workspace_context(
+                                    args.project_root,
+                                    task_id=active,
+                                    allow_dirty=False,
+                                )
+                            except WorktreeError as exc:
+                                action = exc.action
+                                reason = str(exc)
+                else:
+                    task = None
+                    action = "NO_ACTION"
+                    reason = None
+                result = {
+                    "status": "RECOVERY_REQUIRED" if action != "NO_ACTION" else "CLEAN",
+                    "active_task": task,
+                    "next_action": action,
+                    "index_issues": index_issues,
+                    "rule": "inspect actual workspace and provider outcome before any retry",
+                }
+                if reason:
+                    result["reason"] = reason
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        print(f"RECOVERY_REJECTED: {exc}", file=sys.stderr)
         return 1
-    print(json.dumps(output, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 

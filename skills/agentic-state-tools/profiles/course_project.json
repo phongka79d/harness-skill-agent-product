@@ -1,0 +1,21 @@
+{
+  "profile_id": "course_project",
+  "version": "3.4.1",
+  "project_profile": {
+    "type": "course_project",
+    "delivery_mode": "standard",
+    "deployment": "local_only",
+    "data_sensitivity": "low",
+    "user_exposure": "small_group"
+  },
+  "quality_level": "standard",
+  "workflow_policy": {
+    "minimum_depth": "standard",
+    "focused_max_files": 3,
+    "focused_max_concerns": 1,
+    "persist_state": true,
+    "independent_review": "optional",
+    "batch_review": false,
+    "verification_level": "standard"
+  }
+}

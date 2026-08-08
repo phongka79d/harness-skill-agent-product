@@ -1,65 +1,44 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["schema_version", "project_root", "worktree_root", "entries"],
+  "required": [
+    "task_id",
+    "path",
+    "branch",
+    "base_commit",
+    "head_commit",
+    "workflow_decision_hash",
+    "repo_path"
+  ],
   "properties": {
-    "schema_version": {"type": "integer", "const": 1},
-    "project_root": {"type": "string", "minLength": 1},
-    "worktree_root": {"type": "string", "minLength": 1},
-    "entries": {
-      "type": "object",
-      "additionalProperties": {"$ref": "#/$defs/entry"}
+    "task_id": {
+      "type": "string",
+      "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^\\.phongka/worktrees/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "branch": {
+      "type": "string",
+      "pattern": "^phongka/task/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "base_commit": {
+      "type": "string",
+      "pattern": "[0-9a-f]{40,64}"
+    },
+    "head_commit": {
+      "type": "string",
+      "pattern": "[0-9a-f]{40,64}"
+    },
+    "workflow_decision_hash": {
+      "type": "string",
+      "pattern": "[0-9a-f]{64}"
+    },
+    "repo_path": {
+      "type": "string",
+      "pattern": "^\\.$"
     }
   },
-  "additionalProperties": false,
-  "$defs": {
-    "entry": {
-      "type": "object",
-      "required": ["task_id", "revision", "path", "branch", "base_commit", "status", "lease", "created_at", "updated_at"],
-      "properties": {
-        "task_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]+$"},
-        "revision": {"type": "integer", "minimum": 1},
-        "path": {"type": "string", "minLength": 1},
-        "worktree_path": {"type": "string", "minLength": 1},
-        "branch": {"type": "string", "minLength": 1},
-        "branch_name": {"type": "string", "minLength": 1},
-        "base_commit": {"type": "string", "pattern": "^[0-9a-fA-F]{40,64}$"},
-        "run_id": {"type": "string", "minLength": 1},
-        "attempt_id": {"type": "string", "minLength": 1},
-        "dispatch_id": {"type": "string", "minLength": 1},
-        "plan_revision": {"type": "integer", "minimum": 1},
-        "write_scope_hash": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"},
-        "baseline_id": {"type": "string", "minLength": 1},
-        "baseline_path": {"type": "string", "minLength": 1},
-        "baseline_run_id": {"type": "string", "minLength": 1},
-        "baseline_branch": {"type": "string", "minLength": 1},
-        "baseline_base_commit": {"type": "string", "pattern": "^[0-9a-fA-F]{40,64}$"},
-        "baseline_workspace_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "baseline_status": {"type": "string", "enum": ["CLEAN", "KNOWN_FAILURES_APPROVED", "BLOCKED"]},
-        "baseline_captured_at": {"type": "string", "minLength": 1},
-        "active_conflicts_checked_at": {"type": "string", "minLength": 1},
-        "isolation_status": {"type": "string", "enum": ["VERIFIED"]},
-        "isolation_proof": {"$ref": "isolation-proof.schema.json"},
-        "status": {"type": "string", "enum": ["ACTIVE", "STALE", "RECOVERY_PENDING", "MERGED", "ACCEPTED", "CANCELLED"]},
-        "lease": {
-          "type": ["object", "null"],
-          "properties": {"expires_at": {"type": "string", "minLength": 1}},
-          "required": ["expires_at"],
-          "additionalProperties": false
-        },
-        "created_at": {"type": "string", "minLength": 1},
-        "updated_at": {"type": "string", "minLength": 1},
-        "reclaimed_from": {"type": ["string", "null"]},
-        "stale_at": {"type": "string"},
-        "stale_reason": {"type": "string"},
-        "superseding_plan_revision": {"type": "integer", "minimum": 1},
-        "superseded_by_plan_revision": {"type": "integer", "minimum": 1},
-        "current_plan_revision": {"type": "integer", "minimum": 1},
-        "conflict_artifact": {"type": "string"},
-        "merged_into": {"type": "string"},
-        "cleaned_at": {"type": "string"}
-      },
-      "additionalProperties": false
-    }
-  }
+  "additionalProperties": false
 }

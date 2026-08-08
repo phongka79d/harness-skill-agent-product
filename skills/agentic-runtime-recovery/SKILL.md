@@ -1,32 +1,27 @@
 ---
 name: agentic-runtime-recovery
-description: Use when a run was interrupted, a heartbeat or lease is stale, a runtime snapshot is corrupt, a terminal closed unexpectedly, or an external side effect has uncertain outcome.
+description: Use only when dispatched by agentic-engineering-core to reconcile interrupted project/.phongka work or an uncertain external side effect.
 ---
 
 # Agentic Runtime Recovery
 
-Read the shared `agentic-engineering-wiki` package before this role's workflow.
-Read [agentic-configuration](../agentic-configuration/SKILL.md) before applying recovery, locking, or runtime defaults.
+## Contract
 
-Recover conservatively. Never trust a checkpoint without checking the actual workspace and event history.
+- **Owner:** Primary Agent dispatches this role.
+- **Boundary:** Read-only reconciliation; never retries blindly.
+- **Prompt:** [recovery.md](prompts/recovery.md), appended after `agentic-engineering-core/prompts/subagent-envelope.md`.
+- **Return:** universal status, files, evidence, findings/implementation, risks, open questions, and next step.
 
 ## Workflow
 
-1. Read `agentic-engineering-core` and the project recovery policy.
-2. Inspect `.agent/runtime/events.jsonl`, `state.json`, task state, leases, locks, checkpoints, operation logs, and actual Git diff.
-3. Validate schema and revision consistency with `agentic-state-tools`; inspect operation ledgers before repeating side effects.
-4. Detect stale runs and incomplete side effects.
-5. Classify recovery as `SAFE_TO_RESUME`, `NEEDS_RECONCILIATION`, or `UNSAFE_TO_RESUME`.
-6. Only for `SAFE_TO_RESUME`, create a new run through the state scripts and continue from the validated next action.
-7. Escalate reconciliation or unsafe side effects to the Primary Agent/user.
-8. Regenerate `state.json` and `.agent/checklist.md` after accepted recovery transitions.
+1. Validate the supplied task contract and scope.
+2. Read only the minimum required context.
+3. Perform the role-specific workflow in the prompt.
+4. Self-check against acceptance and role boundaries.
+5. Return structured evidence; use `BLOCKED` when safe progress is impossible.
 
-## Hard boundaries
+## References
 
-- Do not repeat an operation with uncertain external outcome.
-- Do not overwrite state by hand.
-- Do not mark a run safe using checkpoint data alone.
-- Do not delete active recovery evidence.
-- Do not silently convert `NEEDS_RECONCILIATION` to resume.
+- [recovery model](references/recovery-model.md)
 
-Read [recovery-model.md](references/recovery-model.md).
+Do not infer missing permissions, inherit hidden conversation context, expand scope, or claim completion without evidence.

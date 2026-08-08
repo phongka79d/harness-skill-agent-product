@@ -1,4 +1,0 @@
-interface:
-  display_name: "Agentic Batch Reviewer"
-  short_description: "Review integrated batch results"
-  default_prompt: "Use $agentic-batch-reviewer to verify an integrated batch and its acceptance criteria."

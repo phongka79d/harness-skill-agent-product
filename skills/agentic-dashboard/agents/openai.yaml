@@ -1,4 +1,0 @@
-interface:
-  display_name: "Agentic Dashboard"
-  short_description: "Inspect runtime evidence without mutation"
-  default_prompt: "Use $agentic-dashboard to produce a read-only runtime dashboard snapshot."

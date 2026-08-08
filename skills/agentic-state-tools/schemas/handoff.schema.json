@@ -1,42 +1,130 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["handoff_id", "task_id", "run_id", "attempt_id", "from_role", "to_role", "task_revision", "plan_revision", "input_artifact_hashes", "output_artifact_hashes", "evidence", "created_at", "revision", "status", "summary", "files_read", "files_changed", "findings", "implementation_details", "validation_results", "risks", "next_steps"],
+  "required": [
+    "schema_version",
+    "task_id",
+    "status",
+    "summary",
+    "files_changed",
+    "verification",
+    "risks",
+    "execution_receipt"
+  ],
   "properties": {
-    "schema_version": {"type": "integer", "minimum": 1},
-    "handoff_id": {"type": "string", "minLength": 1},
-    "task_id": {"type": "string", "minLength": 1},
-    "run_id": {"type": "string", "minLength": 1},
-    "attempt_id": {"type": "string", "minLength": 1},
-    "dispatch_id": {"type": "string", "minLength": 1},
-    "profile_id": {"type": "string", "minLength": 1},
-    "profile_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "verification_status": {"type": "string", "enum": ["VERIFIED", "LEGACY_UNVERIFIED", "REJECTED"]},
-    "verification_evidence_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
-    "completion_claim_id": {"type": "string", "minLength": 1},
-    "legacy_migration": {"type": "boolean"},
-    "legacy_classification": {"type": "string", "minLength": 1},
-    "legacy_source_version": {"type": "integer", "minimum": 1},
-    "supersedes_id": {"type": "string", "minLength": 1},
-    "previous_revision": {"type": "integer", "minimum": 0},
-    "investigation_id": {"type": "string", "minLength": 1, "pattern": "^DBG-[A-Za-z0-9._-]+$"},
-    "from_role": {"type": "string", "minLength": 1},
-    "to_role": {"type": "string", "minLength": 1},
-    "task_revision": {"type": "integer", "minimum": 1},
-    "plan_revision": {"type": "integer", "minimum": 1},
-    "input_artifact_hashes": {"type": "object"},
-    "output_artifact_hashes": {"type": "object"},
-    "evidence": {"type": "object"},
-    "created_at": {"type": "string", "minLength": 1},
-    "revision": {"type": "integer", "minimum": 1},
-    "status": {"type": "string", "enum": ["COMPLETE", "BLOCKED", "ESCALATED", "NEEDS_RECONCILIATION"]},
-    "summary": {"type": "string"},
-    "files_read": {"type": "array"},
-    "files_changed": {"type": "array"},
-    "findings": {"type": "array"},
-    "implementation_details": {"type": "array"},
-    "validation_results": {"type": "array"},
-    "risks": {"type": "array"},
-    "next_steps": {"type": "array"}
-  }
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        3
+      ]
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "COMPLETED",
+        "BLOCKED",
+        "ESCALATED"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "verification": {
+      "type": "array"
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "execution_receipt": {
+      "type": "object",
+      "required": [
+        "status",
+        "task_id",
+        "workflow_decision_hash",
+        "stage",
+        "role",
+        "attempt",
+        "max_attempts",
+        "repair_rounds",
+        "max_repair_rounds",
+        "outcome",
+        "evidence"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "COMPLETED",
+            "BLOCKED",
+            "ESCALATED"
+          ]
+        },
+        "task_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workflow_decision_hash": {
+          "type": "string",
+          "pattern": "[0-9a-f]{64}"
+        },
+        "stage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "NONE",
+            "SYNTHESIZED FALLBACK",
+            "BLOCKED"
+          ]
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "repair_rounds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_repair_rounds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "next_step": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
 }

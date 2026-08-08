@@ -1,4 +1,4 @@
 interface:
   display_name: "Agentic Configuration"
-  short_description: "Central agent routing and runtime policy"
-  default_prompt: "Use $agentic-configuration to inspect or update the central agentic system configuration."
+  short_description: "Central workflow and role policy"
+  default_prompt: "Use $agentic-configuration to inspect workflow profiles, routing, and model references."

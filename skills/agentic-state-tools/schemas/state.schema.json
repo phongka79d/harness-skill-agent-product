@@ -1,16 +1,489 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["schema_version", "revision", "running_tasks", "blocked_tasks", "completed_tasks", "task_statuses"],
+  "required": [
+    "schema_version",
+    "project_id",
+    "revision",
+    "profile_id",
+    "profile_hash",
+    "workflow_decision_hash",
+    "config_hash",
+    "task_route",
+    "execution_depth",
+    "request_contract",
+    "approval",
+    "delivery",
+    "evidence_requirements",
+    "subagent_plan",
+    "worktree",
+    "worktree_identity",
+    "status",
+    "active_task_id",
+    "tasks",
+    "updated_at"
+  ],
   "properties": {
-    "schema_version": {"type": "integer", "minimum": 1},
-    "revision": {"type": "integer", "minimum": 0},
-    "previous_revision": {"type": ["integer", "null"], "minimum": 0},
-    "last_event_id": {"type": ["string", "null"]},
-    "updated_at": {"type": "string"},
-    "running_tasks": {"type": "array", "items": {"type": "string"}},
-    "blocked_tasks": {"type": "array", "items": {"type": "string"}},
-    "completed_tasks": {"type": "array", "items": {"type": "string"}},
-    "task_statuses": {"type": "object"}
-  }
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        8
+      ]
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "profile_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "profile_hash": {
+      "type": "string",
+      "pattern": "[0-9a-f]{64}"
+    },
+    "workflow_decision_hash": {
+      "type": "string",
+      "pattern": "[0-9a-f]{64}"
+    },
+    "config_hash": {
+      "type": "string",
+      "pattern": "[0-9a-f]{64}"
+    },
+    "task_route": {
+      "type": "string",
+      "minLength": 1
+    },
+    "execution_depth": {
+      "type": "string",
+      "enum": [
+        "focused",
+        "standard",
+        "controlled"
+      ]
+    },
+    "required_skills": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "optional_skills": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "stages": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "owner",
+          "output"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          },
+          "output": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "worktree": {
+      "type": "object",
+      "required": [
+        "enabled",
+        "required",
+        "mode",
+        "path_template",
+        "branch_template",
+        "prepare_approval_required",
+        "delivery_approval_required",
+        "cleanup_approval_required"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "disabled",
+            "required"
+          ]
+        },
+        "path_template": {
+          "type": "string",
+          "pattern": "^\\.phongka/worktrees/\\{task_id\\}$"
+        },
+        "branch_template": {
+          "type": "string",
+          "pattern": "^phongka/task/\\{task_id\\}$"
+        },
+        "prepare_approval_required": {
+          "type": "boolean"
+        },
+        "delivery_approval_required": {
+          "type": "boolean"
+        },
+        "cleanup_approval_required": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "worktree_identity": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "task_id",
+        "path",
+        "branch",
+        "base_commit",
+        "head_commit",
+        "workflow_decision_hash",
+        "repo_path"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^\\.phongka/worktrees/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "branch": {
+          "type": "string",
+          "pattern": "^phongka/task/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "base_commit": {
+          "type": "string",
+          "pattern": "[0-9a-f]{40,64}"
+        },
+        "head_commit": {
+          "type": "string",
+          "pattern": "[0-9a-f]{40,64}"
+        },
+        "workflow_decision_hash": {
+          "type": "string",
+          "pattern": "[0-9a-f]{64}"
+        },
+        "repo_path": {
+          "type": "string",
+          "pattern": "^\\.$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "approval": {
+      "type": "object",
+      "required": [
+        "required",
+        "kind",
+        "keys",
+        "reasons"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "automatic",
+            "user"
+          ]
+        },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "delivery": {
+      "type": "object",
+      "required": [
+        "action",
+        "outcome",
+        "cleanup",
+        "approval_key",
+        "approval_required"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "none",
+            "keep_local",
+            "merge_local",
+            "push_branch",
+            "create_review_request",
+            "production_action",
+            "destructive_cleanup"
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "NO_ACTION",
+            "KEEP_LOCAL",
+            "MERGE_LOCAL",
+            "PUSH_BRANCH",
+            "CREATE_REVIEW_REQUEST",
+            "PRODUCTION_ACTION",
+            "DESTRUCTIVE_CLEANUP"
+          ]
+        },
+        "cleanup": {
+          "type": "string",
+          "enum": [
+            "KEEP",
+            "SAFE_REMOVE",
+            "NOT_APPLICABLE"
+          ]
+        },
+        "approval_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approval_required": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "IDLE",
+        "ACTIVE"
+      ]
+    },
+    "active_task_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 64,
+      "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+    },
+    "tasks": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "status",
+          "status_revision",
+          "work_revision",
+          "summary"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "TODO",
+              "IN_PROGRESS",
+              "BLOCKED",
+              "COMPLETED",
+              "ACCEPTED",
+              "CANCELLED"
+            ]
+          },
+          "status_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "work_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "updated_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request_contract": {
+      "type": "object",
+      "required": [
+        "execution_preference",
+        "estimated_files",
+        "concerns",
+        "risk_flags",
+        "user_requested_review",
+        "delivery_action"
+      ],
+      "properties": {
+        "execution_preference": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "focused",
+            "standard",
+            "controlled"
+          ]
+        },
+        "estimated_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "concerns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "risk_flags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "user_requested_review": {
+          "type": "boolean"
+        },
+        "delivery_action": {
+          "type": "string",
+          "enum": [
+            "none",
+            "keep_local",
+            "merge_local",
+            "push_branch",
+            "create_review_request",
+            "production_action",
+            "destructive_cleanup"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "evidence_requirements": {
+      "type": "object",
+      "required": [
+        "verification",
+        "review",
+        "batch_review"
+      ],
+      "properties": {
+        "verification": {
+          "type": "boolean"
+        },
+        "review": {
+          "type": "boolean"
+        },
+        "batch_review": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "subagent_plan": {
+      "type": "object",
+      "required": [
+        "primary_count",
+        "max_active",
+        "max_total",
+        "max_parallel_writers",
+        "max_repair_rounds",
+        "fresh_context_per_dispatch",
+        "synthesized_fallback",
+        "eligible_roles",
+        "parallel_safe_roles"
+      ],
+      "properties": {
+        "primary_count": {
+          "type": "integer",
+          "enum": [
+            1
+          ]
+        },
+        "max_active": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_parallel_writers": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_repair_rounds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fresh_context_per_dispatch": {
+          "type": "boolean"
+        },
+        "synthesized_fallback": {
+          "type": "boolean"
+        },
+        "eligible_roles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "parallel_safe_roles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
 }

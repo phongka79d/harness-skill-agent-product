@@ -1,42 +1,20 @@
-# CLI Behavior
+# CLI behavior
 
-All scripts accept `--project-root` when operating on `.agent/`. Inputs are JSON files; a future adapter may provide stdin without changing the contracts.
+- Exit `0`: operation succeeded or the requested state is already present.
+- Exit `1`: invalid input, missing required state, unsafe claim, stale evidence, unsafe path, inconsistent task index, or write failure.
+- Commands print JSON for machine-readable decisions and short uppercase tokens for simple validation results.
+- Invalid object types are reported as `<OPERATION>_REJECTED` rather than raw tracebacks.
+- Each individual JSON state write is atomic. A process interruption between the task-file write and state-index write may leave an orphan; validation and recovery detect it and require explicit reconciliation.
+- Scripts never call a provider model, execute a merge, push a branch, deploy, or retry an uncertain side effect.
 
-Exit codes:
+- `resolve_workflow.py` uses central `default_profile` when `--profile` or request `profile` is omitted. Configuration loading rejects a default profile that has no bundled profile file.
+- `init_runtime.py --decision` verifies the decision hash, validates the task index, and rejects rebinding while a task is open.
+- `init_runtime.py` also creates `.phongka/settings.json` from central defaults when missing and validates without overwriting it when present.
+- `load_runtime_settings.py` reads and validates the settings file; `--ensure` creates it only for an initialized runtime. It never polls or closes a model agent.
+- `update_task_state.py` accepts only caller-owned fields and normalized repository-relative scope paths.
+- Derived approval, decision, revision, and delivery fields are not accepted from callers.
+- Stateful completion uses `work_revision` for evidence freshness and `status_revision` for lifecycle changes.
+- Verification check names are acceptance IDs; completion claims must use the exact same unique set.
 
-- `0`: accepted and written, or valid/read-only result.
-- `1`: invalid input, schema failure, or invalid transition.
-- `2`: missing project state or a command that cannot run because required runtime state is absent.
-
-Inspection can return exit code `0` even when its result is `NEEDS_RECONCILIATION` or `UNSAFE_TO_RESUME`: the inspection itself completed successfully. Callers must honor that classification and must not resume unless it is `SAFE_TO_RESUME`.
-
-Read-only planning, profile, rubric, queue, dependency, and scope commands also return `0` for a valid result and `1` for invalid input. They do not mutate `.agent/`.
-
-When a task reaches a terminal status, lease and owned-lock removal is recorded as `LEASE_RELEASED` or `LOCK_RELEASED`. An expired named lock may be replaced only after its `expires_at` is validated; the replacement emits `LOCK_RECLAIMED` evidence.
-
-Scripts must not overwrite existing runtime state during initialization unless an explicit reset operation is added and approved by policy.
-
-For versioned artifacts, submit `expected_revision` from the last read result.
-The state script increments the revision only when that value still matches;
-otherwise it returns a rejection and the agent must reload the artifact.
-
-The distributed state adapter uses the same rule for `expected_revision` and
-also requires the last snapshot `etag`. A repeated event ID with identical
-content is idempotent; different content is an `EVENT_CONFLICT`. Transport
-timeouts and invalid response framing are `NETWORK_UNCERTAIN`, not permission
-to retry the mutation. Callers must reconcile the operation ID first.
-
-Rollback commands are explicit: a task failure does not imply compensation.
-The planner creates only a dry-run plan tied to known operation IDs. Execution
-requires an exact `ROLLBACK` approval and provider evidence; `UNKNOWN`, failed,
-or stale-fencing outcomes are recorded and escalated with retry disabled.
-
-Canonical task and batch reviews require a pinned contract, resolved rubric, and
-one evidence-backed `hard_fail_checks` record per rubric hard-fail rule. Batch
-review task IDs are compared with the persisted batch contract; a reviewer cannot
-submit only the tasks that passed.
-
-Async worktree commands require an external worktree root, a live lease, and a
-manager-issued isolation proof. Merge conflicts create `RECOVERY_PENDING` evidence
-and block cleanup until the worktree is reconciled. Packaging is allowlisted and
-rejects generated runtime state, caches, logs, temporary files, and detected secrets.
+- `recovery` routes inspect the existing runtime and must not call `init_runtime.py` while interrupted work is active.
+- Standalone `delivery` routes may call `init_runtime.py` to rebind an idle runtime, but they must not open a new task.

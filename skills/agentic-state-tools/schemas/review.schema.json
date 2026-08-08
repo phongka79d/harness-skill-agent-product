@@ -1,81 +1,215 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["review_id", "task_id", "criteria", "findings", "verdict"],
+  "required": [
+    "schema_version",
+    "task_id",
+    "review_mode",
+    "review_rubric_id",
+    "review_rubric_version",
+    "criteria",
+    "work_revision",
+    "workflow_decision_hash",
+    "outcome",
+    "summary",
+    "findings",
+    "workspace",
+    "workspace_summary",
+    "recorded_at"
+  ],
   "properties": {
-    "review_id": {"type": "string", "minLength": 1},
-    "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
-    "schema_version": {"type": "integer", "minimum": 1},
-    "stage": {"type": "string", "enum": ["SPEC_COMPLIANCE", "CODE_QUALITY"]},
-    "artifact_identity": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        5
+      ]
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+    },
+    "review_mode": {
+      "type": "string",
+      "enum": [
+        "task"
+      ]
+    },
+    "review_rubric_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+    },
+    "review_rubric_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "criteria": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PASS",
+              "FAIL",
+              "NOT_APPLICABLE"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "work_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "workflow_decision_hash": {
+      "type": "string",
+      "pattern": "[0-9a-f]{64}"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "REPAIR_REQUIRED",
+        "BLOCKED"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "severity",
+          "summary",
+          "location",
+          "evidence",
+          "impact",
+          "correction"
+        ],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "CRITICAL",
+              "HIGH",
+              "MEDIUM",
+              "LOW"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          },
+          "location": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          },
+          "impact": {
+            "type": "string",
+            "minLength": 1
+          },
+          "correction": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "recorded_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workspace": {
       "type": "object",
-      "required": ["task_id", "task_revision", "run_id", "attempt_id", "dispatch_id", "workspace_hash", "artifact_hash"],
+      "required": [
+        "files"
+      ],
       "properties": {
-        "task_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
-        "task_revision": {"type": "integer", "minimum": 1},
-        "run_id": {"type": "string", "minLength": 1},
-        "attempt_id": {"type": "string", "minLength": 1},
-        "dispatch_id": {"type": "string", "minLength": 1},
-        "workspace_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-        "artifact_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "size",
+              "sha256"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "[0-9a-f]{64}"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "worktree": {
+          "type": "object",
+          "required": [
+            "task_id",
+            "path",
+            "branch",
+            "base_commit",
+            "head_commit",
+            "workflow_decision_hash",
+            "repo_path"
+          ],
+          "properties": {
+            "task_id": {"type": "string", "minLength": 1},
+            "path": {"type": "string", "minLength": 1},
+            "branch": {"type": "string", "minLength": 1},
+            "base_commit": {"type": "string", "minLength": 1},
+            "head_commit": {"type": "string", "minLength": 1},
+            "workflow_decision_hash": {"type": "string", "minLength": 1},
+            "repo_path": {"type": "string", "pattern": "^\\.$"}
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     },
-    "previous_review_id": {"type": "string", "minLength": 1},
-    "previous_stage": {"type": "string", "const": "SPEC_COMPLIANCE"},
-    "previous_artifact_identity": {"$ref": "#/properties/artifact_identity"},
-    "spec_compliance": {
-      "type": "object",
-      "required": ["status"],
-      "properties": {
-        "status": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED"]},
-        "requirement_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
-        "evidence": {"type": "string", "minLength": 1}
-      },
-      "additionalProperties": false
-    },
-    "created_at": {"type": "string", "minLength": 1},
-    "revision": {"type": "integer", "minimum": 1},
-    "criteria": {"type": "array"},
-    "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "evidence", "required_change"], "properties": {"severity": {"type": "string", "enum": ["CRITICAL", "MAJOR", "MINOR", "SUGGESTION"]}, "evidence": {"type": "string", "minLength": 1}, "required_change": {"type": "string", "minLength": 1}, "resolved": {"type": "boolean"}}}},
-    "hard_fail_checks": {"type": "array", "items": {"type": "object", "required": ["rule", "triggered", "evidence"], "properties": {"rule": {"type": "string", "minLength": 1}, "triggered": {"type": "boolean"}, "evidence": {"type": "string", "minLength": 1}}}},
-    "hard_fail": {"type": "boolean"},
-    "pass_threshold_percent": {"type": "number", "minimum": 0, "maximum": 100},
-    "rubric_id": {"type": "string", "minLength": 1},
-    "rubric_version": {"type": "string", "minLength": 1},
-    "rubric_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "resolved_weights": {"type": "object"},
-    "applicability": {"type": "object"},
-    "resolved_rubric": {"type": "object"},
-    "review_contract": {"$ref": "review-contract.schema.json"},
-    "profile_id": {"type": "string", "minLength": 1},
-    "profile_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "verification_status": {"type": "string", "enum": ["VERIFIED", "LEGACY_UNVERIFIED", "REJECTED"]},
-    "verification_evidence_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
-    "completion_claim_id": {"type": "string", "minLength": 1},
-    "completion_claim": {"type": "object"},
-    "legacy_migration": {"type": "boolean"},
-    "legacy_classification": {"type": "string", "minLength": 1},
-    "legacy_source_version": {"type": "integer", "minimum": 1},
-    "supersedes_id": {"type": "string", "minLength": 1},
-    "previous_revision": {"type": "integer", "minimum": 0},
-    "verdict": {"type": "string", "enum": ["PASS", "BLOCKED", "REPAIR_REQUIRED"]}
-  },
-  "allOf": [
-    {
-      "if": {"required": ["stage"]},
-      "then": {"required": ["schema_version", "artifact_identity"]}
-    },
-    {
-      "if": {"required": ["stage"], "properties": {"stage": {"const": "CODE_QUALITY"}}},
-      "then": {"required": ["previous_review_id", "previous_stage", "previous_artifact_identity"]}
-    },
-    {
-      "if": {
-        "required": ["profile_id"],
-        "properties": {"profile_id": {"enum": ["course_project", "internal_tool", "production", "high_risk", "high-risk"]}}
-      },
-      "then": {"required": ["stage"]}
+    "workspace_summary": {
+      "type": "string",
+      "minLength": 1
     }
-  ]
+  },
+  "additionalProperties": false
 }

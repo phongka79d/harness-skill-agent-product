@@ -1,27 +1,16 @@
 ---
 name: agentic-delivery-finalizer
-description: Use when accepted work needs a controlled delivery outcome, final verification, approval-backed merge, or identity-proven branch/worktree cleanup.
+description: Use when accepted work needs an explicit keep, merge, push, review-request, production, release, or destructive-cleanup decision.
 ---
 
 # Agentic Delivery Finalizer
 
-Read [agentic-engineering-core](../agentic-engineering-core/SKILL.md),
-[agentic-state-tools](../agentic-state-tools/SKILL.md), and the shared
-[authorization contract](../agentic-engineering-wiki/refs/contracts/authorization.md)
-before finalizing delivery. Use the [delivery outcomes](references/delivery-outcomes.md)
-and [merge and cleanup safety](references/merge-and-cleanup-safety.md) references
-for the controlled decision and evidence requirements.
+1. Finalize runtime task state and completion gates before entering delivery.
+2. Select the exact completed or accepted tasks.
+3. Confirm required verification, completion gates, task review, and batch review are current.
+4. Use the configured delivery action, outcome, cleanup policy, and approval requirement.
+5. Record the decision before an external action.
+6. Let an authorized host tool perform the action once.
+7. Reconcile the actual result before reporting success or retrying.
 
-## Workflow
-
-1. Confirm accepted task and batch reviews, the current workspace identity, and fresh final-verification evidence.
-2. Select exactly one supported delivery outcome; do not invent a fallback outcome.
-3. Persist the decision, hashes, approval evidence, and intended cleanup state through `agentic-state-tools` before any merge, push, or cleanup side effect.
-4. Execute only the approved state-tool operation and read back its result.
-5. Re-verify the merged target when the outcome is `MERGE_LOCAL`; preserve the worktree for review when the outcome is `PUSH_AND_CREATE_PR`.
-6. Clean up only when the outcome and typed approval permit it and Harness ownership is proven by identity.
-
-Conflicts, missing or stale verification, mismatched identity, and missing
-approval produce `BLOCKED` or `NEEDS_RECONCILIATION`. The finalizer does not
-repair conflicts or run uncontrolled Git commands. The Batch Reviewer reviews
-integration and delivery readiness but never performs the merge.
+The state script records a decision only. It never performs the side effect. Read [delivery outcomes](references/delivery-outcomes.md) and [merge and cleanup safety](references/merge-and-cleanup-safety.md).

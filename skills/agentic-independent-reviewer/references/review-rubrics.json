@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "rubrics": {
+    "plan": {
+      "id": "plan",
+      "version": 1,
+      "criteria": [
+        {
+          "id": "feasibility",
+          "description": "The proposed approach can achieve the goal within the stated constraints and available capabilities."
+        },
+        {
+          "id": "scope_file_boundaries",
+          "description": "The task boundaries and repository-relative file ownership are explicit, minimal, and within the requested scope."
+        },
+        {
+          "id": "dependency_order",
+          "description": "Dependencies, sequencing, and shared-file ordering are explicit and executable."
+        },
+        {
+          "id": "acceptance_verification",
+          "description": "Acceptance criteria are observable and each task has sufficient verification evidence."
+        },
+        {
+          "id": "risk_approval_yagni",
+          "description": "Risks, approvals, rollback implications, and YAGNI limits are addressed."
+        }
+      ]
+    },
+    "task": {
+      "id": "task",
+      "version": 1,
+      "criteria": [
+        {
+          "id": "acceptance_spec",
+          "description": "The implementation matches the requested specification and every acceptance criterion."
+        },
+        {
+          "id": "correctness_error_paths",
+          "description": "Normal behavior, validation, failure handling, and error paths are correct."
+        },
+        {
+          "id": "state_security_data_integrity",
+          "description": "State transitions, security boundaries, and data integrity are preserved."
+        },
+        {
+          "id": "maintainability_scope",
+          "description": "The change is understandable, bounded, and free of unrelated or speculative work."
+        },
+        {
+          "id": "compatibility_tests",
+          "description": "Existing interfaces remain compatible and relevant tests or checks cover the change."
+        },
+        {
+          "id": "evidence_freshness",
+          "description": "Review evidence is current, complete, and bound to the reviewed workspace."
+        }
+      ]
+    },
+    "integration": {
+      "id": "integration",
+      "version": 1,
+      "criteria": [
+        {
+          "id": "cross_task_behavior",
+          "description": "Combined task behavior satisfies the intended end-to-end outcome."
+        },
+        {
+          "id": "shared_contracts_schema_compatibility",
+          "description": "Shared contracts, schemas, and interfaces remain compatible across the integrated changes."
+        },
+        {
+          "id": "interaction_conflict",
+          "description": "Task interactions, assumptions, and shared-file conflicts are resolved or explicitly bounded."
+        },
+        {
+          "id": "recovery_rollback",
+          "description": "Recovery, rollback, and partial-failure behavior remain safe and executable."
+        },
+        {
+          "id": "delivery_risk",
+          "description": "Remaining delivery risks, approvals, and release constraints are understood and acceptable."
+        }
+      ]
+    }
+  }
+}

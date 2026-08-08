@@ -1,0 +1,5 @@
+interface:
+  display_name: "Agentic Independent Reviewer"
+  short_description: "Review plans, tasks, or integrations"
+  default_prompt: "Dispatch $agentic-independent-reviewer only from $agentic-engineering-core with the shared envelope and a bounded task contract."
+  # Dispatch with the shared envelope, ROLE_MODE, and fresh isolated context.

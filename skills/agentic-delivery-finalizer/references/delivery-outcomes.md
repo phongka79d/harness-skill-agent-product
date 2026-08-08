@@ -1,25 +1,14 @@
-# Delivery Outcomes
+# Delivery outcomes
 
-The finalizer records exactly one controlled outcome for an accepted task. The
-outcome is not successful until current final-verification evidence, task and
-batch review evidence, relevant approval evidence, and delivery hashes are
-persisted.
+The workflow decision maps each explicit action to one outcome:
 
-| Outcome | Use when | Required result |
-| --- | --- | --- |
-| `MERGE_LOCAL` | The accepted change should land on the local target branch. | Perform the approved local merge through state-tools, then run final verification again on the merged result. Keep the source worktree until the post-merge evidence and any separately authorized cleanup are recorded. |
-| `PUSH_AND_CREATE_PR` | The change should be handed off for remote review. | Record the push/PR evidence available to the configured workflow and preserve the branch and worktree for review fixes unless an explicit policy says otherwise. |
-| `KEEP_BRANCH_AND_WORKTREE` | The change is complete enough to retain but must not be merged or discarded yet. | Preserve the branch and worktree, record the decision and identity evidence, and leave cleanup unrequested. |
-| `DISCARD_BRANCH_AND_WORKTREE` | The change is intentionally abandoned. | Require a current typed destructive approval, persist the decision and verification evidence first, then remove only the Harness-owned branch/worktree proven by identity. |
+| Action | Outcome |
+|---|---|
+| `keep_local` | `KEEP_LOCAL` |
+| `merge_local` | `MERGE_LOCAL` |
+| `push_branch` | `PUSH_BRANCH` |
+| `create_review_request` | `CREATE_REVIEW_REQUEST` |
+| `production_action` | `PRODUCTION_ACTION` |
+| `destructive_cleanup` | `DESTRUCTIVE_CLEANUP` |
 
-An outcome cannot silently change into another outcome after execution starts.
-If its preconditions fail, record `BLOCKED` or `NEEDS_RECONCILIATION` and retain
-the workspace for inspection.
-
-`MERGE_LOCAL` is the only outcome in this set that changes the local target
-branch. A local merge conflict is evidence for reconciliation, not permission
-to reset, delete, or invent a repair. `PUSH_AND_CREATE_PR` does not authorize
-worktree cleanup: the review fix loop needs the source identity and workspace.
-
-The Batch Reviewer may review integration, hashes, verification, and cleanup
-readiness. It does not select or perform the merge on behalf of the finalizer.
+Do not substitute another outcome at finalization time. Active or incomplete work, missing target identity, stale verification, a missing completion gate, failed required review, mismatched batch review, missing approval, or unavailable action capability blocks execution and must be reported without writing a contradictory successful decision.

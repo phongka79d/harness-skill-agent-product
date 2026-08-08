@@ -1,0 +1,722 @@
+{
+  "schema_version": 5,
+  "config_id": "phongka-agentic-engineering",
+  "version": "3.5.1",
+  "default_profile": "personal",
+  "agents": {
+    "agent-brainstorm": {
+      "skill": "agentic-brainstorm-facilitator",
+      "role": "brainstorm_facilitator",
+      "dispatch_kind": "model",
+      "model_ref": "analysis",
+      "capabilities": [
+        "goal_clarification",
+        "options_analysis"
+      ],
+      "forbidden": [
+        "source_editing",
+        "self_approval"
+      ],
+      "prompt_path": "agentic-brainstorm-facilitator/prompts/brainstormer.md",
+      "fresh_context": true,
+      "parallel_safe": true
+    },
+    "agent-plan-architect": {
+      "skill": "agentic-plan-architect",
+      "role": "plan_architect",
+      "dispatch_kind": "model",
+      "model_ref": "analysis",
+      "capabilities": [
+        "concise_planning",
+        "dependency_decomposition"
+      ],
+      "forbidden": [
+        "source_editing",
+        "self_approval"
+      ],
+      "prompt_path": "agentic-plan-architect/prompts/planner.md",
+      "fresh_context": true,
+      "parallel_safe": false
+    },
+    "agent-explorer": {
+      "skill": "agentic-explorer",
+      "role": "explorer",
+      "dispatch_kind": "model",
+      "model_ref": "exploration",
+      "capabilities": [
+        "repository_reading",
+        "evidence_gathering"
+      ],
+      "forbidden": [
+        "source_editing",
+        "state_mutation"
+      ],
+      "prompt_path": "agentic-explorer/prompts/explorer.md",
+      "fresh_context": true,
+      "parallel_safe": true
+    },
+    "agent-executor": {
+      "skill": "agentic-implementer",
+      "role": "implementer",
+      "dispatch_kind": "model",
+      "model_ref": "implementation",
+      "capabilities": [
+        "repository_editing",
+        "focused_verification"
+      ],
+      "forbidden": [
+        "scope_expansion",
+        "self_approval"
+      ],
+      "prompt_path": "agentic-implementer/prompts/implementer.md",
+      "fresh_context": true,
+      "parallel_safe": false
+    },
+    "agent-runtime-recovery": {
+      "skill": "agentic-runtime-recovery",
+      "role": "runtime_recovery",
+      "dispatch_kind": "model",
+      "model_ref": "analysis",
+      "capabilities": [
+        "state_recovery",
+        "side_effect_reconciliation"
+      ],
+      "forbidden": [
+        "blind_retry",
+        "source_editing"
+      ],
+      "prompt_path": "agentic-runtime-recovery/prompts/recovery.md",
+      "fresh_context": true,
+      "parallel_safe": false
+    },
+    "agent-state-tools": {
+      "skill": "agentic-state-tools",
+      "role": "state_tools",
+      "dispatch_kind": "script",
+      "capabilities": [
+        "workflow_resolution",
+        "atomic_state_writes"
+      ],
+      "forbidden": [
+        "subjective_decisions"
+      ]
+    },
+    "agent-skill-authoring": {
+      "skill": "agentic-skill-authoring",
+      "role": "skill_authoring",
+      "dispatch_kind": "model",
+      "model_ref": "implementation",
+      "capabilities": [
+        "skill_editing",
+        "skill_validation"
+      ],
+      "forbidden": [
+        "unrelated_skill_import",
+        "self_approval"
+      ],
+      "prompt_path": "agentic-skill-authoring/prompts/skill-author.md",
+      "fresh_context": true,
+      "parallel_safe": false
+    },
+    "agent-debugger": {
+      "skill": "agentic-systematic-debugging",
+      "role": "debugger",
+      "dispatch_kind": "model",
+      "model_ref": "analysis",
+      "prompt_path": "agentic-systematic-debugging/prompts/debugger.md",
+      "fresh_context": true,
+      "parallel_safe": true,
+      "capabilities": [
+        "root_cause_analysis",
+        "reproduction"
+      ],
+      "forbidden": [
+        "source_editing",
+        "symptom_patching"
+      ]
+    },
+    "agent-verifier": {
+      "skill": "agentic-verification-before-completion",
+      "role": "verifier",
+      "dispatch_kind": "model",
+      "model_ref": "review",
+      "prompt_path": "agentic-verification-before-completion/prompts/verifier.md",
+      "fresh_context": true,
+      "parallel_safe": false,
+      "capabilities": [
+        "acceptance_verification",
+        "evidence_validation"
+      ],
+      "forbidden": [
+        "source_editing",
+        "accepting_summary_as_evidence"
+      ]
+    },
+    "agent-independent-reviewer": {
+      "skill": "agentic-independent-reviewer",
+      "role": "independent_reviewer",
+      "dispatch_kind": "model",
+      "model_ref": "review",
+      "capabilities": [
+        "plan_review",
+        "task_review",
+        "integration_review"
+      ],
+      "forbidden": [
+        "source_editing",
+        "self_repair",
+        "delivery_action"
+      ],
+      "prompt_path": "agentic-independent-reviewer/prompts/reviewer.md",
+      "fresh_context": true,
+      "parallel_safe": true
+    }
+  },
+  "model_policy": {
+    "allowed_model_refs": [
+      "analysis",
+      "implementation",
+      "review",
+      "exploration"
+    ],
+    "selection_mode": "role_configured_only"
+  },
+  "workflow": {
+    "depth_order": [
+      "focused",
+      "standard",
+      "controlled"
+    ],
+    "focused_max_files": 5,
+    "standard_max_files": 12,
+    "focused_max_concerns": 1,
+    "focused_max_repair_cycles": 1,
+    "standard_max_repair_cycles": 2,
+    "controlled_max_repair_cycles": 3,
+    "high_risk_flags": [
+      "architecture_change",
+      "public_api_change",
+      "new_dependency",
+      "schema_change",
+      "security_sensitive",
+      "destructive_operation",
+      "production_impact"
+    ],
+    "standard_flags": [
+      "unclear_scope",
+      "cross_module",
+      "multiple_concerns",
+      "requires_persistent_state"
+    ],
+    "legacy_change_type_routes": {
+      "code": "general_change",
+      "feature": "feature",
+      "bug_fix": "debug",
+      "debug": "debug",
+      "refactor": "refactor",
+      "documentation": "documentation",
+      "configuration": "configuration",
+      "data": "general_change",
+      "infrastructure": "general_change",
+      "research": "research"
+    },
+    "risk_approval_map": {
+      "architecture_change": "architecture_change",
+      "public_api_change": "public_api_change",
+      "new_dependency": "new_dependency",
+      "schema_change": "schema_change",
+      "security_sensitive": "security_sensitive",
+      "destructive_operation": "destructive_operation",
+      "production_impact": "production_action"
+    }
+  },
+  "execution": {
+    "mode": "sync",
+    "parallel_read_only_enabled": true,
+    "max_parallel_read_only": 3,
+    "automatic_merge": false
+  },
+  "approval_matrix": {
+    "normal_change": "automatic",
+    "new_dependency": "user",
+    "schema_change": "user",
+    "destructive_operation": "user",
+    "architecture_change": "user",
+    "public_api_change": "user",
+    "security_sensitive": "user",
+    "production_action": "user"
+  },
+  "runtime": {
+    "focused_state": "required",
+    "standard_state": "required",
+    "controlled_state": "required"
+  },
+  "context_budget": {
+    "focused_max_files": 8,
+    "standard_max_files": 20,
+    "controlled_max_files": 40,
+    "max_bytes": 262144,
+    "allow_unbounded_scan": false
+  },
+  "security": {
+    "redact_environment_values": true,
+    "redact_tokens": true,
+    "forbid_secret_persistence": true
+  },
+  "skill_routing": {
+    "process_skills": {
+      "core": "agentic-engineering-core",
+      "debug": "agentic-systematic-debugging",
+      "verify": "agentic-verification-before-completion"
+    },
+    "required_companion_skills": [
+      "i-have-adhd"
+    ],
+    "role_skills": {
+      "brainstorm": "agentic-brainstorm-facilitator",
+      "plan": "agentic-plan-architect",
+      "plan_review": "agentic-independent-reviewer",
+      "explore": "agentic-explorer",
+      "implement": "agentic-implementer",
+      "review": "agentic-independent-reviewer",
+      "batch_review": "agentic-independent-reviewer",
+      "recovery": "agentic-runtime-recovery",
+      "delivery": "agentic-delivery-finalizer",
+      "skill_authoring": "agentic-skill-authoring",
+      "configuration": "agentic-configuration"
+    },
+    "task_routes": {
+      "quick_fix": {
+        "description": "Known-cause, bounded correction with no discovery-heavy investigation.",
+        "source_editing": true,
+        "default_depth": "focused",
+        "state_mode": "inherit",
+        "clarify_on_unclear": false,
+        "reviewable": true,
+        "batch_reviewable": false,
+        "sequences": {
+          "focused": [
+            "implement",
+            "verify"
+          ],
+          "standard": [
+            "implement",
+            "verify"
+          ],
+          "controlled": [
+            "plan",
+            "plan_review",
+            "implement",
+            "review",
+            "verify"
+          ]
+        }
+      },
+      "debug": {
+        "description": "Investigate an unknown or uncertain root cause, then repair it.",
+        "source_editing": true,
+        "default_depth": "focused",
+        "state_mode": "inherit",
+        "clarify_on_unclear": false,
+        "reviewable": true,
+        "batch_reviewable": false,
+        "sequences": {
+          "focused": [
+            "debug",
+            "implement",
+            "verify"
+          ],
+          "standard": [
+            "debug",
+            "implement",
+            "verify"
+          ],
+          "controlled": [
+            "debug",
+            "plan",
+            "plan_review",
+            "implement",
+            "review",
+            "verify"
+          ]
+        }
+      },
+      "feature": {
+        "description": "Add a user-visible or system capability.",
+        "source_editing": true,
+        "default_depth": "focused",
+        "state_mode": "inherit",
+        "clarify_on_unclear": true,
+        "reviewable": true,
+        "batch_reviewable": true,
+        "sequences": {
+          "focused": [
+            "implement",
+            "verify"
+          ],
+          "standard": [
+            "plan",
+            "implement",
+            "verify"
+          ],
+          "controlled": [
+            "plan",
+            "plan_review",
+            "implement",
+            "review",
+            "verify"
+          ]
+        }
+      },
+      "refactor": {
+        "description": "Change internal structure while preserving intended behavior.",
+        "source_editing": true,
+        "default_depth": "focused",
+        "state_mode": "inherit",
+        "clarify_on_unclear": true,
+        "reviewable": true,
+        "batch_reviewable": true,
+        "sequences": {
+          "focused": [
+            "explore",
+            "implement",
+            "verify"
+          ],
+          "standard": [
+            "explore",
+            "plan",
+            "implement",
+            "verify"
+          ],
+          "controlled": [
+            "explore",
+            "plan",
+            "plan_review",
+            "implement",
+            "review",
+            "verify"
+          ]
+        }
+      },
+      "research": {
+        "description": "Inspect and analyze without modifying source files.",
+        "source_editing": false,
+        "default_depth": "focused",
+        "state_mode": "inherit",
+        "clarify_on_unclear": false,
+        "reviewable": true,
+        "batch_reviewable": false,
+        "sequences": {
+          "focused": [
+            "explore"
+          ],
+          "standard": [
+            "explore"
+          ],
+          "controlled": [
+            "explore",
+            "review"
+          ]
+        }
+      },
+      "brainstorm": {
+        "description": "Clarify goals, constraints, alternatives, and decisions.",
+        "source_editing": false,
+        "default_depth": "focused",
+        "state_mode": "off",
+        "clarify_on_unclear": false,
+        "reviewable": false,
+        "batch_reviewable": false,
+        "sequences": {
+          "focused": [
+            "brainstorm"
+          ],
+          "standard": [
+            "brainstorm"
+          ],
+          "controlled": [
+            "brainstorm"
+          ]
+        }
+      },
+      "plan": {
+        "description": "Produce an implementation plan without editing source files.",
+        "source_editing": false,
+        "default_depth": "focused",
+        "state_mode": "inherit",
+        "clarify_on_unclear": true,
+        "reviewable": true,
+        "batch_reviewable": false,
+        "sequences": {
+          "focused": [
+            "plan"
+          ],
+          "standard": [
+            "explore",
+            "plan"
+          ],
+          "controlled": [
+            "explore",
+            "plan",
+            "plan_review"
+          ]
+        }
+      },
+      "review": {
+        "description": "Evaluate existing work, evidence, or a diff without repairing it.",
+        "source_editing": false,
+        "default_depth": "focused",
+        "state_mode": "inherit",
+        "clarify_on_unclear": false,
+        "reviewable": false,
+        "batch_reviewable": true,
+        "sequences": {
+          "focused": [
+            "review"
+          ],
+          "standard": [
+            "review"
+          ],
+          "controlled": [
+            "review"
+          ]
+        }
+      },
+      "documentation": {
+        "description": "Create or update project documentation.",
+        "source_editing": true,
+        "default_depth": "focused",
+        "state_mode": "inherit",
+        "clarify_on_unclear": true,
+        "reviewable": true,
+        "batch_reviewable": false,
+        "sequences": {
+          "focused": [
+            "implement",
+            "verify"
+          ],
+          "standard": [
+            "plan",
+            "implement",
+            "verify"
+          ],
+          "controlled": [
+            "plan",
+            "plan_review",
+            "implement",
+            "review",
+            "verify"
+          ]
+        }
+      },
+      "configuration": {
+        "description": "Inspect or change central routing, profile, approval, runtime, model-reference, or context-budget configuration.",
+        "source_editing": true,
+        "default_depth": "focused",
+        "state_mode": "inherit",
+        "clarify_on_unclear": true,
+        "reviewable": true,
+        "batch_reviewable": false,
+        "sequences": {
+          "focused": [
+            "configuration",
+            "verify"
+          ],
+          "standard": [
+            "plan",
+            "configuration",
+            "verify"
+          ],
+          "controlled": [
+            "plan",
+            "plan_review",
+            "configuration",
+            "review",
+            "verify"
+          ]
+        }
+      },
+      "skill_authoring": {
+        "description": "Create or modify a skill while preserving package conventions.",
+        "source_editing": true,
+        "default_depth": "focused",
+        "state_mode": "inherit",
+        "clarify_on_unclear": true,
+        "reviewable": true,
+        "batch_reviewable": false,
+        "sequences": {
+          "focused": [
+            "skill_authoring",
+            "verify"
+          ],
+          "standard": [
+            "plan",
+            "skill_authoring",
+            "verify"
+          ],
+          "controlled": [
+            "plan",
+            "plan_review",
+            "skill_authoring",
+            "review",
+            "verify"
+          ]
+        }
+      },
+      "recovery": {
+        "description": "Inspect interrupted runtime state and reconcile uncertain side effects.",
+        "source_editing": false,
+        "default_depth": "standard",
+        "state_mode": "required",
+        "clarify_on_unclear": false,
+        "reviewable": false,
+        "batch_reviewable": false,
+        "sequences": {
+          "focused": [
+            "recovery"
+          ],
+          "standard": [
+            "recovery"
+          ],
+          "controlled": [
+            "recovery"
+          ]
+        }
+      },
+      "delivery": {
+        "description": "Validate and record an approval-backed delivery outcome.",
+        "source_editing": false,
+        "default_depth": "standard",
+        "state_mode": "required",
+        "clarify_on_unclear": false,
+        "reviewable": false,
+        "batch_reviewable": true,
+        "sequences": {
+          "focused": [
+            "verify",
+            "delivery"
+          ],
+          "standard": [
+            "review",
+            "verify",
+            "delivery"
+          ],
+          "controlled": [
+            "review",
+            "batch_review",
+            "verify",
+            "delivery"
+          ]
+        }
+      },
+      "general_change": {
+        "description": "Fallback for a source change that does not fit a more specific route.",
+        "source_editing": true,
+        "default_depth": "standard",
+        "state_mode": "inherit",
+        "clarify_on_unclear": true,
+        "reviewable": true,
+        "batch_reviewable": true,
+        "sequences": {
+          "focused": [
+            "implement",
+            "verify"
+          ],
+          "standard": [
+            "plan",
+            "implement",
+            "verify"
+          ],
+          "controlled": [
+            "plan",
+            "plan_review",
+            "implement",
+            "review",
+            "verify"
+          ]
+        }
+      }
+    }
+  },
+  "delivery_actions": {
+    "none": {
+      "approval_key": "normal_change",
+      "outcome": "NO_ACTION",
+      "cleanup": "NOT_APPLICABLE"
+    },
+    "keep_local": {
+      "approval_key": "normal_change",
+      "outcome": "KEEP_LOCAL",
+      "cleanup": "KEEP"
+    },
+    "merge_local": {
+      "approval_key": "normal_change",
+      "outcome": "MERGE_LOCAL",
+      "cleanup": "KEEP"
+    },
+    "push_branch": {
+      "approval_key": "normal_change",
+      "outcome": "PUSH_BRANCH",
+      "cleanup": "KEEP"
+    },
+    "create_review_request": {
+      "approval_key": "normal_change",
+      "outcome": "CREATE_REVIEW_REQUEST",
+      "cleanup": "KEEP"
+    },
+    "production_action": {
+      "approval_key": "production_action",
+      "outcome": "PRODUCTION_ACTION",
+      "cleanup": "KEEP"
+    },
+    "destructive_cleanup": {
+      "approval_key": "destructive_operation",
+      "outcome": "DESTRUCTIVE_CLEANUP",
+      "cleanup": "SAFE_REMOVE"
+    }
+  },
+  "subagent_policy": {
+    "primary_skill": "agentic-engineering-core",
+    "fresh_context_per_dispatch": true,
+    "synthesized_fallback": true,
+    "one_writer_per_file_per_wave": true,
+    "wait": {
+      "check_interval_seconds": 30,
+      "timeout_seconds": 1800,
+      "close_on_timeout": false
+    },
+    "dispatchable_stages": [
+      "brainstorm",
+      "debug",
+      "explore",
+      "plan",
+      "plan_review",
+      "implement",
+      "review",
+      "batch_review",
+      "verify",
+      "recovery",
+      "skill_authoring"
+    ],
+    "depths": {
+      "focused": {
+        "max_active": 1,
+        "max_total": 2,
+        "max_parallel_writers": 1,
+        "max_repair_rounds": 1
+      },
+      "standard": {
+        "max_active": 2,
+        "max_total": 4,
+        "max_parallel_writers": 1,
+        "max_repair_rounds": 2
+      },
+      "controlled": {
+        "max_active": 3,
+        "max_total": 6,
+        "max_parallel_writers": 1,
+        "max_repair_rounds": 3
+      }
+    }
+  }
+}

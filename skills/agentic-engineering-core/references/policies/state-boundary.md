@@ -1,21 +1,12 @@
-# Runtime State Boundary
+# State boundary
 
-`.agent/` contains generated runtime state and user-visible status only.
+- Built-in focused, standard, and controlled execution defaults to required project-local state.
+- Only a route or custom policy that explicitly resolves `state_mode: off` is stateless; `optional` remains available to custom policies.
+- Agents may read `.phongka/`; canonical runtime writes use state-tools, while users may edit `.phongka/settings.json`.
+- Project plans remain under `docs/agentic/`, not `.phongka/`.
+- Never persist secrets or full unnecessary repository content.
 
-Agents may read:
-
-- `.agent/runtime/state.json`
-- `.agent/runtime/events.jsonl`
-- `.agent/work/<id>/task-state.json`
-- `.agent/work/<id>/checkpoint.json`
-- `.agent/work/<id>/handoff.json`
-- `.agent/work/<id>/context.json`
-- `.agent/work/<id>/lease.json`
-- `.agent/work/<id>/operations.jsonl`
-- `.agent/locks/`
-- `.agent/recovery/`
-- `.agent/checklist.md`
-
-Agents must submit structured payloads to `agentic-state-tools` instead of editing these files. Scripts own schema validation, timestamps, IDs, revisions, transitions, atomic writes, event appends, recovery rebuilds, rubric scores, and checklist rendering.
-
-Planning documents and task definitions belong outside `.agent/`, normally under `docs/agentic/`.
+- Required state initializes from the resolved workflow decision and stores its hash.
+- Runtime initialization creates `.phongka/settings.json` from central defaults only when it is missing and never overwrites user values.
+- An active task prevents runtime rebinding; an idle runtime may bind the next decision.
+- Task content and task status use separate revisions so completion transitions do not invalidate fresh evidence.

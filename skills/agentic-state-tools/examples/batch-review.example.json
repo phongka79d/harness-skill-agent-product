@@ -1,0 +1,60 @@
+{
+  "schema_version": 3,
+  "workflow_decision_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "tasks": [
+    {
+      "task_id": "TASK-1",
+      "work_revision": 1,
+      "task_workflow_decision_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "task_id": "TASK-2",
+      "work_revision": 2,
+      "task_workflow_decision_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "review_mode": "integration",
+  "review_rubric_id": "integration",
+  "review_rubric_version": 1,
+  "criteria": [
+    {
+      "id": "cross_task_behavior",
+      "status": "PASS",
+      "evidence": "The combined task changes produce the intended end-to-end behavior."
+    },
+    {
+      "id": "shared_contracts_schema_compatibility",
+      "status": "PASS",
+      "evidence": "Shared schemas and interfaces remain compatible across the task set."
+    },
+    {
+      "id": "interaction_conflict",
+      "status": "PASS",
+      "evidence": "Task assumptions and shared-file interactions were checked without conflict."
+    },
+    {
+      "id": "recovery_rollback",
+      "status": "PASS",
+      "evidence": "The integrated changes preserve the documented recovery and rollback path."
+    },
+    {
+      "id": "delivery_risk",
+      "status": "PASS",
+      "evidence": "Remaining delivery risks and approval constraints are within the accepted boundary."
+    }
+  ],
+  "outcome": "PASS",
+  "summary": "Integrated behavior and delivery risk passed review",
+  "findings": [],
+  "recorded_at": "2026-08-06T00:00:00Z",
+  "workspace": {
+    "files": [
+      {
+        "path": "src/module.py",
+        "size": 128,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ]
+  },
+  "workspace_summary": "Integrated workspace reviewed before final verification"
+}

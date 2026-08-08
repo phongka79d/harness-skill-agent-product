@@ -1,4 +1,5 @@
 interface:
   display_name: "Agentic Plan Architect"
-  short_description: "Create validated engineering plans"
-  default_prompt: "Use $agentic-plan-architect to turn an approved direction into validated plans and task contracts."
+  short_description: "Create concise executable plans"
+  default_prompt: "Dispatch $agentic-plan-architect only from $agentic-engineering-core with the shared envelope and a bounded task contract."
+  # Dispatch with the role prompt and fresh isolated context.

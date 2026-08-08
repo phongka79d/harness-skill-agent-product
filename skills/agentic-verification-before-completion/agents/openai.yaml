@@ -1,4 +1,5 @@
 interface:
   display_name: "Agentic Verification Before Completion"
-  short_description: "Gate outcome claims with fresh evidence"
-  default_prompt: "Use $agentic-verification-before-completion to verify a completion, fix, pass, readiness, merge, or release claim with current task-bound evidence."
+  short_description: "Verify claims with current evidence"
+  default_prompt: "Dispatch $agentic-verification-before-completion only from $agentic-engineering-core with the shared envelope and a bounded task contract."
+  # Dispatch with the role prompt and fresh isolated context.

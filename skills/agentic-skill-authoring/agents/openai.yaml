@@ -1,4 +1,5 @@
 interface:
   display_name: "Agentic Skill Authoring"
-  short_description: "Design and behavior-test Harness skills"
-  default_prompt: "Use $agentic-skill-authoring to design, pressure-test, and harden a Harness skill with bounded scope and evidence-backed scenarios."
+  short_description: "Design clear and lean skills"
+  default_prompt: "Dispatch $agentic-skill-authoring only from $agentic-engineering-core with the shared envelope and a bounded task contract."
+  # Dispatch with the role prompt and fresh isolated context.

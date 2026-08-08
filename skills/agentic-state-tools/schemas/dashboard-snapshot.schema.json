@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "profile_id",
+    "task_route",
+    "execution_depth",
+    "workflow_decision_hash",
+    "approval",
+    "delivery",
+    "status",
+    "tasks",
+    "next_action"
+  ],
+  "properties": {
+    "profile_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_route": {
+      "type": "string",
+      "minLength": 1
+    },
+    "execution_depth": {
+      "type": "string",
+      "enum": [
+        "focused",
+        "standard",
+        "controlled"
+      ]
+    },
+    "workflow_decision_hash": {
+      "type": "string",
+      "pattern": "[0-9a-f]{64}"
+    },
+    "approval": {
+      "type": "object"
+    },
+    "delivery": {
+      "type": "object"
+    },
+    "status": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tasks": {
+      "type": "array"
+    },
+    "next_action": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subagent_plan": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

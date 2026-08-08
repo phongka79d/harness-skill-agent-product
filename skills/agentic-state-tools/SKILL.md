@@ -1,175 +1,70 @@
 ---
 name: agentic-state-tools
-description: Use when project-local `.agent/` artifacts must be initialized, validated, updated, rebuilt, recovered, or rendered, including state, events, task/context records, reviews, locks, leases, and checklist status.
+description: Use deterministic scripts to resolve workflows and manage project-local `.phongka` state for resolved required workflows; preserve explicit stateless opt-outs; never use them as an autonomous agent runtime.
 ---
 
 # Agentic State Tools
 
-Policy status: ENFORCED (enforced by `skills/agentic-state-tools/scripts/validate_state.py`)
+The Primary Agent classifies intent and resolves the state mode. When the decision says `state_mode: required`, initialize the project-local `.phongka` runtime before executing the route. These scripts validate and expand that decision, bind state/evidence, and fail closed on invalid transitions.
 
-This skill is the only approved writer for canonical `.agent/` runtime artifacts. Agents submit structured payloads; these scripts validate and persist them.
+## Stateless path
 
-Read `agentic-engineering-wiki` for shared state-boundary, workflow, recovery, approval, rubric, and contract routing before using these tools.
+The stateless path applies only when the resolved decision explicitly says `state_mode: off`. In that case, do not create `.phongka`. Run only required skills and report fresh evidence directly.
 
-Read [agentic-configuration](../agentic-configuration/SKILL.md) before resolving agent roles, model dispatch, execution limits, approvals, or runtime paths.
+## Required-state path
 
-**REQUIRED BACKGROUND:** Use `agentic-engineering-core` when the operation belongs to an agentic delivery workflow.
-
-## Boundary
-
-Allowed target: the current project's `.agent/` directory.
-
-Never write skill instructions, reusable references, plans, task definitions, or human documentation into `.agent/`. Those belong in the workspace/project documentation area or global skill packages.
-
-## Core commands
-
-Run from the workspace or installed skill directory:
-
-```text
-python scripts/init_runtime.py --project-root <project>
-python scripts/append_event.py --project-root <project> --input <event.json>
-python scripts/update_task_state.py --project-root <project> --input <task-state.json>
-python scripts/create_checkpoint.py --project-root <project> --input <checkpoint.json>
-python scripts/create_handoff.py --project-root <project> --task-id <id> --input <handoff.json>
-python scripts/create_debug_investigation.py --project-root <project> --task-id <id> --input <payload.json> --actor <actor>
-python scripts/create_review.py --project-root <project> --input <review.json>
-python scripts/create_batch_contract.py --project-root <project> --plan <approved-plan.json> --plan-id <id> --plan-revision <n> --batch-id <id> --expected-revision <n> --actor primary-agent
-python scripts/create_batch_review.py --project-root <project> --input <batch-review.json>
-python scripts/create_context.py --project-root <project> --input <context.json>
-python scripts/acquire_lock.py --project-root <project> --input <lock.json>
-python scripts/release_lock.py --project-root <project> --input <release.json>
-python scripts/record_heartbeat.py --project-root <project> --input <heartbeat.json>
-python scripts/record_approval.py --project-root <project> --input <approval.json>
-python scripts/record_operation.py --project-root <project> --input <operation.json>
-python scripts/validate_state.py --project-root <project>
-python scripts/rebuild_state.py --project-root <project>
-python scripts/inspect_recovery.py --project-root <project> --task-id <id>
-python scripts/render_checklist.py --project-root <project>
-python scripts/validate_payload.py --input <payload.json> --schema schemas/task-state.schema.json
-python scripts/validate_schema.py --input <payload.json> --schema schemas/task-state.schema.json
-python scripts/validate_transition.py --current RUNNING --next COMPLETED
-python scripts/validate_state_machine.py --input schemas/state-machine.json
-python scripts/generate_state_artifacts.py --input schemas/state-machine.json
-python scripts/distributed_store.py snapshot --store-root <remote-store>
-python scripts/distributed_store.py append-event --store-root <remote-store> --input <event.json> --expected-revision <n> --expected-etag <sha256>
-python scripts/calculate_rubric_score.py --input <review.json>
-python scripts/validate_planning.py --input <planning-bundle.json>
-python scripts/resolve_project_profile.py --profile <profile-id>
-python scripts/resolve_rubric.py --profile <profile-id> --task-type <task-type> --risk-flags '{}'
-python scripts/resolve_rubric.py --profile <profile-id> --task-type strict --review-type batch --risk-flags '{}'
-python scripts/validate_change_request.py --input <change-request.json> --approval <approval.json>
-python scripts/apply_change_request.py --request <change-request.json> --target <old-plan.json> --approval <approval.json> --output <new-plan.json>
-python scripts/resolve_runnable_tasks.py --input <queue.json>
-python scripts/resolve_execution_mode.py --input <task.json>
-python scripts/validate_dependency_graph.py --input <planning-bundle.json>
-python scripts/detect_scope_overlap.py --input <tasks.json>
-python scripts/compute_critical_path.py --input <graph.json>
-python scripts/reconcile_queue.py --input <queue.json>
-python scripts/dispatch_task.py --project-root <project> --input <dispatch.json>
-python scripts/worktree_manager.py --project-root <git-project> --worktree-root <external-root> --task-id <id> --revision <n>
-python scripts/merge_worktree.py --project-root <git-project> --worktree-root <external-root> --task-id <id> --revision <n> --target-branch <branch> --approval <approval.json> --actor <actor-id> --actor-type user
-python scripts/commit_batch.py --project-root <project> --batch-id <id> --approval <approval.json> --actor <id> --actor-type user --message <message> --path <path>
-python scripts/next_batch.py --project-root <project> --current-batch-id <id> --next-batch-id <id> --approval <approval.json> --actor <id> --actor-type user
-python scripts/validate_examples.py --examples-root examples --deployment <deployment.json>
-python scripts/package_skill.py --root <package-root> --output <release.zip>
-python ../agentic-configuration/scripts/load_config.py --check
-python scripts/capture_workspace.py --project-root <project>
-python scripts/record_verification_evidence.py --project-root <project> --input <verification-evidence.json>
-python scripts/verify_completion_claim.py --project-root <project> --input <completion-claim.json>
-python scripts/verify_terminal_cleanup.py --project-root <project> --task-id <id>
-python scripts/plan_rollback.py --project-root <project> --input <rollback-request.json>
-python scripts/execute_rollback.py --project-root <project> --plan-id <id> --approval <approval.json> --outcomes <provider-outcomes.json>
+```bash
+python scripts/resolve_workflow.py --profile personal --task-route feature --estimated-files 3 --output /tmp/decision.json
+python scripts/init_runtime.py --project-root <project> --decision /tmp/decision.json
+python scripts/load_runtime_settings.py --project-root <project>
+python scripts/prepare_worktree.py --project-root <project> --approval-reference <reference>
 ```
 
-## Debugging investigations
+Use the same `--config` path (or `AGENTIC_CONFIG_FILE`) for both commands when a non-default central configuration is used.
 
-Create a repair investigation only through `create_debug_investigation.py`.
-The writer validates schema version `1`, task/run/attempt identity, the planned
-repair revision, hypothesis uniqueness, root-cause status, and regression
-evidence before atomically writing `.agent/work/<task-id>/debug-investigation.json`.
-It appends `DEBUG_INVESTIGATION_CREATED` only after the artifact is valid.
-When a passing regression check is recorded, the writer refreshes its
-`workspace_hash`; a successful repair handoff recomputes and compares that hash
-before accepting the claim.
+Canonical runtime files:
 
-Exit codes are deterministic: `0` means written, `1` means rejected payload or
-stale/mismatched/contradictory evidence, and `2` means the runtime or task
-binding is unavailable. Validation failures do not create or partially update
-the artifact. Repair dispatches and successful repair handoffs must preserve
-the same `investigation_id`; a new schema version or migration projection is
-required for future contract changes.
+```text
+.phongka/settings.json
+.phongka/state.json
+.phongka/events.jsonl
+.phongka/tasks/<task-id>.json
+.phongka/artifacts/<task-id>/verification.json
+.phongka/artifacts/<task-id>/completion-claim.json
+.phongka/artifacts/<task-id>/completion-gate.json
+.phongka/artifacts/<task-id>/review.json
+.phongka/artifacts/<task-id>/worktree-cleanup.json
+.phongka/batch-review.json
+.phongka/delivery-decision.json
+.phongka/checklist/task-checklist-<task-id>.md
+```
 
-## Guarantees
+`init_runtime.py` creates `settings.json` from central `subagent_policy.wait` defaults when it is missing and validates but never overwrites an existing file. Before each stateful model dispatch, the Primary Agent reads it with `load_runtime_settings.py` and snapshots the returned values for that dispatch. Invalid settings fail closed.
 
-- Validate before writing.
-- Generate IDs and timestamps when omitted.
-- Enforce revisions and allowed transitions.
-- Enforce task, file, and resource lock ownership plus lease identity.
-- Record idempotent side-effect operations and block unsafe retries.
-- Write JSON atomically.
-- Append immutable events.
-- Rebuild snapshots from the event journal.
-- Derive task and batch review outcomes from accepted evidence.
-- Require a canonical review contract and complete evidence-backed hard-fail checks for every non-legacy rubric review.
-- Validate planning schemas and cross-document dependencies before execution.
-- Resolve immutable project profiles and task rubrics with IDs, versions, hashes, applicability, weights, and thresholds.
-- Reconcile active recovery with the actual Git workspace when checkpoint evidence is present.
-- Remove terminal task leases and owned locks with journal evidence.
-- Resolve runnable tasks, execution mode, dependencies, and scope conflicts without mutating runtime state.
-- Validate queue and dependency graph contracts, compute a deterministic critical path, and reconcile queue/task/dispatch evidence.
-- Accept dispatch models only when `selected_model` matches the configured `agent_role` and deployment overlay; do not duplicate model literals in state-tools.
-- Persist each dispatch to queue, graph, lease, task state, operation ledger, and event journal with a run ID, attempt ID, revision, idempotency key, and configured capacity check.
-- Reject async dispatch while isolated worktree support is disabled.
-- Keep async task-to-branch-to-worktree mappings isolated, lease-bound, merge-fenced, and recoverable after conflict.
-- Require exact typed approval identity, target revision, target hash, policy version, and persisted approval evidence before protected side effects.
-- Require canonical batch task-set equality and matching task-review contracts before an integrated batch can pass.
-- Create `.agent/work/<batch-id>/batch-contract.json` only through `create_batch_contract.py`; direct writes are rejected for non-legacy reviews.
-- Persist approval records through the same validated artifact and event path.
-- Require approved Primary-owned records for architecture, plan, profile, and rubric overrides.
-- Apply plan changes only as new versioned artifacts with immutable supersede links.
-- Capture workspace evidence once and reuse it for checkpoint and recovery reconciliation.
-- Refuse live-owner lock reclaim and prove terminal cleanup before reporting a clean terminal state.
-- Render `.agent/checklist.md` from canonical task state and reviews.
-- Return non-zero exit codes for invalid payloads or unsafe state.
-- Record RED, GREEN, and profile-required broad verification as immutable,
-  identity-bound evidence with content-aware workspace freshness.
-- Reject completion claims based on summaries, prior runs, stale workspaces,
-  missing commands or exit codes, unmapped acceptance criteria, hidden skips,
-  and hidden failures. Legacy handoffs are readable as `LEGACY_UNVERIFIED` but
-  cannot satisfy strict production or high-risk gates.
+Controlled source-editing also records `.phongka/worktrees/<task-id>` in both the runtime and task state. Run `prepare_worktree.py` only after the task is `IN_PROGRESS` and its approval reference is present. Evidence scripts hash the bound worktree; recovery reports path, branch, HEAD, or dirty-state mismatches. After the task is `COMPLETED` or `ACCEPTED`, run `cleanup_worktree.py` to record the removal, keep, or rebind decision; delivery fails closed when a worktree-bound task has no recorded cleanup decision. No script merges, pushes, or removes a worktree.
 
-Rollback is explicit and evidence-backed. `plan_rollback.py` only creates a
-dry-run plan from known operation IDs; a failed task alone cannot create one.
-`execute_rollback.py` requires an exact `ROLLBACK` approval, accepts provider
-outcomes rather than executing arbitrary commands, records immutable ledger and
-evidence artifacts, and escalates partial or stale-owner compensation without
-automatic retry.
+## Read-only dashboard
 
-The `distributed_store.py` adapter exposes a backend-neutral remote-state
-contract. Its file-backed store is a deterministic reference backend, not a
-second project runtime. Event appends require both revision and etag, identical
-event IDs are idempotent, conflicting IDs are rejected, and distributed locks
-are bound to owner, run, and fencing token. The HTTP client sends one mutation
-request with an idempotency key and reports transport uncertainty as
-`NETWORK_UNCERTAIN`; it never retries an uncertain side effect automatically.
+Summarize an existing runtime without changing it:
 
-If validation fails, do not hand-edit the target artifact. Return the error to the agent, allow one focused correction, then mark the workflow blocked or escalated.
+```bash
+python scripts/project_dashboard.py --project-root <project>
+```
 
-Runtime identity is carried by task ID, plan revision, batch ID, run ID, attempt
-ID, dispatch ID, lease ID, and artifact hashes. Handoffs, leases, dispatches,
-recovery, and merges reject mismatched identity instead of treating a matching
-task ID as sufficient. Async execution requires a verified external isolation
-proof; merge remains sequential and approval-backed.
+The dashboard reports recorded state only; finalization scripts recheck evidence freshness. Missing artifacts are not success.
 
-Secret-bearing context is scanned by `secret_scanner.py` and `redaction.py`.
-Reject mode returns non-zero and does not persist the payload; redact mode
-replaces sensitive values and records only secret-free evidence. Package
-creation uses `package_skill.py` and the checked-in allowlist. The release
-commands are `python run_tests.py --all` and the ordered preflight described by
-`run_tests.py`.
+## Human progress view
 
-The file-backed distributed adapter is a deterministic reference backend only;
-multi-machine scheduling, remote locks, and remote runtime state are
-NOT_IMPLEMENTED.
+Only the Primary Agent writes checklist state. `render_checklist.py` is the only checklist writer. The Primary Agent refreshes it at stage boundaries; role skills return their normal handoff and do not write `.phongka`:
 
-Read [artifact-contracts.md](references/artifact-contracts.md) and [cli-behavior.md](references/cli-behavior.md).
+```bash
+python scripts/render_checklist.py \
+  --project-root <project> \
+  --task-id <task-id> \
+  --current-stage <stage> \
+  --current-skill <skill>
+```
+
+The command records one small `WORKFLOW_STAGE_UPDATED` event bound to the selected task and renders `.phongka/checklist/task-checklist-<task-id>.md`. Task selection uses an explicit `--task-id`, then the active task, then the latest valid task-bound stage event; it fails closed when no task can be selected. Without the two marker arguments it only reads the last valid event for that task. Reached-stage checkboxes mean reached, not completion; when no valid stage event exists, the view shows `unknown` and leaves every stage unchecked. Existing legacy checklist README files are not deleted.
+
+Scripts do not infer intent, spawn models, merge, deploy, publish, delete, or retry uncertain side effects. Read [artifact contracts](references/artifact-contracts.md) and [CLI behavior](references/cli-behavior.md).

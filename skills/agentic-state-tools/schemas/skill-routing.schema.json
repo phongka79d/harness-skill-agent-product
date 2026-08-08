@@ -1,32 +1,23 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "additionalProperties": false,
   "required": [
-    "routing_id",
-    "intent_classification",
-    "task_type",
-    "current_state",
-    "risk_flags",
-    "applicable_skills",
-    "required_skills",
-    "loaded_skills",
-    "routing_reason",
-    "routing_policy_version"
+    "task_route", "execution_depth", "state_mode", "verification_level",
+    "allows_source_editing", "decision_hash", "approval", "delivery",
+    "runtime_actions", "ordered_skills", "optional_skills"
   ],
   "properties": {
-    "routing_id": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$"},
-    "intent_classification": {"type": "string", "minLength": 1},
-    "task_type": {"type": "string", "minLength": 1},
-    "current_state": {"type": "string", "minLength": 1},
-    "repair": {"type": "boolean"},
-    "project_profile": {"type": "string", "minLength": 1},
-    "requested_role": {"type": "string", "minLength": 1},
-    "risk_flags": {"$ref": "risk-flags.schema.json"},
-    "applicable_skills": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
-    "required_skills": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
-    "loaded_skills": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
-    "routing_reason": {"type": "string", "minLength": 1},
-    "routing_policy_version": {"type": "string", "minLength": 1}
-  }
+    "task_route": {"type": "string", "minLength": 1},
+    "execution_depth": {"type": "string", "enum": ["focused", "standard", "controlled"]},
+    "state_mode": {"type": "string", "enum": ["off", "optional", "required"]},
+    "verification_level": {"type": "string", "enum": ["focused", "standard", "strict"]},
+    "allows_source_editing": {"type": "boolean"},
+    "decision_hash": {"type": "string", "pattern": "[0-9a-f]{64}"},
+    "approval": {"type": "object"},
+    "delivery": {"type": "object"},
+    "runtime_actions": {"type": "object"},
+    "ordered_skills": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "optional_skills": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  },
+  "additionalProperties": false
 }

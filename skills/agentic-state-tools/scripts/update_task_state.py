@@ -1,296 +1,238 @@
-"""Validate and atomically update one executor-owned task-state artifact."""
-
+"""Create or update one task in the minimal single-active-task runtime."""
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
 
-from rebuild_state import rebuild_state_for_root
-from render_checklist import render_checklist
-from review_contract import validate_contract
-from task_state_contract import merge_task_state, validate_execution_identity
-from runtime_utils import (
-    RuntimeLockedError,
-    RuntimeNotInitializedError,
-    STATUS_TO_EVENT_TYPE,
-    TERMINAL_STATUSES,
-    assert_terminal_cleanup_safe,
-    cleanup_task_runtime,
-    inspect_terminal_cleanup,
-    prepare_event_log,
-    read_object,
-    read_payload,
-    runtime_lock,
+HERE = Path(__file__).resolve()
+CONFIG_SCRIPTS = HERE.parents[2] / "agentic-configuration" / "scripts"
+sys.path.insert(0, str(CONFIG_SCRIPTS))
+from schema_validation import validate_file  # noqa: E402
+from render_checklist import render_checklist  # noqa: E402
+from runtime_utils import (  # noqa: E402
+    append_event,
+    ensure_casefold_unique_task_ids,
+    normalize_scope_paths,
+    read_json,
+    require_task_index_consistent,
+    runtime_root,
+    task_state_path,
     utc_now,
-    validate_identifier,
+    validate_task_id,
+    write_json_atomic,
 )
-from validate_transition import is_allowed_transition
-from runtime_transaction import RuntimeTransaction, TransactionError
+
+STATE_SCHEMA = HERE.parents[1] / "schemas" / "state.schema.json"
+TASK_SCHEMA = HERE.parents[1] / "schemas" / "task-state.schema.json"
+CALLER_FIELDS = {
+    "task_id",
+    "status",
+    "summary",
+    "scope",
+    "risk_flags",
+    "approval_reference",
+}
+VALID = {"TODO", "IN_PROGRESS", "BLOCKED", "COMPLETED", "ACCEPTED", "CANCELLED"}
+OPEN = {"TODO", "IN_PROGRESS", "BLOCKED"}
+ALLOWED = {
+    None: {"TODO", "IN_PROGRESS", "BLOCKED"},
+    "TODO": {"TODO", "IN_PROGRESS", "BLOCKED", "CANCELLED"},
+    "IN_PROGRESS": {"IN_PROGRESS", "BLOCKED", "COMPLETED", "CANCELLED"},
+    "BLOCKED": {"BLOCKED", "IN_PROGRESS", "CANCELLED"},
+    "COMPLETED": {"ACCEPTED", "IN_PROGRESS", "BLOCKED"},
+    "ACCEPTED": set(),
+    "CANCELLED": set(),
+}
 
 
-INITIAL_STATUSES = {"PENDING", "READY", "QUEUED", "QUEUED_ASYNC", "QUEUED_SYNC"}
-QUEUE_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/queue.schema.json"
-LEASE_SCHEMA = Path(__file__).resolve().parents[1] / "schemas/lease.schema.json"
-QUEUE_STATE_BY_STATUS = {"QUEUED": "DISPATCHED", "QUEUED_ASYNC": "DISPATCHED", "QUEUED_SYNC": "DISPATCHED"}
-
-
-def synchronize_queue(queue: dict, next_state: dict) -> dict:
-    task_id = next_state["task_id"]
-    revision = next_state["revision"]
-    changed = False
-    for collection_name in ("tasks", "task_states"):
-        collection = queue.get(collection_name)
-        if not isinstance(collection, list):
-            continue
-        for record in collection:
-            if not isinstance(record, dict) or record.get("task_id") != task_id:
-                continue
-            changed = True
-            record["revision"] = revision
-            for field in ("run_id", "attempt_id", "dispatch_id"):
-                if field in next_state:
-                    record[field] = next_state[field]
-            if collection_name == "tasks":
-                next_queue_state = QUEUE_STATE_BY_STATUS.get(next_state["status"])
-                if next_queue_state is None and next_state["status"] in {
-                    "READY", "BLOCKED", "CONFLICTED", "DISPATCHED", "RUNNING",
-                    "WAITING", "COMPLETED", "STALE",
-                }:
-                    next_queue_state = next_state["status"]
-                if next_queue_state is not None:
-                    record["queue_state"] = next_queue_state
-            else:
-                record["status"] = next_state["status"]
-    dispatch_id = next_state.get("dispatch_id")
-    dispatches = queue.get("dispatches")
-    if dispatch_id is not None and isinstance(dispatches, list):
-        for record in dispatches:
-            if isinstance(record, dict) and record.get("task_id") == task_id and record.get("dispatch_id") == dispatch_id:
-                changed = True
-                record["task_revision"] = revision
-                for field in ("run_id", "attempt_id", "dispatch_id"):
-                    if field in next_state:
-                        record[field] = next_state[field]
-                break
-    if changed:
-        queue["revision"] = int(queue.get("revision", 0)) + 1
-    return queue
-
-
-class CleanupRecoveryError(RuntimeError):
-    """A terminal cleanup event could not be durably published."""
-
-    def __init__(self, evidence: dict) -> None:
-        self.evidence = evidence
-        super().__init__(evidence.get("error", "terminal cleanup recovery is pending"))
-
-
-def append_cleanup_events(root, project_root: str | Path, task_id: str, cleanup: dict) -> None:
-    events = [
-        {
-            "type": "LEASE_RELEASED",
-            "actor": "agentic-state-tools",
-            "task_id": task_id,
-            "run_id": lease.get("run_id"),
-            "data": {"reason": "terminal_task"},
-        }
-        for lease in cleanup["leases"]
-    ]
-    events.extend(
-        {
-            "type": "LOCK_RELEASED",
-            "actor": "agentic-state-tools",
-            "task_id": task_id,
-            "run_id": lock.get("run_id"),
-            "data": {
-                "lock_id": lock.get("lock_id"),
-                "kind": lock.get("kind"),
-                "key": lock.get("key"),
-                "reason": "terminal_task",
-            },
-        }
-        for lock in cleanup["locks"]
+def _open_task_ids(tasks: dict) -> list[str]:
+    return sorted(
+        task_id
+        for task_id, summary in tasks.items()
+        if isinstance(summary, dict) and summary.get("status") in OPEN
     )
-    if not events:
-        return
 
-    event_relative = "runtime/events.jsonl"
-    idempotency_digest = hashlib.sha256(
-        json.dumps(
-            {"task_id": task_id, "events": events},
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-    idempotency_key = f"terminal-cleanup:{task_id}:{idempotency_digest}"
-    transaction = None
-    try:
-        prior_events = []
-        event_revision = 0
-        event_content = ""
-        for event in events:
-            event_relative, event_revision, event_content, validated_event = prepare_event_log(
-                root,
-                event,
-                prior_events=prior_events,
-            )
-            prior_events.append(validated_event)
-        transaction = RuntimeTransaction(
-            project_root,
-            operation_type="TERMINAL_CLEANUP",
-            idempotency_key=idempotency_key,
-            expected_revisions={event_relative: event_revision},
-        )
-        transaction.prepare([event_relative])
-        transaction.stage_text(event_relative, event_content)
-        transaction.commit()
-    except Exception as exc:
-        evidence = {
-            "schema_version": 1,
-            "classification": "RECOVERY_PENDING",
-            "operation_type": "TERMINAL_CLEANUP",
-            "operation_id": transaction.operation_id if transaction is not None else None,
-            "idempotency_key": idempotency_key,
-            "target_paths": [event_relative],
-            "expected_revisions": ({event_relative: event_revision} if "event_revision" in locals() else {}),
-            "task_id": task_id,
-            "error_type": type(exc).__name__,
-            "error": str(exc),
-        }
-        if transaction is not None:
-            evidence["manifest_path"] = str(transaction.manifest_path)
-        raise CleanupRecoveryError(evidence) from exc
+
+def _clean_strings(value: object, field: str, *, allow_empty: bool = False) -> list[str]:
+    if not isinstance(value, list) or (not value and not allow_empty) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
+        qualifier = "possibly empty " if allow_empty else "non-empty "
+        raise ValueError(f"{field} must be a {qualifier}array of non-empty strings")
+    cleaned = [item.strip() for item in value]
+    if len(cleaned) != len(set(cleaned)):
+        raise ValueError(f"{field} values must be unique")
+    return cleaned
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", required=True)
     parser.add_argument("--input", required=True)
-    parser.add_argument("--actor", default="executor")
     args = parser.parse_args()
     try:
-        payload = read_payload(args.input)
-        if not isinstance(payload, dict) or not isinstance(payload.get("task_id"), str) or not payload["task_id"]:
-            raise ValueError("task-state requires a non-empty string task_id")
-        payload = dict(payload)
-        task_id = payload["task_id"]
-        validate_identifier(task_id, "task_id")
-        requested_status = str(payload.get("status", "")).upper()
-        if not requested_status:
-            raise ValueError("task-state requires status")
-        if requested_status not in STATUS_TO_EVENT_TYPE:
-            raise ValueError(f"unsupported task status: {requested_status}")
-        if requested_status == "ACCEPTED":
-            raise ValueError("only create_review.py may mark a task ACCEPTED")
-        if "review_status" in payload:
-            raise ValueError("review_status is derived from review.json and cannot be submitted by an executor")
+        payload = read_json(args.input)
+        unknown = sorted(set(payload) - CALLER_FIELDS)
+        if unknown:
+            raise ValueError("unsupported or derived task fields: " + ", ".join(unknown))
+        task_id = validate_task_id(payload.get("task_id"))
+        status = str(payload.get("status", "")).upper()
+        summary = str(payload.get("summary", "")).strip()
+        scope = normalize_scope_paths(args.project_root, payload.get("scope"))
+        risk_flags = _clean_strings(payload.get("risk_flags", []), "risk_flags", allow_empty=True)
+        supplied_approval = payload.get("approval_reference")
+        if supplied_approval is not None:
+            supplied_approval = str(supplied_approval).strip() or None
+        if status not in VALID or not summary:
+            raise ValueError("valid status and non-empty summary are required")
 
-        with runtime_lock(args.project_root) as root:
-            target = root / "work" / task_id / "task-state.json"
-            current = read_object(target) if target.exists() else None
-            current_revision = int(current.get("revision", 0)) if current else 0
-            expected = int(payload.pop("expected_revision", current_revision))
-            if expected != current_revision:
-                raise ValueError(f"stale revision: expected {expected}, current {current_revision}")
-            if current:
-                current_status = str(current.get("status", "")).upper()
-                if not is_allowed_transition(current_status, requested_status, actor="executor"):
-                    raise ValueError(f"invalid executor transition: {current_status} -> {requested_status}")
-            elif requested_status not in INITIAL_STATUSES:
-                raise ValueError(f"initial task status must be one of {sorted(INITIAL_STATUSES)}")
-
-            if requested_status in TERMINAL_STATUSES:
-                assert_terminal_cleanup_safe(root, task_id)
-
-            submitted_contract = payload.get("review_contract")
-            if current is None and submitted_contract is not None:
-                validate_contract(submitted_contract, review_type="task")
-
-            next_state = merge_task_state(current, payload)
-            next_state["status"] = requested_status
-            if requested_status in TERMINAL_STATUSES:
-                next_state["next_action"] = "none"
-            next_state["previous_revision"] = current_revision if current else None
-            next_state["revision"] = current_revision + 1
-            next_state["updated_at"] = utc_now()
-            lease_path = root / "work" / task_id / "lease.json"
-            queue_path = root / "runtime" / "queue.json"
-            lease = read_object(lease_path) if lease_path.is_file() else None
-            queue = read_object(queue_path) if queue_path.is_file() else None
-            queue_revision = int(queue.get("revision", 0)) if queue is not None else 0
-            validate_execution_identity(next_state, lease, queue)
-            if lease is not None:
-                lease["task_revision"] = next_state["revision"]
-                validate_execution_identity(next_state, lease, queue)
-            if queue is not None:
-                queue = synchronize_queue(queue, next_state)
-                validate_execution_identity(next_state, lease, queue)
-            transaction_targets = [f"work/{task_id}/task-state.json"]
-            transaction_revisions = {f"work/{task_id}/task-state.json": current_revision}
-            if lease is not None:
-                transaction_targets.append(f"work/{task_id}/lease.json")
-                transaction_revisions[f"work/{task_id}/lease.json"] = 0
-            if queue is not None:
-                transaction_targets.append("runtime/queue.json")
-                transaction_revisions["runtime/queue.json"] = queue_revision
-            event_relative, event_revision, event_content, _ = prepare_event_log(
-                root,
-                {
-                    "type": STATUS_TO_EVENT_TYPE[requested_status],
-                    "actor": args.actor,
-                    "task_id": task_id,
-                    "data": {"task_revision": next_state["revision"]},
-                },
+        root = runtime_root(args.project_root)
+        state = read_json(root / "state.json")
+        validate_file(state, STATE_SCHEMA, "state")
+        require_task_index_consistent(root, state)
+        existing_collision = next(
+            (
+                existing_id
+                for existing_id in state.get("tasks", {})
+                if existing_id != task_id and existing_id.casefold() == task_id.casefold()
+            ),
+            None,
+        )
+        if existing_collision is not None:
+            raise ValueError(
+                f"task_id collides case-insensitively with existing task: {existing_collision}"
             )
-            transaction_targets.append(event_relative)
-            transaction_revisions[event_relative] = event_revision
-            transaction = RuntimeTransaction(
-                args.project_root,
-                operation_type="TASK_STATE",
-                idempotency_key=f"task-state:{task_id}:{next_state['revision']}",
-                expected_revisions=transaction_revisions,
+        task_path = task_state_path(root, task_id)
+        previous = read_json(task_path) if task_path.exists() else None
+        if previous:
+            validate_file(previous, TASK_SCHEMA, f"task {task_id}")
+            if previous["task_id"] != task_id:
+                raise ValueError(
+                    f"task file ID mismatch: requested {task_id}, found {previous['task_id']}"
+                )
+        current_status = previous.get("status") if previous else None
+        if status not in ALLOWED.get(current_status, set()):
+            raise ValueError(f"transition is not allowed: {current_status or 'NEW'} -> {status}")
+
+        work_changed = previous is None or any(
+            (
+                summary != previous["summary"],
+                scope != previous["scope"],
+                risk_flags != previous["risk_flags"],
             )
-            transaction.prepare(transaction_targets)
-            transaction.stage_json(
-                f"work/{task_id}/task-state.json",
-                next_state,
-                Path(__file__).resolve().parents[1] / "schemas/task-state.schema.json",
+        )
+        if previous and status == current_status and not work_changed:
+            raise ValueError(f"task is already {status} with unchanged work metadata")
+        if previous and status == current_status and status not in OPEN:
+            raise ValueError("terminal task metadata cannot be changed")
+
+        if status in OPEN or work_changed or previous is None:
+            expected_risks = sorted(state["request_contract"]["risk_flags"])
+            if sorted(risk_flags) != expected_risks:
+                raise ValueError(
+                    "task risk_flags differ from the workflow decision; resolve a new decision"
+                )
+
+        if previous:
+            same_decision = previous["workflow_decision_hash"] == state["workflow_decision_hash"]
+            if (status in OPEN or work_changed) and not same_decision:
+                raise ValueError(
+                    "task is bound to another workflow decision and cannot be reopened or changed"
+                )
+
+        other_open = [item for item in _open_task_ids(state.get("tasks", {})) if item != task_id]
+        if status in OPEN and other_open:
+            raise ValueError(
+                "single-active-task runtime already has an open task: " + ", ".join(other_open)
             )
-            if lease is not None:
-                transaction.stage_json(f"work/{task_id}/lease.json", lease, LEASE_SCHEMA)
-            if queue is not None:
-                transaction.stage_json("runtime/queue.json", queue, QUEUE_SCHEMA)
-            transaction.stage_text(event_relative, event_content)
-            target = root / "work" / task_id / "task-state.json"
-            transaction.commit()
-            try:
-                cleanup = cleanup_task_runtime(root, task_id) if requested_status in TERMINAL_STATUSES else {"leases": [], "locks": []}
-                if requested_status in TERMINAL_STATUSES:
-                    post_cleanup = inspect_terminal_cleanup(root, task_id)
-                    if not post_cleanup["valid"]:
-                        raise ValueError("terminal cleanup could not be verified: " + "; ".join(post_cleanup["reasons"]))
-                post_lease = read_object(lease_path) if lease_path.is_file() else None
-                post_queue = read_object(queue_path) if queue_path.is_file() else None
-                validate_execution_identity(next_state, post_lease, post_queue)
-                append_cleanup_events(root, args.project_root, task_id, cleanup)
-                rebuild_state_for_root(root)
-                render_checklist(args.project_root, acquire_lock=False)
-            except Exception:
-                raise
-    except RuntimeNotInitializedError as exc:
-        print(f"TASK_STATE_BLOCKED: {exc}", file=sys.stderr)
-        return 2
-    except CleanupRecoveryError as exc:
-        print(json.dumps(exc.evidence, ensure_ascii=False, sort_keys=True), file=sys.stderr)
+
+        approval_reference = (
+            supplied_approval
+            if supplied_approval is not None
+            else (previous.get("approval_reference") if previous else None)
+        )
+        if status == "IN_PROGRESS" and state["approval"]["required"] and not approval_reference:
+            raise ValueError(
+                "approval_reference is required before an approval-gated task becomes IN_PROGRESS"
+            )
+
+        if previous:
+            binding = {
+                "workflow_decision_hash": previous["workflow_decision_hash"],
+                "profile_id": previous["profile_id"],
+                "profile_hash": previous["profile_hash"],
+                "task_route": previous["task_route"],
+                "execution_depth": previous["execution_depth"],
+            }
+            status_revision = int(previous["status_revision"]) + 1
+            work_revision = int(previous["work_revision"]) + (1 if work_changed else 0)
+        else:
+            binding = {
+                "workflow_decision_hash": state["workflow_decision_hash"],
+                "profile_id": state["profile_id"],
+                "profile_hash": state["profile_hash"],
+                "task_route": state["task_route"],
+                "execution_depth": state["execution_depth"],
+            }
+            status_revision = 1
+            work_revision = 1
+
+        task = {
+            "schema_version": 3,
+            "task_id": task_id,
+            "status_revision": status_revision,
+            "work_revision": work_revision,
+            **binding,
+            "approval_reference": approval_reference,
+            "status": status,
+            "summary": summary,
+            "scope": scope,
+            "risk_flags": risk_flags,
+            "updated_at": utc_now(),
+        }
+        if previous and previous.get("worktree_identity") is not None:
+            task["worktree_identity"] = previous["worktree_identity"]
+        validate_file(task, TASK_SCHEMA, f"task {task_id}")
+        write_json_atomic(task_path, task)
+
+        state["revision"] = int(state["revision"]) + 1
+        state.setdefault("tasks", {})[task_id] = {
+            "status": status,
+            "status_revision": task["status_revision"],
+            "work_revision": task["work_revision"],
+            "summary": summary,
+        }
+        open_ids = _open_task_ids(state["tasks"])
+        if len(open_ids) > 1:
+            raise ValueError("state contains more than one open task")
+        state["active_task_id"] = open_ids[0] if open_ids else None
+        state["status"] = "ACTIVE" if open_ids else "IDLE"
+        state["updated_at"] = utc_now()
+        validate_file(state, STATE_SCHEMA, "state")
+        ensure_casefold_unique_task_ids(list(state["tasks"]), "state task IDs")
+        require_task_index_consistent(root, state)
+        write_json_atomic(root / "state.json", state)
+        append_event(
+            args.project_root,
+            "TASK_UPDATED",
+            {
+                "task_id": task_id,
+                "status": status,
+                "status_revision": task["status_revision"],
+                "work_revision": task["work_revision"],
+                "workflow_decision_hash": task["workflow_decision_hash"],
+            },
+        )
+        try:
+            render_checklist(args.project_root, task_id=task_id)
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            print(f"CHECKLIST_WARNING: {exc}", file=sys.stderr)
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        print(f"TASK_REJECTED: {exc}", file=sys.stderr)
         return 1
-    except (RuntimeLockedError, TransactionError, OSError, ValueError, TypeError) as exc:
-        print(f"TASK_STATE_REJECTED: {exc}", file=sys.stderr)
-        return 1
-    print(f"TASK_STATE_WRITTEN: {target}")
+    print(json.dumps(task, ensure_ascii=False, indent=2))
     return 0
 
 

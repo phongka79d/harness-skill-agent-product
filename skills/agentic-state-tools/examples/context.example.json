@@ -1,0 +1,21 @@
+{
+  "schema_version": 3,
+  "task_id": "TASK-1",
+  "summary": "Update one bounded behavior",
+  "files": [
+    "src/module.py"
+  ],
+  "file_count": 1,
+  "byte_count": 128,
+  "context_budget": {
+    "max_files": 8,
+    "max_bytes": 262144,
+    "allow_unbounded_scan": false
+  },
+  "constraints": [
+    "Do not change public interfaces"
+  ],
+  "notes": [
+    "Use existing repository patterns"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "profile_id": "production",
+  "version": "3.4.1",
+  "project_profile": {
+    "type": "production",
+    "delivery_mode": "controlled",
+    "deployment": "production",
+    "data_sensitivity": "medium",
+    "user_exposure": "external"
+  },
+  "quality_level": "strict",
+  "workflow_policy": {
+    "minimum_depth": "controlled",
+    "focused_max_files": 0,
+    "focused_max_concerns": 0,
+    "persist_state": true,
+    "independent_review": "required",
+    "batch_review": true,
+    "verification_level": "strict"
+  }
+}

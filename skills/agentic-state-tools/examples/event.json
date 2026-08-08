@@ -1,8 +1,0 @@
-{
-  "event_id": "EVT-000001",
-  "timestamp": "2026-08-02T10:00:00Z",
-  "type": "TASK_STARTED",
-  "actor": "primary-agent",
-  "task_id": "SP-01-B01-T01",
-  "run_id": "RUN-001"
-}

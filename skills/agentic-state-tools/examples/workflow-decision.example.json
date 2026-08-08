@@ -1,0 +1,164 @@
+{
+  "schema_version": 8,
+  "config_hash": "4abf04afcad0b98d1be78420ac90132e3a660ee200761b90b89fdc7c8203ff7f",
+  "profile_id": "personal",
+  "profile_hash": "5738bb0dba05f957a31b5245af7ce8bd7a016270141fbabdc4a5b67be6b03f47",
+  "project_profile": {
+    "type": "personal",
+    "delivery_mode": "adaptive",
+    "deployment": "local_only",
+    "data_sensitivity": "none",
+    "user_exposure": "single_user"
+  },
+  "quality_level": "focused",
+  "verification_level": "focused",
+  "task_route": "debug",
+  "execution_depth": "focused",
+  "allows_source_editing": true,
+  "state_mode": "off",
+  "request_contract": {
+    "execution_preference": "focused",
+    "estimated_files": 2,
+    "concerns": 1,
+    "risk_flags": [],
+    "user_requested_review": false,
+    "delivery_action": "none"
+  },
+  "approval": {
+    "required": false,
+    "kind": "automatic",
+    "keys": [
+      "normal_change"
+    ],
+    "reasons": [
+      "normal bounded work follows the configured approval policy"
+    ]
+  },
+  "delivery": {
+    "action": "none",
+    "outcome": "NO_ACTION",
+    "cleanup": "NOT_APPLICABLE",
+    "approval_key": "normal_change",
+    "approval_required": false
+  },
+  "evidence_requirements": {
+    "verification": true,
+    "review": false,
+    "batch_review": false
+  },
+  "runtime_actions": {
+    "before": [],
+    "after": []
+  },
+  "subagent_plan": {
+    "primary_count": 1,
+    "max_active": 1,
+    "max_total": 2,
+    "max_parallel_writers": 1,
+    "max_repair_rounds": 1,
+    "fresh_context_per_dispatch": true,
+    "synthesized_fallback": true,
+    "eligible_roles": [
+      "debug",
+      "implement",
+      "verify"
+    ],
+    "parallel_safe_roles": [
+      "debug"
+    ]
+  },
+  "context_budget": {
+    "max_files": 8,
+    "max_bytes": 262144,
+    "allow_unbounded_scan": false
+  },
+  "execution_contract": {
+    "dispatch": {
+      "max_active": 1,
+      "max_total": 2,
+      "max_parallel_writers": 1,
+      "fresh_context_per_dispatch": true,
+      "synthesized_fallback": true
+    },
+    "repair": {
+      "max_repair_rounds": 1,
+      "re_review_required": false
+    },
+    "receipt": {
+      "required_fields": [
+        "workflow_decision_hash",
+        "task_id",
+        "stage",
+        "role",
+        "status",
+        "attempt",
+        "max_attempts",
+        "repair_rounds",
+        "max_repair_rounds",
+        "outcome",
+        "evidence"
+      ],
+      "fallback_values": [
+        "NONE",
+        "SYNTHESIZED FALLBACK",
+        "BLOCKED"
+      ]
+    }
+  },
+  "worktree": {
+    "enabled": false,
+    "required": false,
+    "mode": "disabled",
+    "path_template": ".phongka/worktrees/{task_id}",
+    "branch_template": "phongka/task/{task_id}",
+    "prepare_approval_required": false,
+    "delivery_approval_required": false,
+    "cleanup_approval_required": false
+  },
+  "required_skills": [
+    "agentic-engineering-core",
+    "agentic-systematic-debugging",
+    "agentic-implementer",
+    "agentic-verification-before-completion"
+  ],
+  "optional_skills": [],
+  "stages": [
+    {
+      "id": "route",
+      "owner": "primary",
+      "output": "task route, execution depth, scope, acceptance, and approval contract"
+    },
+    {
+      "id": "debug",
+      "owner": "agentic-systematic-debugging",
+      "output": "root-cause hypothesis and reproducible evidence"
+    },
+    {
+      "id": "implement",
+      "owner": "agentic-implementer",
+      "output": "smallest complete in-scope change"
+    },
+    {
+      "id": "verify",
+      "owner": "agentic-verification-before-completion",
+      "output": "fresh evidence for the requested outcome"
+    },
+    {
+      "id": "report",
+      "owner": "primary",
+      "output": "outcome, evidence, risks, and next action"
+    }
+  ],
+  "limits": {
+    "max_repair_cycles": 1,
+    "max_context_files": 8,
+    "max_context_bytes": 262144,
+    "focused_file_limit": 5,
+    "focused_concern_limit": 1
+  },
+  "reasons": [
+    "task route debug: Investigate an unknown or uncertain root cause, then repair it.",
+    "execution preference focused respected route/profile minimum"
+  ],
+  "decision_hash": "a84dfa2f565e4ce95356db2a61cb860425cd263b2f930d67f354bdbd14b75ecd"
+}

@@ -1,0 +1,21 @@
+{
+  "profile_id": "personal",
+  "version": "3.4.1",
+  "project_profile": {
+    "type": "personal",
+    "delivery_mode": "adaptive",
+    "deployment": "local_only",
+    "data_sensitivity": "none",
+    "user_exposure": "single_user"
+  },
+  "quality_level": "focused",
+  "workflow_policy": {
+    "minimum_depth": "focused",
+    "focused_max_files": 5,
+    "focused_max_concerns": 1,
+    "persist_state": false,
+    "independent_review": "optional",
+    "batch_review": false,
+    "verification_level": "focused"
+  }
+}

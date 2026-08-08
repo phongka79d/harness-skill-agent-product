@@ -1,4 +1,5 @@
 interface:
   display_name: "Agentic Implementer"
-  short_description: "Scoped implementation with validation"
-  default_prompt: "Use $agentic-implementer to implement one approved task within its write scope."
+  short_description: "Fast scoped implementation"
+  default_prompt: "Dispatch $agentic-implementer only from $agentic-engineering-core with the shared envelope and a bounded task contract."
+  # Dispatch with the role prompt and fresh isolated context.

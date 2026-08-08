@@ -1,0 +1,279 @@
+[
+  {
+    "name": "focused known fix",
+    "request": {
+      "profile": "personal",
+      "task_route": "quick_fix",
+      "estimated_files": 1,
+      "concerns": 1
+    },
+    "expect": {
+      "task_route": "quick_fix",
+      "execution_depth": "focused",
+      "max_active": 1,
+      "max_total": 2
+    }
+  },
+  {
+    "name": "focused debug",
+    "request": {
+      "profile": "personal",
+      "task_route": "debug",
+      "estimated_files": 2,
+      "concerns": 1
+    },
+    "expect": {
+      "task_route": "debug",
+      "execution_depth": "focused",
+      "eligible_contains": [
+        "debug",
+        "implement",
+        "verify"
+      ]
+    }
+  },
+  {
+    "name": "focused project skill authoring uses runtime",
+    "request": {
+      "profile": "personal",
+      "task_route": "skill_authoring",
+      "estimated_files": 5,
+      "concerns": 1
+    },
+    "expect": {
+      "task_route": "skill_authoring",
+      "execution_depth": "focused",
+      "state_mode": "required",
+      "required_contains": [
+        "agentic-state-tools"
+      ],
+      "stage_order": [
+        "state_init",
+        "skill_authoring",
+        "verify",
+        "state_finalize"
+      ],
+      "runtime_actions": {
+        "before": [
+          "init_runtime",
+          "open_task"
+        ],
+        "after": [
+          "record_verification_evidence",
+          "mark_task_completed",
+          "verify_completion_claim",
+          "validate_state"
+        ]
+      }
+    }
+  },
+  {
+    "name": "standard cross module feature",
+    "request": {
+      "profile": "personal",
+      "task_route": "feature",
+      "estimated_files": 7,
+      "concerns": 2,
+      "risk_flags": [
+        "cross_module",
+        "multiple_concerns"
+      ]
+    },
+    "expect": {
+      "execution_depth": "standard",
+      "max_active": 2,
+      "max_total": 4
+    }
+  },
+  {
+    "name": "controlled security change",
+    "request": {
+      "profile": "personal",
+      "task_route": "feature",
+      "estimated_files": 3,
+      "concerns": 1,
+      "risk_flags": [
+        "security_sensitive"
+      ]
+    },
+    "expect": {
+      "execution_depth": "controlled",
+      "approval_required": true,
+      "max_active": 3,
+      "max_total": 6,
+      "required_contains": [
+        "agentic-independent-reviewer"
+      ]
+    }
+  },
+  {
+    "name": "research remains read only",
+    "request": {
+      "profile": "personal",
+      "task_route": "research",
+      "estimated_files": 20,
+      "concerns": 2
+    },
+    "expect": {
+      "allows_source_editing": false
+    }
+  },
+  {
+    "name": "delivery needs state",
+    "request": {
+      "profile": "personal",
+      "task_route": "delivery",
+      "delivery_action": "create_review_request",
+      "estimated_files": 0,
+      "concerns": 1
+    },
+    "expect": {
+      "state_mode": "required",
+      "required_contains": [
+        "agentic-delivery-finalizer"
+      ],
+      "forbidden_stages": [
+        "state_finalize"
+      ],
+      "stage_order": [
+        "state_init",
+        "review",
+        "verify",
+        "delivery"
+      ]
+    }
+  },
+  {
+    "name": "controlled gates are review then verify",
+    "request": {
+      "profile": "personal",
+      "task_route": "feature",
+      "execution_preference": "controlled",
+      "estimated_files": 2,
+      "concerns": 1
+    },
+    "expect": {
+      "stage_order": [
+        "implement",
+        "review",
+        "verify"
+      ],
+      "forbidden_stages": [
+        "context"
+      ]
+    }
+  },
+  {
+    "name": "requested review precedes verification",
+    "request": {
+      "profile": "personal",
+      "task_route": "feature",
+      "execution_preference": "standard",
+      "estimated_files": 2,
+      "concerns": 1,
+      "user_requested_review": true
+    },
+    "expect": {
+      "stage_order": [
+        "implement",
+        "review",
+        "verify"
+      ]
+    }
+  },
+  {
+    "name": "controlled delivery gate order",
+    "request": {
+      "profile": "personal",
+      "task_route": "delivery",
+      "execution_preference": "controlled",
+      "delivery_action": "create_review_request",
+      "estimated_files": 0,
+      "concerns": 2
+    },
+    "expect": {
+      "stage_order": [
+        "review",
+        "batch_review",
+        "verify",
+        "delivery"
+      ]
+    }
+  },
+  {
+    "name": "recovery is not parallel safe",
+    "request": {
+      "profile": "personal",
+      "task_route": "recovery",
+      "estimated_files": 0,
+      "concerns": 1
+    },
+    "expect": {
+      "parallel_safe_excludes": [
+        "recovery"
+      ],
+      "forbidden_stages": [
+        "state_init",
+        "state_finalize"
+      ]
+    }
+  },
+  {
+    "name": "implementation writer is sequential by default",
+    "request": {
+      "profile": "personal",
+      "task_route": "quick_fix",
+      "estimated_files": 1,
+      "concerns": 1
+    },
+    "expect": {
+      "parallel_safe_excludes": [
+        "implement"
+      ]
+    }
+  },
+  {
+    "name": "controlled multi concern feature adds integration review",
+    "request": {
+      "profile": "personal",
+      "task_route": "feature",
+      "execution_preference": "controlled",
+      "estimated_files": 4,
+      "concerns": 2
+    },
+    "expect": {
+      "stage_order": [
+        "implement",
+        "review",
+        "batch_review",
+        "verify"
+      ],
+      "required_contains": [
+        "agentic-independent-reviewer"
+      ]
+    }
+  },
+  {
+    "name": "source delivery finalizes state before delivery",
+    "request": {
+      "profile": "personal",
+      "task_route": "feature",
+      "execution_preference": "controlled",
+      "estimated_files": 2,
+      "concerns": 2,
+      "delivery_action": "keep_local"
+    },
+    "expect": {
+      "stage_order": [
+        "review",
+        "batch_review",
+        "verify",
+        "state_finalize",
+        "delivery"
+      ],
+      "parallel_safe_excludes": [
+        "implement"
+      ]
+    }
+  }
+]

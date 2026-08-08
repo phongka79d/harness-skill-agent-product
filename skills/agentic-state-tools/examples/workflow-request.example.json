@@ -1,0 +1,10 @@
+{
+  "profile": "personal",
+  "task_route": "debug",
+  "execution_preference": "auto",
+  "estimated_files": 2,
+  "concerns": 1,
+  "risk_flags": [],
+  "user_requested_review": false,
+  "delivery_action": "none"
+}

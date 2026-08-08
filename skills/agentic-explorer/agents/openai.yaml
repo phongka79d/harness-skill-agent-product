@@ -1,4 +1,5 @@
 interface:
   display_name: "Agentic Explorer"
-  short_description: "Read-only repository exploration"
-  default_prompt: "Use $agentic-explorer to inspect and trace a repository without modifying files."
+  short_description: "Focused read-only repository exploration"
+  default_prompt: "Dispatch $agentic-explorer only from $agentic-engineering-core with the shared envelope and a bounded task contract."
+  # Dispatch with the role prompt and fresh isolated context.

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "profile",
+    "task_route",
+    "execution_preference",
+    "estimated_files",
+    "concerns",
+    "risk_flags",
+    "user_requested_review",
+    "delivery_action"
+  ],
+  "properties": {
+    "profile": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "[A-Za-z0-9_-]+"
+    },
+    "task_route": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "[a-z0-9_]+"
+    },
+    "execution_preference": {
+      "type": "string",
+      "enum": ["auto", "focused", "standard", "controlled"]
+    },
+    "estimated_files": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "concerns": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "risk_flags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "[A-Za-z0-9_-]+"
+      }
+    },
+    "user_requested_review": {
+      "type": "boolean"
+    },
+    "delivery_action": {
+      "type": "string",
+      "enum": [
+        "none",
+        "keep_local",
+        "merge_local",
+        "push_branch",
+        "create_review_request",
+        "production_action",
+        "destructive_cleanup"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

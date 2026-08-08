@@ -1,235 +1,94 @@
-"""Validate and write a generated executor handoff artifact."""
-
+"""Write a validated handoff.json artifact with an execution receipt."""
 from __future__ import annotations
-
 import argparse
-import hashlib
 import json
-import re
 import sys
 from pathlib import Path
+from typing import Any
 
-from append_event import append_event
-from capture_workspace import capture_workspace
-from render_checklist import render_checklist
-from runtime_utils import RuntimeLockedError, RuntimeNotInitializedError, next_revision, parse_timestamp, read_object, read_payload, runtime_lock, utc_now, validate_identifier
-from validate_payload import normalize_artifact_version, preserve_projection_links, validate
-from verification_contract import is_strict_profile
-from write_artifact import write_validated
+HERE = Path(__file__).resolve()
+CONFIG_SCRIPTS = HERE.parents[2] / "agentic-configuration" / "scripts"
+sys.path.insert(0, str(CONFIG_SCRIPTS))
+from load_config import load_config  # noqa: E402
+from schema_validation import validate_file  # noqa: E402
 
+from artifact_writer import (  # noqa: E402
+    ensure_task_binding,
+    load_and_validate,
+    persist_artifact,
+)
+from runtime_utils import read_json, sha256_json  # noqa: E402
 
-HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-ROOT = Path(__file__).resolve().parents[1]
-DEBUG_INVESTIGATION_SCHEMA = ROOT / "schemas/debug-investigation.schema.json"
-
-
-def _normalize_verification_status(payload: dict[str, object]) -> None:
-    """Classify old handoffs without allowing them to masquerade as verified."""
-
-    evidence = payload.get("evidence")
-    if not isinstance(evidence, dict):
-        return
-    status = payload.get("verification_status")
-    if status is not None and status not in {"VERIFIED", "LEGACY_UNVERIFIED", "REJECTED"}:
-        raise ValueError("handoff.verification_status is invalid")
-    evidence_ids = payload.get("verification_evidence_ids")
-    if evidence_ids is None:
-        evidence_ids = evidence.get("verification_evidence_ids") or evidence.get("evidence_ids")
-    claim_id = payload.get("completion_claim_id") or evidence.get("completion_claim_id")
-    structured = isinstance(evidence_ids, list) and bool(evidence_ids) or isinstance(claim_id, str) and bool(claim_id.strip())
-    profile_id = payload.get("profile_id") or evidence.get("profile_id")
-    if payload.get("status") != "COMPLETE":
-        if status is None:
-            payload["verification_status"] = "LEGACY_UNVERIFIED"
-        return
-    if status == "VERIFIED" and not structured:
-        raise ValueError("verified handoff requires completion claim or verification evidence IDs")
-    if status is None:
-        payload["verification_status"] = "LEGACY_UNVERIFIED"
-        status = "LEGACY_UNVERIFIED"
-    if is_strict_profile(profile_id) and status != "VERIFIED":
-        raise ValueError("strict production/high-risk handoff requires current verification evidence")
+DECISION_SCHEMA = HERE.parents[1] / "schemas" / "workflow-decision.schema.json"
 
 
-def _workspace_evidence_hash(root: Path) -> str:
-    snapshot = capture_workspace(root.parent)
-    canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def validate_hash_map(value: object, field: str) -> None:
-    if not isinstance(value, dict):
-        raise ValueError(f"handoff.{field} must be an object")
-    for key, digest in value.items():
-        if not isinstance(key, str) or not key.strip() or not isinstance(digest, str) or not HASH_PATTERN.fullmatch(digest):
-            raise ValueError(f"handoff.{field} must map non-empty names to SHA-256 hashes")
-
-
-def _bound_investigation_id(root: Path, task_id: str, task_state: dict[str, object]) -> str | None:
-    """Find the repair binding from task state or its persisted dispatch."""
-
-    state_id = task_state.get("investigation_id")
-    if state_id is not None and (not isinstance(state_id, str) or not state_id.strip()):
-        raise ValueError("task-state investigation_id must be a non-empty string")
-    candidates: set[str] = {state_id} if isinstance(state_id, str) else set()
-    queue_path = root / "runtime" / "queue.json"
-    if queue_path.is_file():
-        queue = read_object(queue_path)
-        dispatch_id = task_state.get("dispatch_id")
-        for record in queue.get("dispatches", []):
-            if not isinstance(record, dict) or record.get("task_id") != task_id:
-                continue
-            if dispatch_id is not None and record.get("dispatch_id") != dispatch_id:
-                continue
-            value = record.get("investigation_id")
-            if value is not None:
-                if not isinstance(value, str) or not value.strip():
-                    raise ValueError("dispatch investigation_id must be a non-empty string")
-                candidates.add(value)
-    if len(candidates) > 1:
-        raise ValueError("task and dispatch investigation bindings do not match")
-    return next(iter(candidates), None)
-
-
-def _require_complete_repair_evidence(
-    root: Path,
-    task_id: str,
-    task_state: dict[str, object],
-    payload: dict[str, object],
-    investigation_id: str,
+def _validate_receipt(
+    project_root: str,
+    payload: dict[str, Any],
+    decision_path: str | None,
+    config_path: str | None,
 ) -> None:
-    supplied_id = payload.get("investigation_id")
-    if supplied_id != investigation_id:
-        raise ValueError("complete repair handoff requires the matching investigation_id")
-    path = root / "work" / task_id / "debug-investigation.json"
-    if not path.is_file():
-        raise ValueError("complete repair handoff requires a canonical debug investigation artifact")
-    investigation = read_object(path)
-    errors = validate(investigation, read_object(DEBUG_INVESTIGATION_SCHEMA), base_path=DEBUG_INVESTIGATION_SCHEMA.resolve().parent)
-    if errors:
-        raise ValueError("repair investigation schema validation failed: " + "; ".join(errors))
-    if investigation.get("investigation_id") != investigation_id:
-        raise ValueError("handoff investigation_id does not match canonical artifact")
-    expected_identity = {
-        "task_id": task_id,
-        "run_id": payload.get("run_id"),
-        "attempt_id": payload.get("attempt_id"),
-        "task_revision": payload.get("task_revision"),
-    }
-    for field, expected in expected_identity.items():
-        if investigation.get(field) != expected:
-            raise ValueError(f"repair investigation {field} does not match handoff")
-    for field in ("run_id", "attempt_id"):
-        if task_state.get(field) is not None and task_state.get(field) != payload.get(field):
-            raise ValueError(f"handoff.{field} does not match the current task state")
-    if investigation.get("status") not in {"ROOT_CAUSE_CONFIRMED", "COMPLETED"}:
-        raise ValueError("complete repair handoff requires a confirmed root cause")
-    root_cause = investigation.get("root_cause")
-    if not isinstance(root_cause, str) or not root_cause.strip():
-        raise ValueError("complete repair handoff requires root-cause evidence")
-    regression = investigation.get("regression_check")
-    if not isinstance(regression, dict) or regression.get("status") != "PASS" or regression.get("exit_code") != 0:
-        raise ValueError("complete repair handoff requires a passing regression check with exit_code 0")
-    if regression.get("workspace_hash") != _workspace_evidence_hash(root):
-        raise ValueError("complete repair handoff requires fresh workspace-bound regression evidence")
+    receipt = payload["execution_receipt"]
+    if receipt["status"] != payload["status"]:
+        raise ValueError("execution receipt status must match handoff status")
+    if not receipt["evidence"].strip():
+        raise ValueError("execution receipt evidence must not be empty")
+    task = ensure_task_binding(project_root, payload["task_id"])
+    if receipt["task_id"] != payload["task_id"] or task["task_id"] != payload["task_id"]:
+        raise ValueError("execution receipt task_id does not match the handoff task")
+    if receipt["outcome"] == "BLOCKED" and payload["status"] != "BLOCKED":
+        raise ValueError("BLOCKED outcome requires a BLOCKED handoff")
+    if receipt["status"] == "BLOCKED" and receipt["outcome"] != "BLOCKED":
+        raise ValueError("BLOCKED receipt status requires a BLOCKED outcome")
+    if receipt["attempt"] > receipt["max_attempts"]:
+        raise ValueError("execution attempt exceeds the recorded limit")
+    if receipt["repair_rounds"] > receipt["max_repair_rounds"]:
+        raise ValueError("repair rounds exceed the recorded limit")
 
+    if not decision_path:
+        if receipt["workflow_decision_hash"] != task["workflow_decision_hash"]:
+            raise ValueError("execution receipt is not bound to the active workflow decision")
+        return
+    decision = read_json(decision_path)
+    validate_file(decision, DECISION_SCHEMA, "workflow decision")
+    expected_hash = sha256_json(
+        {key: value for key, value in decision.items() if key != "decision_hash"}
+    )
+    if decision["decision_hash"] != expected_hash:
+        raise ValueError("workflow decision hash does not match its content")
+    config = load_config(config_path)
+    if decision["config_hash"] != sha256_json(config):
+        raise ValueError("workflow decision was created from a different configuration")
+    if receipt["workflow_decision_hash"] != decision["decision_hash"]:
+        raise ValueError("execution receipt workflow_decision_hash does not match the decision")
+    if task["workflow_decision_hash"] != decision["decision_hash"]:
+        raise ValueError("handoff decision does not match the active task")
+    contract = decision["execution_contract"]
+    if receipt["max_attempts"] != contract["dispatch"]["max_total"]:
+        raise ValueError("receipt max_attempts does not match the dispatch contract")
+    if receipt["max_repair_rounds"] != contract["repair"]["max_repair_rounds"]:
+        raise ValueError("receipt max_repair_rounds does not match the repair contract")
+    fallback_values = contract["receipt"]["fallback_values"]
+    if receipt["outcome"] not in fallback_values:
+        raise ValueError("execution receipt outcome is not allowed by the decision")
+    if receipt["outcome"] == "SYNTHESIZED FALLBACK" and not contract["dispatch"]["synthesized_fallback"]:
+        raise ValueError("synthesized fallback is not allowed by the decision")
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", required=True)
-    parser.add_argument("--task-id", required=True)
     parser.add_argument("--input", required=True)
-    parser.add_argument("--actor", default="executor")
+    parser.add_argument("--decision", required=True)
+    parser.add_argument("--config")
     args = parser.parse_args()
     try:
-        payload = read_payload(args.input)
-        if not isinstance(payload, dict):
-            raise ValueError("handoff must be an object")
-        validate_identifier(args.task_id, "task_id")
-        payload = dict(payload)
-        payload["task_id"] = args.task_id
-        payload, _ = normalize_artifact_version(payload, "handoff")
-        payload.setdefault("handoff_id", f"HANDOFF-{args.task_id}-{utc_now().replace(':', '').replace('-', '')}")
-        payload.setdefault("created_at", utc_now())
-        for field in ("run_id", "attempt_id", "from_role", "to_role"):
-            if not isinstance(payload.get(field), str) or not payload[field].strip():
-                raise ValueError(f"handoff.{field} must be a non-empty string")
-        for field in ("task_revision", "plan_revision"):
-            if isinstance(payload.get(field), bool) or not isinstance(payload.get(field), int) or payload[field] < 1:
-                raise ValueError(f"handoff.{field} must be a positive integer")
-        validate_hash_map(payload.get("input_artifact_hashes"), "input_artifact_hashes")
-        validate_hash_map(payload.get("output_artifact_hashes"), "output_artifact_hashes")
-        if not isinstance(payload.get("evidence"), dict):
-            raise ValueError("handoff.evidence must be an object")
-        _normalize_verification_status(payload)
-        parse_timestamp(payload["created_at"])
-        with runtime_lock(args.project_root) as root:
-            task_state_path = root / "work" / args.task_id / "task-state.json"
-            if task_state_path.is_file():
-                task_state = read_object(task_state_path)
-                if task_state.get("revision") is not None and payload["task_revision"] != task_state.get("revision"):
-                    raise ValueError("handoff.task_revision does not match the current task state")
-                for field in ("run_id", "attempt_id"):
-                    if task_state.get(field) is not None and payload[field] != task_state.get(field):
-                        raise ValueError(f"handoff.{field} does not match the current task state")
-                if task_state.get("dispatch_id") is not None and payload.get("dispatch_id") != task_state.get("dispatch_id"):
-                    raise ValueError("handoff.dispatch_id does not match the current task state")
-                investigation_id = _bound_investigation_id(root, args.task_id, task_state)
-                if payload.get("status") == "COMPLETE" and investigation_id is not None:
-                    _require_complete_repair_evidence(root, args.task_id, task_state, payload, investigation_id)
-            else:
-                investigation_id = None
-            existing = root / "work" / args.task_id / "handoff.json"
-            existing_revision = int(read_object(existing).get("revision", 0)) if existing.is_file() else 0
-            if existing.is_file():
-                previous = read_object(existing)
-                if payload["handoff_id"] == previous.get("handoff_id"):
-                    for field in ("run_id", "attempt_id", "task_revision", "plan_revision", "from_role", "to_role"):
-                        if payload[field] != previous.get(field):
-                            raise ValueError("handoff identity cannot be reused for another attempt or revision")
-                previous_id = previous.get("handoff_id")
-                if previous_id != payload.get("handoff_id"):
-                    payload = preserve_projection_links(
-                        payload,
-                        previous_id=previous_id,
-                        previous_revision=existing_revision,
-                        previous_field="supersedes_id",
-                    )
-                else:
-                    for field in ("supersedes_id", "previous_revision"):
-                        if field in previous:
-                            payload.setdefault(field, previous[field])
-            payload["revision"] = next_revision(payload, existing_revision)
-            target = write_validated(
-                args.project_root,
-                f"work/{args.task_id}/handoff.json",
-                payload,
-                Path(__file__).resolve().parents[1] / "schemas/handoff.schema.json",
-            )
-            append_event(
-                args.project_root,
-                {
-                    "type": "HANDOFF_CREATED",
-                    "actor": args.actor,
-                    "task_id": args.task_id,
-                    "data": {
-                        "handoff_id": payload["handoff_id"],
-                        **({"investigation_id": payload["investigation_id"]} if payload.get("investigation_id") else {}),
-                    },
-                },
-                acquire_lock=False,
-                refresh_checklist=False,
-            )
-            render_checklist(args.project_root, acquire_lock=False)
-    except RuntimeNotInitializedError as exc:
-        print(f"HANDOFF_BLOCKED: {exc}", file=sys.stderr)
-        return 2
-    except (RuntimeLockedError, OSError, ValueError, TypeError) as exc:
-        print(f"HANDOFF_REJECTED: {exc}", file=sys.stderr)
+        result = load_and_validate(args.input, "handoff.schema.json", "handoff.json")
+        _validate_receipt(args.project_root, result, args.decision, args.config)
+        result = persist_artifact(args.project_root, result, "handoff.json", "HANDOFF_WRITTEN")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"ARTIFACT_REJECTED: {exc}", file=sys.stderr)
         return 1
-    print(f"HANDOFF_WRITTEN: {target}")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
-
-
 if __name__ == "__main__":
     raise SystemExit(main())

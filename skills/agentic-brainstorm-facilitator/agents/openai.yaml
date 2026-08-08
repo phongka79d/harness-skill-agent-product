@@ -1,4 +1,5 @@
 interface:
   display_name: "Agentic Brainstorm Facilitator"
-  short_description: "Clarify goals before planning"
-  default_prompt: "Use $agentic-brainstorm-facilitator to clarify an engineering request before formal planning."
+  short_description: "Clarify unclear or high-impact requests"
+  default_prompt: "Dispatch $agentic-brainstorm-facilitator only from $agentic-engineering-core with the shared envelope and a bounded task contract."
+  # Dispatch with the role prompt and fresh isolated context.

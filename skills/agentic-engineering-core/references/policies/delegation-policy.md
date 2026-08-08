@@ -1,10 +1,7 @@
-# Delegation Policy Compatibility Pointer
+# Delegation policy
 
-The canonical delegation policy is [the shared Wiki policy](../../../agentic-engineering-wiki/refs/policies/delegation.md). Keep this compatibility page aligned for older consumers.
-The configuration source is [agentic-configuration](../../../agentic-configuration/SKILL.md).
+Delegate only when role separation or context capacity produces clear value. A focused source-editing route should normally use only its configured minimal role chain. Independent review is not a default ceremony.
 
-- The Primary Agent owns architecture, scope, delegation, conflict resolution, and final validation.
-- Explore work uses `agents.agent-explorer.model_ref` resolved by `AGENTIC_DEPLOYMENT_CONFIG`.
-- Implement work uses `agents.agent-executor.model_ref` resolved by `AGENTIC_DEPLOYMENT_CONFIG`.
-- `model_policy.forbidden_model_refs` and refs outside `model_policy.allowed_model_refs` are forbidden dispatch targets.
-- Allow one focused correction after malformed output or failed validation; then mark the work `BLOCKED` or `ESCALATED` and never retry indefinitely.
+Each delegation must include the goal, allowed files, forbidden scope, acceptance, available evidence, and expected result. Allow one focused correction for focused execution and never use unbounded retries.
+
+Prioritize dispatches that preserve independence: reviewer and verifier first, then domain exploration or implementation when parallelism saves real work. The Primary Agent packages bounded context itself.
