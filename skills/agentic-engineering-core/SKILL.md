@@ -11,11 +11,15 @@ This is the only orchestrator. The host loads it first, resolves the workflow, d
 
 At the project boundary, the host must expose `./skills`, load the relevant `SKILL.md` and prompts, compose the shared envelope plus the selected role prompt, execute ordinary Python CLI/scripts from the repository root, preserve the universal return fields, and enforce the configured subagent waiting policy. These capabilities are host-owned and provider-neutral.
 
+The host must also provide the external `HOST-0` attestation before dispatching a workflow: `./skills` is exposed, Core is loaded first, the envelope and role prompt are composed, `open_task` is available, controlled worktree identity can be bound, and waiting/close behavior is enforceable. The package cannot manufacture this attestation. If it is missing, stale, or ambiguous, fail closed with `BLOCKED` before dispatch or source editing.
+
 `.codex-input.json` is not a package contract. It is neither required nor read/written/created by package scripts. Host scratch remains host-owned; the package does not infer or manage host configuration. Preserve these universal return fields in every role handoff and terminal report: `STATUS:`, `SUMMARY:`, `FILES_READ:`, `FILES_CHANGED:`, `EVIDENCE:`, `FINDINGS_OR_IMPLEMENTATION:`, `RISKS:`, `OPEN_QUESTIONS:`, and `NEXT_STEP:`. Keep the shared `i-have-adhd` companion attached to the Primary Agent and every delegated role.
 
 ## Sole explicit entrypoint
 
 `agentic-engineering-core` is the only workflow entrypoint. A host may select it through a host slash-skill list, slash picker selection, explicit mention such as `$agentic-engineering-core`, slash-text beginning `/agentic-engineering-core`, or an equivalent native mechanism. These are optional host examples, never prerequisites. This activation also covers implicit repository work and follow-up steering only for the current active `.phongka` workflow/task; it is not whole-chat persistence. The receiving agent remains the sole Primary Agent.
+
+All other skills and role prompts are internal dispatch targets, not public workflow entrypoints. A request that names a role directly must still enter through Core and receive the shared envelope; without Core routing and a valid task contract, the role must not run.
 
 The receiving agent remains Primary through the terminal report. It never delegates, spawns, replaces, or hands off the Primary role or final report. It may dispatch only bounded role agents selected by the resolved workflow.
 
@@ -68,7 +72,8 @@ Read [unified workflow](references/unified-workflow.md), [subagent allocation](r
 - Standard: at most 2 active / 4 total dispatches.
 - Controlled: at most 3 active / 6 total dispatches.
 - Dispatch one fresh agent per independent domain or implementation task. Not every workflow stage must be delegated; the Primary Agent may perform focused routing, context packaging, integration, and low-value stages directly.
-- Parallelize independent read-only work only. Run implementation writers sequentially in the default single-active-task runtime.
+- The Primary Agent alone may orchestrate multiple independent tasks, including multiple unrelated subagent tasks. Parallelize independent read-only work only; run implementation writers sequentially in the default single-active-task runtime.
+- Every delegated role is a leaf and must not spawn, delegate, subdelegate, or orchestrate another task. Delegated roles never write `.phongka` state or invoke state-mutating runtime commands; state changes remain Primary/harness-owned, with no urgency, trivial-change, cleanup, or generated/config-only exception.
 - Use the role prompt under that skill's `prompts/` directory, preceded by [the shared envelope](prompts/subagent-envelope.md). Set `ROLE_MODE` to the workflow stage id; for the merged reviewer use `plan`, `task`, or `integration`.
 - A wait-tool timeout is one non-terminal poll result, not proof that the subagent timed out. Continue polling within the snapshotted total timeout.
 - Never close a running subagent before its total timeout. At the deadline, perform one final status check; close only when `close_on_timeout` is `true`, then follow the normal fallback and independence gates.

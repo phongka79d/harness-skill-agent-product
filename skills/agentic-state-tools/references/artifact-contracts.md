@@ -4,6 +4,8 @@ State mode is resolved from execution depth, project profile, route override, de
 
 `.phongka/settings.json` is user-editable runtime policy, not task evidence. Initialization creates it from central defaults only when missing, validates it on later initialization, and never overwrites valid user values.
 
+Runtime artifacts are Primary Agent/host-owned. Delegated roles return universal handoffs and evidence but do not create, update, delete, or repair these artifacts directly; a generated or disposable artifact is not an authorization exception. The Primary Agent invokes the approved writers after the relevant lifecycle gate.
+
 A stateful task may use these task artifacts:
 
 - `context.json`: bounded files, constraints, and notes.
@@ -16,6 +18,8 @@ A stateful task may use these task artifacts:
 Controlled integrated work may also use `.phongka/batch-review.json`, bound to the current delivery decision, exact task revisions, and integrated workspace hashes.
 
 Task `scope` is a non-empty unique list of normalized repository-relative file paths. Absolute paths, parent traversal, `.phongka`, and `.agent` are rejected. Every review, batch review, and verification snapshot must include every scoped path for the task or task set. Additional relevant files may be included.
+
+The host `open_task` action binds the task ID and scope after `init_runtime`; controlled worktree preparation then binds the same task to `.phongka/worktrees/<task-id>` and its deterministic branch when `worktree.required` is true. Artifacts and evidence must use that binding. A missing `HOST-0` attestation or identity mismatch is a fail-closed condition.
 
 `record_verification_evidence.py` adds the current `work_revision`, workflow decision hash, and recording time. Every verification `checks[].name` is a stable acceptance ID and must be unique. Its `workspace.files` entries must come from the current project and contain `path`, `size`, and `sha256`; the recorder rechecks all files before writing.
 

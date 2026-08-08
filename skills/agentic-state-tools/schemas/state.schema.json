@@ -155,6 +155,36 @@
       },
       "additionalProperties": false
     },
+    "plan_binding": {
+      "type": "object",
+      "required": ["required", "bound", "schema_version"],
+      "properties": {
+        "required": {"type": "boolean"},
+        "bound": {"type": "boolean"},
+        "schema_version": {"type": "integer", "enum": [5]},
+        "plan_bundle_hash": {"type": ["string", "null"], "pattern": "[0-9a-f]{64}"},
+        "plan_review_hash": {"type": ["string", "null"], "pattern": "[0-9a-f]{64}"},
+        "plan_task_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,63}"}
+        },
+        "acceptance_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}"}
+        },
+        "manifest_path": {
+          "type": "string",
+          "pattern": "^\\.phongka/plan/manifest\\.json$"
+        },
+        "review_path": {
+          "type": "string",
+          "pattern": "^\\.phongka/plan/review\\.json$"
+        }
+      },
+      "additionalProperties": false
+    },
     "worktree_identity": {
       "type": [
         "object",
@@ -399,6 +429,19 @@
             "production_action",
             "destructive_cleanup"
           ]
+        },
+        "plan_bundle_hash": {
+          "type": ["string", "null"],
+          "pattern": "[0-9a-f]{64}"
+        },
+        "plan_review_hash": {
+          "type": ["string", "null"],
+          "pattern": "[0-9a-f]{64}"
+        },
+        "plan_task_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,63}"}
         }
       },
       "additionalProperties": false

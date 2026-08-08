@@ -21,6 +21,8 @@ These are ceilings, not quotas. They include repair and re-review dispatches. No
 7. Do not pad the team to reach a tier limit. Prefer delegating independent review and final verification over low-value context packaging.
 8. If the dispatch budget is exhausted, the Primary Agent performs the remaining bounded role; it must not skip fresh verification or fabricate a subagent result. Re-route or report `BLOCKED` when independence is mandatory.
 9. When subagent tools are unavailable, synthesize the same role outputs without claiming that agents were spawned.
+10. Delegated roles are leaf nodes: they must not spawn, delegate, subdelegate, or orchestrate another role or task. The Primary Agent alone may orchestrate multiple independent tasks, including unrelated tasks; independent read-only work may run concurrently while writers remain sequential.
+11. Delegated roles never write `.phongka` state, task/artifact/checklist files, or invoke state-mutating runtime commands. The Primary Agent/host owns those mutations and must use the resolved lifecycle; urgency, triviality, unrelated cleanup, and generated/config-only labels do not authorize exceptions.
 
 ## Wait policy
 

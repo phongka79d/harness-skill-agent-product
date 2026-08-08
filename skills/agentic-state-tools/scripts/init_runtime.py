@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 from pathlib import Path
@@ -19,9 +20,11 @@ from validate_state import validate_runtime  # noqa: E402
 from runtime_utils import (  # noqa: E402
     append_event,
     read_json,
+    restore_bytes_atomic,
     runtime_root,
     sha256_json,
     utc_now,
+    validate_plan_binding_documents,
     write_json_atomic,
 )
 
@@ -31,7 +34,7 @@ STATE_SCHEMA = HERE.parents[1] / "schemas" / "state.schema.json"
 
 def _request_from_decision(decision: dict[str, Any]) -> dict[str, Any]:
     contract = decision["request_contract"]
-    return {
+    result = {
         "profile": decision["profile_id"],
         "task_route": decision["task_route"],
         "execution_preference": contract["execution_preference"],
@@ -40,6 +43,26 @@ def _request_from_decision(decision: dict[str, Any]) -> dict[str, Any]:
         "risk_flags": contract["risk_flags"],
         "user_requested_review": contract["user_requested_review"],
         "delivery_action": contract["delivery_action"],
+    }
+    for key in ("plan_bundle_hash", "plan_review_hash", "plan_task_ids"):
+        if key in contract:
+            result[key] = contract[key]
+    return result
+
+
+def _empty_plan_binding(decision: dict[str, Any]) -> dict[str, Any]:
+    gate = decision.get(
+        "plan_gate",
+        {"required": False, "schema_version": 5, "plan_bundle_hash": None, "plan_review_hash": None, "plan_task_ids": []},
+    )
+    return {
+        "required": bool(gate.get("required", False)),
+        "bound": False,
+        "schema_version": 5,
+        "plan_bundle_hash": gate.get("plan_bundle_hash"),
+        "plan_review_hash": gate.get("plan_review_hash"),
+        "plan_task_ids": list(gate.get("plan_task_ids", [])),
+        "acceptance_ids": [],
     }
 
 
@@ -54,12 +77,28 @@ def _decision_binding(
         raise ValueError("workflow decision hash does not match its content")
     if decision["state_mode"] == "off":
         raise ValueError("workflow decision has state_mode off")
+    if decision["execution_depth"] == "controlled":
+        plan_gate = decision.get("plan_gate")
+        if not isinstance(plan_gate, dict) or plan_gate.get("required") is not True:
+            raise ValueError("controlled workflow decision requires an affirmative plan_gate")
     config = load_config(config_path)
     if decision["config_hash"] != sha256_json(config):
         raise ValueError("workflow decision was created from a different configuration")
     expected = resolve_workflow(_request_from_decision(decision), config)
     if decision != expected:
-        raise ValueError("workflow decision does not match the current configuration policy")
+        legacy_expected = copy.deepcopy(expected)
+        if "plan_gate" not in decision:
+            legacy_expected.pop("plan_gate", None)
+            for key in ("plan_bundle_hash", "plan_review_hash", "plan_task_ids"):
+                legacy_expected["request_contract"].pop(key, None)
+        if {
+            key: value for key, value in decision.items() if key != "decision_hash"
+        } == {
+            key: value for key, value in legacy_expected.items() if key != "decision_hash"
+        }:
+            expected = decision
+        else:
+            raise ValueError("workflow decision does not match the current configuration policy")
     return {
         "profile_id": decision["profile_id"],
         "profile_hash": decision["profile_hash"],
@@ -76,6 +115,7 @@ def _decision_binding(
         "required_skills": decision["required_skills"],
         "optional_skills": decision["optional_skills"],
         "stages": decision["stages"],
+        "plan_binding": _empty_plan_binding(decision),
     }
 
 
@@ -105,6 +145,35 @@ def _legacy_binding(
     return _decision_binding(resolve_workflow(request, config), config_path)
 
 
+def _persist_json_transaction(
+    writes: list[tuple[Path, dict[str, Any]]],
+    *,
+    verify: Any | None = None,
+) -> None:
+    """Commit related runtime JSON artifacts or restore every prior byte value."""
+    snapshots = [
+        (path, path.read_bytes() if path.exists() else None)
+        for path, _ in writes
+    ]
+    try:
+        for path, value in writes:
+            write_json_atomic(path, value)
+        if verify is not None:
+            verify()
+    except Exception:
+        rollback_errors: list[str] = []
+        for path, previous in reversed(snapshots):
+            try:
+                restore_bytes_atomic(path, previous)
+            except Exception as rollback_error:
+                rollback_errors.append(f"{path.name}: {rollback_error}")
+        if rollback_errors:
+            raise ValueError(
+                "runtime update failed and rollback failed: " + "; ".join(rollback_errors)
+            )
+        raise
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", required=True)
@@ -125,6 +194,8 @@ def main() -> int:
     parser.add_argument("--workflow-decision-hash")
     parser.add_argument("--project-id")
     parser.add_argument("--config")
+    parser.add_argument("--plan-manifest")
+    parser.add_argument("--plan-review")
     parser.add_argument("--risk", action="append", default=[])
     args = parser.parse_args()
     try:
@@ -133,7 +204,31 @@ def main() -> int:
             if args.decision
             else _legacy_binding(args, args.config)
         )
+        if bool(args.plan_manifest) != bool(args.plan_review):
+            raise ValueError("--plan-manifest and --plan-review must be supplied together")
+        if binding["execution_depth"] == "controlled" and not args.plan_manifest:
+            raise ValueError("controlled runtime requires a v5 plan manifest and PASS plan review")
+        plan_documents: tuple[dict[str, Any], dict[str, Any]] | None = None
+        if args.plan_manifest and args.plan_review:
+            manifest = read_json(args.plan_manifest)
+            review = read_json(args.plan_review)
+            binding["plan_binding"] = validate_plan_binding_documents(
+                manifest,
+                review,
+                expected_decision_hash=binding["workflow_decision_hash"],
+                require_v5=binding["execution_depth"] == "controlled",
+            )
+            plan_documents = (manifest, review)
         root = runtime_root(args.project_root)
+        plan_writes: list[tuple[Path, dict[str, Any]]] = []
+        if plan_documents is not None:
+            plan_dir = root / "plan"
+            binding["plan_binding"]["manifest_path"] = ".phongka/plan/manifest.json"
+            binding["plan_binding"]["review_path"] = ".phongka/plan/review.json"
+            plan_writes = [
+                (plan_dir / "manifest.json", plan_documents[0]),
+                (plan_dir / "review.json", plan_documents[1]),
+            ]
         state_path = root / "state.json"
         project_id = (args.project_id or Path(args.project_root).resolve().name).strip()
         if not project_id:
@@ -145,8 +240,28 @@ def main() -> int:
             validate_runtime(root, state)
             if state["project_id"] != project_id:
                 raise ValueError("existing runtime belongs to another project_id")
-            ensure_runtime_settings(args.project_root, args.config)
             if state["workflow_decision_hash"] == binding["workflow_decision_hash"]:
+                if plan_documents is not None:
+                    updated_state = copy.deepcopy(state)
+                    updated_state["plan_binding"] = binding["plan_binding"]
+                    updated_state["revision"] = int(updated_state["revision"]) + 1
+                    updated_state["updated_at"] = utc_now()
+                    validate_file(updated_state, STATE_SCHEMA, "state")
+                    _persist_json_transaction(
+                        [*plan_writes, (state_path, updated_state)],
+                        verify=lambda: validate_runtime(root, updated_state),
+                    )
+                    state = updated_state
+                    append_event(
+                        args.project_root,
+                        "PLAN_BOUND",
+                        {
+                            "workflow_decision_hash": state["workflow_decision_hash"],
+                            "plan_bundle_hash": state["plan_binding"]["plan_bundle_hash"],
+                            "plan_review_hash": state["plan_binding"]["plan_review_hash"],
+                        },
+                    )
+                ensure_runtime_settings(args.project_root, args.config)
                 try:
                     render_checklist(args.project_root)
                 except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
@@ -164,13 +279,20 @@ def main() -> int:
                 raise ValueError(
                     "worktree is still bound; reconcile or explicitly clean it before rebinding"
                 )
-            state.update(binding)
+            updated_state = copy.deepcopy(state)
+            updated_state.update(binding)
             if binding["task_route"] in {"review", "delivery"}:
-                state["worktree_identity"] = None
-            state["schema_version"] = 8
-            state["revision"] = int(state["revision"]) + 1
-            state["updated_at"] = utc_now()
-            write_json_atomic(state_path, state)
+                updated_state["worktree_identity"] = None
+            updated_state["schema_version"] = 8
+            updated_state["revision"] = int(updated_state["revision"]) + 1
+            updated_state["updated_at"] = utc_now()
+            validate_file(updated_state, STATE_SCHEMA, "state")
+            _persist_json_transaction(
+                [*plan_writes, (state_path, updated_state)],
+                verify=lambda: validate_runtime(root, updated_state),
+            )
+            state = updated_state
+            ensure_runtime_settings(args.project_root, args.config)
             try:
                 render_checklist(args.project_root)
             except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
@@ -196,11 +318,15 @@ def main() -> int:
             "status": "IDLE",
             "active_task_id": None,
             "worktree_identity": None,
+            "plan_binding": binding["plan_binding"],
             "tasks": {},
             "updated_at": utc_now(),
         }
         validate_file(state, STATE_SCHEMA, "state")
-        write_json_atomic(state_path, state)
+        _persist_json_transaction(
+            [*plan_writes, (state_path, state)],
+            verify=lambda: validate_runtime(root, state),
+        )
         (root / "tasks").mkdir(parents=True, exist_ok=True)
         (root / "artifacts").mkdir(parents=True, exist_ok=True)
         ensure_runtime_settings(args.project_root, args.config)

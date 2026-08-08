@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "plan_bundle_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "plan_task_ids": ["T1"],
+  "acceptance_ids": ["AC-01"],
+  "bundle": {
+    "schema_version": 5,
+    "review_rubric_id": "plan",
+    "review_rubric_version": 1,
+    "goal": "bounded plan",
+    "scope": ["src/example.py"],
+    "tasks": [
+      {
+        "id": "T1",
+        "plan_task_id": "T1",
+        "review_rubric_id": "task",
+        "review_rubric_version": 1,
+        "objective": "bounded change",
+        "files": ["src/example.py"],
+        "steps": ["edit"],
+        "dependencies": [],
+        "acceptance": ["works"],
+        "verification": ["test"],
+        "rollback": "restore file"
+      }
+    ],
+    "acceptance": [{"id": "AC-01", "description": "works"}],
+    "acceptance_ids": ["AC-01"],
+    "verification": ["test"],
+    "plan_task_ids": ["T1"]
+  }
+}

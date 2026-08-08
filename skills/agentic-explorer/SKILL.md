@@ -8,9 +8,9 @@ description: Use only when dispatched by agentic-engineering-core for bounded re
 ## Contract
 
 - **Owner:** Primary Agent dispatches this role.
-- **Boundary:** Read-only; never edits or decides architecture.
+- **Boundary:** Read-only; never edits, decides architecture, spawns/subdelegates, or mutates `.phongka` state.
 - **Prompt:** [explorer.md](prompts/explorer.md), appended after `agentic-engineering-core/prompts/subagent-envelope.md`.
-- **Return:** universal status, files, evidence, findings/implementation, risks, open questions, and next step.
+- **Return:** the exact universal status, files, evidence, findings/implementation, risks, open questions, and next step fields.
 
 ## Workflow
 
@@ -19,6 +19,8 @@ description: Use only when dispatched by agentic-engineering-core for bounded re
 3. Perform the role-specific workflow in the prompt.
 4. Self-check against acceptance and role boundaries.
 5. Return structured evidence; use `BLOCKED` when safe progress is impossible.
+
+The Explorer is a delegated leaf. Only the Primary Agent may orchestrate multiple independent tasks. Independent read-only explorers may run concurrently, but the Explorer must not dispatch another role or write runtime state, task artifacts, or checklist files.
 
 ## References
 

@@ -16,6 +16,7 @@ from runtime_utils import (  # noqa: E402
     read_json,
     refresh_checklist,
     require_scope_coverage,
+    revalidate_plan_binding,
     require_task_index_consistent,
     runtime_root,
     safe_child,
@@ -142,11 +143,39 @@ def _require_verification(project_root: str, root: Path, task: dict[str, Any]) -
     verified_files = verify_workspace_snapshot(project_root, verification["workspace"], task_id)
     require_scope_coverage(project_root, task, verified_files)
 
+    state = read_json(root / "state.json")
+    plan_binding = state.get("plan_binding", {})
+    if isinstance(plan_binding, dict) and plan_binding.get("required"):
+        revalidate_plan_binding(project_root, plan_binding, expected_decision_hash=task["workflow_decision_hash"])
+        if not plan_binding.get("bound"):
+            raise ValueError(f"plan review gate is missing: {task_id}")
+        if task.get("plan_task_id") not in plan_binding.get("plan_task_ids", []):
+            raise ValueError(f"task plan_task_id is not bound: {task_id}")
+        for artifact, label in ((verification, "verification"),):
+            if artifact.get("plan_task_id") != task.get("plan_task_id"):
+                raise ValueError(f"{label} plan_task_id is stale: {task_id}")
+            if artifact.get("plan_bundle_hash") != task.get("plan_bundle_hash"):
+                raise ValueError(f"{label} plan bundle hash is stale: {task_id}")
+            if artifact.get("plan_review_hash") != task.get("plan_review_hash"):
+                raise ValueError(f"{label} plan review hash is stale: {task_id}")
+        if set(verification.get("acceptance_ids", [])) != set(plan_binding.get("acceptance_ids", [])):
+            raise ValueError(f"verification acceptance IDs are stale: {task_id}")
+
     claim = read_json(claim_path)
     validate_file(claim, CLAIM_SCHEMA, f"completion claim {task_id}")
     if claim["task_id"] != task_id or claim["work_revision"] != task["work_revision"]:
         raise ValueError(f"completion claim is stale or mismatched: {task_id}")
     _require_acceptance_mapping(claim, verification, task_id)
+    if isinstance(plan_binding, dict) and plan_binding.get("required"):
+        for label, artifact in (("completion claim", claim),):
+            if artifact.get("plan_task_id") != task.get("plan_task_id"):
+                raise ValueError(f"{label} plan_task_id is stale: {task_id}")
+            if artifact.get("plan_bundle_hash") != task.get("plan_bundle_hash"):
+                raise ValueError(f"{label} plan bundle hash is stale: {task_id}")
+            if artifact.get("plan_review_hash") != task.get("plan_review_hash"):
+                raise ValueError(f"{label} plan review hash is stale: {task_id}")
+        if set(claim.get("acceptance_ids", [])) != set(plan_binding.get("acceptance_ids", [])):
+            raise ValueError(f"completion claim acceptance IDs are stale: {task_id}")
 
     gate = read_json(gate_path)
     validate_file(gate, COMPLETION_GATE_SCHEMA, f"completion gate {task_id}")
@@ -158,6 +187,14 @@ def _require_verification(project_root: str, root: Path, task: dict[str, Any]) -
         or gate["claim_hash"] != sha256_json(claim)
     ):
         raise ValueError(f"completion gate is stale or mismatched: {task_id}")
+    if isinstance(plan_binding, dict) and plan_binding.get("required"):
+        if (
+            gate.get("plan_task_id") != task.get("plan_task_id")
+            or gate.get("plan_bundle_hash") != task.get("plan_bundle_hash")
+            or gate.get("plan_review_hash") != task.get("plan_review_hash")
+            or set(gate.get("acceptance_ids", [])) != set(plan_binding.get("acceptance_ids", []))
+        ):
+            raise ValueError(f"completion gate plan binding is stale: {task_id}")
 
 
 def _require_review(project_root: str, root: Path, task: dict[str, Any]) -> None:

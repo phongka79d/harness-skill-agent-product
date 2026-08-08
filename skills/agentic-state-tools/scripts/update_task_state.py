@@ -16,6 +16,7 @@ from runtime_utils import (  # noqa: E402
     ensure_casefold_unique_task_ids,
     normalize_scope_paths,
     read_json,
+    restore_bytes_atomic,
     require_task_index_consistent,
     runtime_root,
     task_state_path,
@@ -33,6 +34,7 @@ CALLER_FIELDS = {
     "scope",
     "risk_flags",
     "approval_reference",
+    "plan_task_id",
 }
 VALID = {"TODO", "IN_PROGRESS", "BLOCKED", "COMPLETED", "ACCEPTED", "CANCELLED"}
 OPEN = {"TODO", "IN_PROGRESS", "BLOCKED"}
@@ -85,6 +87,9 @@ def main() -> int:
         supplied_approval = payload.get("approval_reference")
         if supplied_approval is not None:
             supplied_approval = str(supplied_approval).strip() or None
+        supplied_plan_task_id = payload.get("plan_task_id")
+        if supplied_plan_task_id is not None:
+            supplied_plan_task_id = str(supplied_plan_task_id).strip() or None
         if status not in VALID or not summary:
             raise ValueError("valid status and non-empty summary are required")
 
@@ -116,11 +121,24 @@ def main() -> int:
         if status not in ALLOWED.get(current_status, set()):
             raise ValueError(f"transition is not allowed: {current_status or 'NEW'} -> {status}")
 
+        plan_binding = state.get("plan_binding", {})
+        if not isinstance(plan_binding, dict):
+            raise ValueError("state plan_binding must be an object")
+        plan_task_id = supplied_plan_task_id or (previous.get("plan_task_id") if previous else None)
+        if plan_binding.get("required") and status in OPEN:
+            if not plan_binding.get("bound"):
+                raise ValueError("controlled task requires a bound plan manifest and PASS review")
+            if not plan_task_id:
+                raise ValueError("plan_task_id is required for a controlled task")
+            if plan_task_id not in plan_binding.get("plan_task_ids", []):
+                raise ValueError("plan_task_id is not present in the approved plan bundle")
+
         work_changed = previous is None or any(
             (
                 summary != previous["summary"],
                 scope != previous["scope"],
                 risk_flags != previous["risk_flags"],
+                plan_task_id != (previous.get("plan_task_id") if previous else None),
             )
         )
         if previous and status == current_status and not work_changed:
@@ -192,28 +210,45 @@ def main() -> int:
             "risk_flags": risk_flags,
             "updated_at": utc_now(),
         }
+        if plan_task_id:
+            task["plan_task_id"] = plan_task_id
+        if plan_binding.get("bound"):
+            task["plan_bundle_hash"] = plan_binding.get("plan_bundle_hash")
+            task["plan_review_hash"] = plan_binding.get("plan_review_hash")
+            task["acceptance_ids"] = list(plan_binding.get("acceptance_ids", []))
         if previous and previous.get("worktree_identity") is not None:
             task["worktree_identity"] = previous["worktree_identity"]
         validate_file(task, TASK_SCHEMA, f"task {task_id}")
-        write_json_atomic(task_path, task)
+        state_path = root / "state.json"
+        previous_task_bytes = task_path.read_bytes() if task_path.exists() else None
+        previous_state_bytes = state_path.read_bytes() if state_path.exists() else None
+        try:
+            write_json_atomic(task_path, task)
 
-        state["revision"] = int(state["revision"]) + 1
-        state.setdefault("tasks", {})[task_id] = {
-            "status": status,
-            "status_revision": task["status_revision"],
-            "work_revision": task["work_revision"],
-            "summary": summary,
-        }
-        open_ids = _open_task_ids(state["tasks"])
-        if len(open_ids) > 1:
-            raise ValueError("state contains more than one open task")
-        state["active_task_id"] = open_ids[0] if open_ids else None
-        state["status"] = "ACTIVE" if open_ids else "IDLE"
-        state["updated_at"] = utc_now()
-        validate_file(state, STATE_SCHEMA, "state")
-        ensure_casefold_unique_task_ids(list(state["tasks"]), "state task IDs")
-        require_task_index_consistent(root, state)
-        write_json_atomic(root / "state.json", state)
+            state["revision"] = int(state["revision"]) + 1
+            state.setdefault("tasks", {})[task_id] = {
+                "status": status,
+                "status_revision": task["status_revision"],
+                "work_revision": task["work_revision"],
+                "summary": summary,
+            }
+            open_ids = _open_task_ids(state["tasks"])
+            if len(open_ids) > 1:
+                raise ValueError("state contains more than one open task")
+            state["active_task_id"] = open_ids[0] if open_ids else None
+            state["status"] = "ACTIVE" if open_ids else "IDLE"
+            state["updated_at"] = utc_now()
+            validate_file(state, STATE_SCHEMA, "state")
+            ensure_casefold_unique_task_ids(list(state["tasks"]), "state task IDs")
+            require_task_index_consistent(root, state)
+            write_json_atomic(state_path, state)
+        except Exception:
+            try:
+                restore_bytes_atomic(task_path, previous_task_bytes)
+                restore_bytes_atomic(state_path, previous_state_bytes)
+            except Exception as rollback_error:
+                raise ValueError(f"state update failed and rollback failed: {rollback_error}")
+            raise
         append_event(
             args.project_root,
             "TASK_UPDATED",

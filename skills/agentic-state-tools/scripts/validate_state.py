@@ -12,6 +12,7 @@ sys.path.insert(0, str(CONFIG_SCRIPTS))
 from schema_validation import validate_file  # noqa: E402
 from runtime_utils import (  # noqa: E402
     read_json,
+    revalidate_plan_binding,
     require_task_index_consistent,
     runtime_root,
     task_state_path,
@@ -25,6 +26,24 @@ TASK_SCHEMA = HERE.parents[1] / "schemas" / "task-state.schema.json"
 
 def validate_runtime(root: Path, state: dict) -> None:
     require_task_index_consistent(root, state)
+
+    plan_binding = state.get("plan_binding")
+    if plan_binding is not None:
+        if not isinstance(plan_binding, dict):
+            raise ValueError("plan_binding must be an object")
+        required = bool(plan_binding.get("required"))
+        bound = bool(plan_binding.get("bound"))
+        if required and bound:
+            for field in ("plan_bundle_hash", "plan_review_hash"):
+                value = plan_binding.get(field)
+                if not isinstance(value, str) or len(value) != 64:
+                    raise ValueError(f"bound plan_binding is missing {field}")
+            if not plan_binding.get("plan_task_ids") or not plan_binding.get("acceptance_ids"):
+                raise ValueError("bound plan_binding must include plan task and acceptance IDs")
+        if bound and not required:
+            raise ValueError("optional plan_binding cannot be marked bound")
+        if required and bound:
+            revalidate_plan_binding(root.parent, plan_binding, expected_decision_hash=state.get("workflow_decision_hash"))
 
     open_ids: list[str] = []
     tasks = state.get("tasks", {})
@@ -54,6 +73,18 @@ def validate_runtime(root: Path, state: dict) -> None:
                 )
             if task["profile_hash"] != state["profile_hash"]:
                 raise ValueError(f"open task {task_id} profile binding mismatch")
+            if required := bool(isinstance(plan_binding, dict) and plan_binding.get("required")):
+                if not plan_binding.get("bound"):
+                    raise ValueError("controlled task requires a bound plan manifest and PASS review")
+                plan_task_id = task.get("plan_task_id")
+                if plan_task_id not in plan_binding.get("plan_task_ids", []):
+                    raise ValueError(f"task {task_id} has an unbound plan_task_id")
+                if task.get("plan_bundle_hash") != plan_binding.get("plan_bundle_hash"):
+                    raise ValueError(f"task {task_id} plan bundle binding mismatch")
+                if task.get("plan_review_hash") != plan_binding.get("plan_review_hash"):
+                    raise ValueError(f"task {task_id} plan review binding mismatch")
+                if set(task.get("acceptance_ids", [])) != set(plan_binding.get("acceptance_ids", [])):
+                    raise ValueError(f"task {task_id} acceptance binding mismatch")
 
     if len(open_ids) > 1:
         raise ValueError("single-active-task runtime has more than one open task")

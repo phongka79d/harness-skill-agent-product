@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "attested_at",
+    "skills_exposed",
+    "core_loaded",
+    "resolver_available",
+    "verification_gate",
+    "subagent_wait_enforced",
+    "tool_isolation_attested"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "enum": [1]},
+    "attested_at": {"type": "string", "minLength": 1},
+    "host_id": {"type": "string", "minLength": 1},
+    "skills_exposed": {"type": "boolean"},
+    "core_loaded": {"type": "boolean"},
+    "resolver_available": {"type": "boolean"},
+    "verification_gate": {"type": "boolean"},
+    "subagent_wait_enforced": {"type": "boolean"},
+    "tool_isolation_attested": {"type": "boolean"},
+    "task_opening_available": {"type": "boolean"},
+    "controlled_worktree_available": {"type": "boolean"},
+    "host_temp_scope": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false
+}

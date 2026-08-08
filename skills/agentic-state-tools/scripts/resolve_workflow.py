@@ -349,6 +349,11 @@ def resolve_workflow(
     profile = resolve_profile(request["profile"])
     policy = profile["workflow_policy"]
     workflow = config["workflow"]
+    for depth in workflow["depth_order"]:
+        central = workflow[f"{depth}_max_repair_cycles"]
+        dispatch = config["subagent_policy"]["depths"][depth]["max_repair_rounds"]
+        if central != dispatch:
+            raise ValueError(f"repair limit sources diverge for {depth}: {central}!={dispatch}")
     routes = config["skill_routing"]["task_routes"]
     route = routes[request["task_route"]]
     depth_order = workflow["depth_order"]
@@ -493,6 +498,13 @@ def resolve_workflow(
         "review": "review" in tokens,
         "batch_review": "batch_review" in tokens,
     }
+    plan_gate = {
+        "required": depth == "controlled" and "plan_review" in tokens,
+        "schema_version": 5,
+        "plan_bundle_hash": request.get("plan_bundle_hash"),
+        "plan_review_hash": request.get("plan_review_hash"),
+        "plan_task_ids": list(request.get("plan_task_ids", [])),
+    }
 
     stages: list[dict[str, str]] = [
         {
@@ -592,10 +604,14 @@ def resolve_workflow(
             "risk_flags": sorted(request["risk_flags"]),
             "user_requested_review": request["user_requested_review"],
             "delivery_action": request["delivery_action"],
+            "plan_bundle_hash": request.get("plan_bundle_hash"),
+            "plan_review_hash": request.get("plan_review_hash"),
+            "plan_task_ids": list(request.get("plan_task_ids", [])),
         },
         "approval": approval,
         "delivery": delivery,
         "evidence_requirements": evidence_requirements,
+        "plan_gate": plan_gate,
         "runtime_actions": runtime_actions,
         "subagent_plan": _subagent_plan(depth, tokens, config),
         "context_budget": {

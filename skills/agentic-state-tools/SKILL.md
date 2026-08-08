@@ -7,6 +7,10 @@ description: Use deterministic scripts to resolve workflows and manage project-l
 
 The Primary Agent classifies intent and resolves the state mode. When the decision says `state_mode: required`, initialize the project-local `.phongka` runtime before executing the route. These scripts validate and expand that decision, bind state/evidence, and fail closed on invalid transitions.
 
+## State authority and host boundary
+
+`.phongka` is a Primary Agent/host-owned state boundary. Delegated model roles may read state when assigned, but they never write, delete, or repair runtime files, task files, artifacts, checklist files, or evidence indexes, and they never invoke a state-mutating CLI on their own. Only the Primary Agent or the host invokes these deterministic scripts at approved lifecycle points; urgency, triviality, unrelated cleanup, and generated/config-only labels do not change that boundary. The scripts are not an autonomous agent runtime and do not grant roles orchestration authority.
+
 ## Stateless path
 
 The stateless path applies only when the resolved decision explicitly says `state_mode: off`. In that case, do not create `.phongka`. Run only required skills and report fresh evidence directly.
@@ -42,6 +46,8 @@ Canonical runtime files:
 `init_runtime.py` creates `settings.json` from central `subagent_policy.wait` defaults when it is missing and validates but never overwrites an existing file. Before each stateful model dispatch, the Primary Agent reads it with `load_runtime_settings.py` and snapshots the returned values for that dispatch. Invalid settings fail closed.
 
 Controlled source-editing also records `.phongka/worktrees/<task-id>` in both the runtime and task state. Run `prepare_worktree.py` only after the task is `IN_PROGRESS` and its approval reference is present. Evidence scripts hash the bound worktree; recovery reports path, branch, HEAD, or dirty-state mismatches. After the task is `COMPLETED` or `ACCEPTED`, run `cleanup_worktree.py` to record the removal, keep, or rebind decision; delivery fails closed when a worktree-bound task has no recorded cleanup decision. No script merges, pushes, or removes a worktree.
+
+The host `open_task` action must run after `init_runtime` and before `prepare_worktree`; it uses `update_task_state.py` to bind the task ID, scope, workflow decision, and approval. When `worktree.required` is true, `prepare_worktree.py` maps that same task ID to `.phongka/worktrees/<task-id>` and branch `phongka/task/<task-id>`, then records path/branch/HEAD identity in task and runtime state. Missing `HOST-0` attestation or any identity mismatch is fail-closed `BLOCKED`; a delegated role must not invent a mapping or repair the state.
 
 ## Read-only dashboard
 

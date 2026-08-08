@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -13,6 +14,7 @@ from schema_validation import validate_file  # noqa: E402
 from review_validation import validate_rubric_reference  # noqa: E402
 
 RESERVED_ROOTS = {".phongka", ".agent"}
+ID_PATTERN = r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}"
 
 
 def _safe_repo_path(value: object, label: str) -> str:
@@ -114,30 +116,104 @@ def _validate_file_map(value: dict, graph: dict[str, list[str]]) -> None:
                     )
 
 
+def _acceptance_ids(value: object) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise ValueError("v5 acceptance must be a non-empty array")
+    result: list[str] = []
+    for index, item in enumerate(value):
+        if isinstance(item, str):
+            identifier = item.strip()
+        elif isinstance(item, dict):
+            identifier = str(item.get("id", "")).strip()
+            description = str(item.get("description", "")).strip()
+            if not description:
+                raise ValueError(f"acceptance[{index}] description must be non-empty")
+            unknown = sorted(set(item) - {"id", "description"})
+            if unknown:
+                raise ValueError(
+                    f"acceptance[{index}] has unsupported fields: {', '.join(unknown)}"
+                )
+        else:
+            raise ValueError(f"acceptance[{index}] must be a string or object")
+        if not identifier:
+            raise ValueError(f"acceptance[{index}] ID must be non-empty")
+        if re.fullmatch(ID_PATTERN, identifier) is None:
+            raise ValueError(f"acceptance[{index}] ID is not normalized: {identifier}")
+        result.append(identifier)
+    if len(result) != len(set(result)):
+        raise ValueError("v5 acceptance IDs must be unique")
+    return result
+
+
+def _validate_v5(value: dict) -> None:
+    if value.get("schema_version") != 5:
+        return
+    tasks = value.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        raise ValueError("v5 plan tasks must be non-empty")
+    declared = value.get("plan_task_ids")
+    if not isinstance(declared, list) or not declared:
+        raise ValueError("v5 plan_task_ids must be a non-empty array")
+    declared_ids = [str(item).strip() for item in declared]
+    if any(not item for item in declared_ids) or len(declared_ids) != len(set(declared_ids)):
+        raise ValueError("v5 plan_task_ids must be unique non-empty IDs")
+    task_ids: list[str] = []
+    for index, task in enumerate(tasks):
+        if not isinstance(task, dict):
+            raise ValueError(f"task {index} must be an object")
+        task_id = str(task.get("plan_task_id", task.get("id", ""))).strip()
+        if not task_id:
+            raise ValueError(f"task {index} must declare plan_task_id")
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", task_id) is None:
+            raise ValueError(f"task {index} plan_task_id is not normalized")
+        task_ids.append(task_id)
+    if len(task_ids) != len(set(task_ids)):
+        raise ValueError("v5 plan_task_id values must be unique")
+    if set(task_ids) != set(declared_ids):
+        raise ValueError("plan_task_ids must exactly match task plan_task_id values")
+    acceptance_ids = _acceptance_ids(value.get("acceptance"))
+    declared_acceptance = value.get("acceptance_ids")
+    if not isinstance(declared_acceptance, list) or set(declared_acceptance) != set(acceptance_ids):
+        raise ValueError("acceptance_ids must exactly match stable acceptance IDs")
+
+
+def validate_plan(value: dict, *, require_v5: bool = False) -> None:
+    validate_file(
+        value,
+        HERE.parents[1] / "schemas" / "planning-bundle.schema.json",
+        "planning bundle",
+    )
+    if require_v5 and value.get("schema_version") != 5:
+        raise ValueError("controlled plan gate requires schema_version 5; migrate v4 explicitly")
+    validate_rubric_reference(
+        "plan",
+        value.get("review_rubric_id"),
+        value.get("review_rubric_version"),
+    )
+    for task in value["tasks"]:
+        validate_rubric_reference(
+            "task",
+            task.get("review_rubric_id"),
+            task.get("review_rubric_version"),
+        )
+    graph = _dependency_graph(value["tasks"])
+    _validate_file_map(value, graph)
+    _validate_v5(value)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
+    parser.add_argument(
+        "--require-v5",
+        "--controlled",
+        action="store_true",
+        help="require the v5 planning contract for a controlled gate",
+    )
     args = parser.parse_args()
     try:
         value = json.loads(Path(args.input).read_text(encoding="utf-8"))
-        validate_file(
-            value,
-            HERE.parents[1] / "schemas" / "planning-bundle.schema.json",
-            "planning bundle",
-        )
-        validate_rubric_reference(
-            "plan",
-            value.get("review_rubric_id"),
-            value.get("review_rubric_version"),
-        )
-        for task in value["tasks"]:
-            validate_rubric_reference(
-                "task",
-                task.get("review_rubric_id"),
-                task.get("review_rubric_version"),
-            )
-        graph = _dependency_graph(value["tasks"])
-        _validate_file_map(value, graph)
+        validate_plan(value, require_v5=args.require_v5)
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
         print(f"PLAN_REJECTED: {exc}", file=sys.stderr)
         return 1

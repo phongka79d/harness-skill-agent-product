@@ -8,9 +8,9 @@ description: Use only when dispatched by agentic-engineering-core to establish t
 ## Contract
 
 - **Owner:** Primary Agent dispatches this role.
-- **Boundary:** Read-only investigation before repair.
+- **Boundary:** Read-only investigation before repair; never spawns/subdelegates or mutates `.phongka` state.
 - **Prompt:** [debugger.md](prompts/debugger.md), appended after `agentic-engineering-core/prompts/subagent-envelope.md`.
-- **Return:** universal status, files, evidence, findings/implementation, risks, open questions, and next step.
+- **Return:** the exact universal status, files, evidence, findings/implementation, risks, open questions, and next step fields.
 
 ## Workflow
 
@@ -19,6 +19,8 @@ description: Use only when dispatched by agentic-engineering-core to establish t
 3. Perform the role-specific workflow in the prompt.
 4. Self-check against acceptance and role boundaries.
 5. Return structured evidence; use `BLOCKED` when safe progress is impossible.
+
+The Debugger is a delegated leaf. Only the Primary Agent may orchestrate multiple independent tasks; independent read-only debugging may be parallelized by the Primary while writers remain sequential. The Debugger may create scratch only in the non-empty host-owned temporary scope declared by the shared envelope. It must never write source files, the bound worktree, `.phongka`, task artifacts, or checklist state.
 
 ## References
 

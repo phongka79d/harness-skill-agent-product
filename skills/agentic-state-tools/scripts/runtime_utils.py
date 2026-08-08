@@ -217,6 +217,163 @@ def write_json_atomic(path: str | Path, value: Any) -> None:
             os.unlink(temporary)
 
 
+def restore_bytes_atomic(path: str | Path, data: bytes | None) -> None:
+    """Restore one exact prior file value without exposing a partial write."""
+    target = Path(path)
+    if data is None:
+        if target.exists():
+            target.unlink()
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=target.name + ".restore.", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _derived_plan_ids(bundle: dict[str, Any]) -> tuple[list[str], list[str]]:
+    task_ids = [
+        str(item.get("plan_task_id", item["id"])).strip()
+        for item in bundle["tasks"]
+    ]
+    acceptance_ids = [
+        str(item.get("id", "")).strip()
+        if isinstance(item, dict)
+        else str(item).strip()
+        for item in bundle["acceptance"]
+    ]
+    return task_ids, acceptance_ids
+
+
+def validate_plan_binding_documents(
+    manifest: dict[str, Any],
+    review: dict[str, Any],
+    *,
+    expected_decision_hash: str | None = None,
+    require_v5: bool = False,
+) -> dict[str, Any]:
+    """Validate a complete plan/review contract before it binds runtime state."""
+    schema_scripts = Path(__file__).resolve().parents[2] / "agentic-configuration" / "scripts"
+    import sys
+
+    if str(schema_scripts) not in sys.path:
+        sys.path.insert(0, str(schema_scripts))
+    from schema_validation import validate_file  # noqa: PLC0415
+    from review_validation import validate_review_contract  # noqa: PLC0415
+    from validate_planning import validate_plan  # noqa: PLC0415
+
+    schema_root = Path(__file__).resolve().parents[1] / "schemas"
+    if not isinstance(manifest, dict) or not isinstance(review, dict):
+        raise ValueError("plan manifest and review must be JSON objects")
+    validate_file(manifest, schema_root / "plan-manifest.schema.json", "plan manifest")
+    validate_file(review, schema_root / "plan-review.schema.json", "plan review")
+
+    bundle = manifest["bundle"]
+    validate_plan(bundle, require_v5=require_v5)
+    derived_task_ids, derived_acceptance_ids = _derived_plan_ids(bundle)
+    if manifest["plan_task_ids"] != derived_task_ids:
+        raise ValueError("plan manifest task IDs do not match the embedded v5 bundle")
+    if manifest["acceptance_ids"] != derived_acceptance_ids:
+        raise ValueError("plan manifest acceptance IDs do not match the embedded v5 bundle")
+    if sha256_json(bundle) != manifest["plan_bundle_hash"]:
+        raise ValueError("plan manifest bundle hash is stale")
+
+    validate_review_contract(review, "plan")
+    if review["plan_bundle_hash"] != manifest["plan_bundle_hash"]:
+        raise ValueError("plan review is bound to another plan bundle")
+    if review["acceptance_ids"] != manifest["acceptance_ids"]:
+        raise ValueError("plan review acceptance IDs do not match the plan manifest")
+    review_base = {key: value for key, value in review.items() if key != "plan_review_hash"}
+    if sha256_json(review_base) != review["plan_review_hash"]:
+        raise ValueError("plan review hash does not match its content")
+    if review["outcome"] != "PASS":
+        raise ValueError("current plan review must have PASS outcome")
+
+    if expected_decision_hash is not None:
+        if review.get("workflow_decision_hash") != expected_decision_hash:
+            raise ValueError("plan review must be bound to the current workflow decision")
+        manifest_decision_hash = manifest.get("workflow_decision_hash")
+        if (
+            manifest_decision_hash is not None
+            and manifest_decision_hash != expected_decision_hash
+        ):
+            raise ValueError("plan manifest is bound to another workflow decision")
+    return {
+        "required": True,
+        "bound": True,
+        "schema_version": 5,
+        "plan_bundle_hash": manifest["plan_bundle_hash"],
+        "plan_review_hash": review["plan_review_hash"],
+        "plan_task_ids": list(manifest["plan_task_ids"]),
+        "acceptance_ids": list(manifest["acceptance_ids"]),
+    }
+
+
+def load_plan_binding(
+    manifest_path: str | Path,
+    review_path: str | Path,
+    *,
+    expected_decision_hash: str | None = None,
+    require_v5: bool = False,
+) -> dict[str, Any]:
+    """Validate a manifest/review pair and return the persisted plan binding."""
+    manifest = read_json(manifest_path)
+    review = read_json(review_path)
+    return validate_plan_binding_documents(
+        manifest,
+        review,
+        expected_decision_hash=expected_decision_hash,
+        require_v5=require_v5,
+    )
+
+
+def revalidate_plan_binding(
+    project_root: str | Path,
+    binding: dict[str, Any],
+    *,
+    expected_decision_hash: str | None = None,
+    require_v5: bool = False,
+) -> dict[str, Any]:
+    """Re-read persisted manifest/review bytes and compare the recorded binding."""
+    if not isinstance(binding, dict):
+        raise ValueError("plan binding must be an object")
+    if not binding.get("required"):
+        return binding
+    if not binding.get("bound"):
+        raise ValueError("required plan binding is not bound")
+    if binding.get("schema_version") != 5:
+        raise ValueError("required plan binding must use schema version 5")
+    manifest_path = binding.get("manifest_path")
+    review_path = binding.get("review_path")
+    if (
+        manifest_path != ".phongka/plan/manifest.json"
+        or review_path != ".phongka/plan/review.json"
+    ):
+        raise ValueError("required plan binding must reference persisted manifest and review artifacts")
+    project = Path(project_root).resolve()
+    current = load_plan_binding(
+        project / manifest_path,
+        project / review_path,
+        expected_decision_hash=expected_decision_hash,
+        require_v5=require_v5,
+    )
+    for key in (
+        "plan_bundle_hash",
+        "plan_review_hash",
+        "plan_task_ids",
+        "acceptance_ids",
+    ):
+        if current.get(key) != binding.get(key):
+            raise ValueError(f"persisted plan binding changed: {key}")
+    return binding
+
+
 def write_text_atomic(path: str | Path, value: str) -> None:
     """Write a text artifact atomically inside the runtime boundary."""
     if not isinstance(value, str):
@@ -461,6 +618,25 @@ def task_index_diff(root: str | Path, state: dict[str, Any]) -> dict[str, list[s
 
 
 def require_task_index_consistent(root: str | Path, state: dict[str, Any]) -> None:
+    if state.get("execution_depth") == "controlled":
+        binding = state.get("plan_binding")
+        if (
+            not isinstance(binding, dict)
+            or binding.get("required") is not True
+            or binding.get("bound") is not True
+        ):
+            raise ValueError(
+                "controlled runtime requires a bound v5 plan manifest and PASS review"
+            )
+        decision_hash = state.get("workflow_decision_hash")
+        if not isinstance(decision_hash, str) or not decision_hash:
+            raise ValueError("controlled runtime is missing its workflow decision hash")
+        revalidate_plan_binding(
+            Path(root).resolve().parent,
+            binding,
+            expected_decision_hash=decision_hash,
+            require_v5=True,
+        )
     diff = task_index_diff(root, state)
     problems: list[str] = []
     if diff["missing_files"]:

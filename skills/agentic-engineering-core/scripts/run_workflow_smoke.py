@@ -183,7 +183,65 @@ def _init_and_open(py: str, scripts: Path, project: Path, decision_path: Path) -
     approval = "workflow-smoke-approval" if decision["worktree"]["required"] else None
     if decision["worktree"]["required"]:
         _init_git_repo(project)
-    _run([py, str(scripts / "init_runtime.py"), "--project-root", str(project), "--decision", str(decision_path)])
+    init_command = [py, str(scripts / "init_runtime.py"), "--project-root", str(project), "--decision", str(decision_path)]
+    if decision.get("plan_gate", {}).get("required"):
+        plan_bundle = {
+            "schema_version": 5,
+            "review_rubric_id": "plan",
+            "review_rubric_version": 1,
+            "goal": "workflow smoke plan",
+            "scope": ["src/module.txt"],
+            "tasks": [{
+                "id": "T1",
+                "plan_task_id": "T1",
+                "review_rubric_id": "task",
+                "review_rubric_version": 1,
+                "objective": "smoke",
+                "files": ["src/module.txt"],
+                "steps": ["verify"],
+                "dependencies": [],
+                "acceptance": ["A1", "A2"],
+                "verification": ["smoke"],
+                "rollback": "restore",
+            }],
+            "acceptance": [{"id": "A1", "description": "expected result"}, {"id": "A2", "description": "bounded file"}],
+            "acceptance_ids": ["A1", "A2"],
+            "verification": ["smoke"],
+            "plan_task_ids": ["T1"],
+        }
+        plan_input = _write(project / "plan.json", plan_bundle)
+        manifest_path = project / "plan-manifest.json"
+        _run(
+            [
+                py,
+                str(scripts / "create_plan_manifest.py"),
+                "--input",
+                str(plan_input),
+                "--output",
+                str(manifest_path),
+                "--workflow-decision-hash",
+                decision["decision_hash"],
+            ]
+        )
+        plan_rubric = REVIEW_RUBRICS["plan"]
+        review_input = _write(
+            project / "plan-review-input.json",
+            {
+                "review_mode": "plan",
+                "review_rubric_id": plan_rubric["id"],
+                "review_rubric_version": plan_rubric["version"],
+                "outcome": "PASS",
+                "workflow_decision_hash": decision["decision_hash"],
+                "criteria": _criterion_results("plan"),
+            },
+        )
+        review_path = project / "plan-review.json"
+        _run([py, str(scripts / "create_plan_review.py"), "--input", str(review_input), "--manifest", str(manifest_path), "--output", str(review_path)])
+        if decision["worktree"]["required"]:
+            _run(["git", "add", "plan.json", "plan-manifest.json", "plan-review-input.json", "plan-review.json"], cwd=project)
+            _run(["git", "commit", "-m", "approved plan"], cwd=project)
+        init_command.extend(["--plan-manifest", str(manifest_path), "--plan-review", str(review_path)])
+    _run(init_command)
     state = json.loads((project / ".phongka" / "state.json").read_text(encoding="utf-8"))
     if state.get("required_skills") != decision["required_skills"] or state.get("stages") != decision["stages"]:
         raise AssertionError("runtime state did not retain the selected skills and stages")
@@ -201,7 +259,10 @@ def _init_and_open(py: str, scripts: Path, project: Path, decision_path: Path) -
     if wait.get("check_interval_seconds", 0) >= wait.get("timeout_seconds", 0):
         raise AssertionError("runtime settings contain an invalid subagent wait policy")
     task_path = project / ".phongka" / "task-input.json"
-    _write(task_path, _task_payload("IN_PROGRESS", approval))
+    task_payload = _task_payload("IN_PROGRESS", approval)
+    if decision.get("plan_gate", {}).get("required"):
+        task_payload["plan_task_id"] = "T1"
+    _write(task_path, task_payload)
     _run([py, str(scripts / "update_task_state.py"), "--project-root", str(project), "--input", str(task_path)])
     if decision["worktree"]["required"]:
         _run(
@@ -290,6 +351,23 @@ def _claim_payload() -> dict[str, Any]:
         ],
         "verification_status": "PASS",
     }
+
+
+def _claim_payload_for_project(project: Path) -> dict[str, Any]:
+    value = _claim_payload()
+    state_path = project / ".phongka" / "state.json"
+    if state_path.is_file():
+        binding = json.loads(state_path.read_text(encoding="utf-8")).get("plan_binding", {})
+        if isinstance(binding, dict) and binding.get("bound"):
+            value.update(
+                {
+                    "plan_task_id": "T1",
+                    "plan_bundle_hash": binding["plan_bundle_hash"],
+                    "plan_review_hash": binding["plan_review_hash"],
+                    "acceptance_ids": list(binding["acceptance_ids"]),
+                }
+            )
+    return value
 
 
 def _delivery_payload() -> dict[str, Any]:
@@ -445,7 +523,7 @@ def _stateful_delivery_smoke(py: str, scripts: Path, root: Path) -> int:
     _write_and_run(py, scripts / "record_verification_evidence.py", project, "verification.json", _verification_payload(workspace_v2))
     _write(project / "task-complete.json", _task_payload("COMPLETED"))
     _run([py, str(scripts / "update_task_state.py"), "--project-root", str(project), "--input", str(project / "task-complete.json")])
-    _write_and_run(py, scripts / "verify_completion_claim.py", project, "claim.json", _claim_payload())
+    _write_and_run(py, scripts / "verify_completion_claim.py", project, "claim.json", _claim_payload_for_project(project))
     _run([py, str(scripts / "validate_state.py"), "--project-root", str(project)])
     _run(
         [
@@ -551,7 +629,7 @@ def _standalone_delivery_smoke(py: str, scripts: Path, root: Path) -> int:
     _write_and_run(py, scripts / "record_verification_evidence.py", project, "source-verification.json", _verification_payload(workspace))
     _write(project / "source-complete.json", _task_payload("COMPLETED"))
     _run([py, str(scripts / "update_task_state.py"), "--project-root", str(project), "--input", str(project / "source-complete.json")])
-    _write_and_run(py, scripts / "verify_completion_claim.py", project, "source-claim.json", _claim_payload())
+    _write_and_run(py, scripts / "verify_completion_claim.py", project, "source-claim.json", _claim_payload_for_project(project))
 
     delivery_decision_path = project / "delivery-decision-workflow.json"
     delivery_decision = _resolve(
@@ -567,7 +645,7 @@ def _standalone_delivery_smoke(py: str, scripts: Path, root: Path) -> int:
     # Standalone delivery reviews and verifies selected prior tasks without opening a new task.
     _write_and_run(py, scripts / "create_review.py", project, "delivery-review.json", _review_payload(workspace))
     _write_and_run(py, scripts / "record_verification_evidence.py", project, "delivery-verification.json", _verification_payload(workspace))
-    _write_and_run(py, scripts / "verify_completion_claim.py", project, "delivery-claim.json", _claim_payload())
+    _write_and_run(py, scripts / "verify_completion_claim.py", project, "delivery-claim.json", _claim_payload_for_project(project))
     _run([py, str(scripts / "validate_state.py"), "--project-root", str(project)])
     _run(
         [

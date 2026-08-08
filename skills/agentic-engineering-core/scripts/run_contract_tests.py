@@ -82,6 +82,38 @@ def task_payload(
     }
 
 
+def plan_review_payload(
+    scripts: Path,
+    *,
+    decision_hash: str | None = None,
+    evidence_prefix: str = "plan review evidence",
+) -> dict[str, Any]:
+    rubric_path = (
+        scripts.parents[1]
+        / "agentic-independent-reviewer"
+        / "references"
+        / "review-rubrics.json"
+    )
+    rubric = json.loads(rubric_path.read_text(encoding="utf-8"))["rubrics"]["plan"]
+    result: dict[str, Any] = {
+        "review_mode": "plan",
+        "review_rubric_id": rubric["id"],
+        "review_rubric_version": rubric["version"],
+        "outcome": "PASS",
+        "criteria": [
+            {
+                "id": criterion["id"],
+                "status": "PASS",
+                "evidence": f"{evidence_prefix}: {criterion['id']}",
+            }
+            for criterion in rubric["criteria"]
+        ],
+    }
+    if decision_hash is not None:
+        result["workflow_decision_hash"] = decision_hash
+    return result
+
+
 def context_payload(files: list[str]) -> dict[str, Any]:
     return {
         "schema_version": 3,
@@ -101,7 +133,7 @@ def handoff_payload(
     evidence: str = "targeted evidence passed",
 ) -> dict[str, Any]:
     contract = decision["execution_contract"]
-    return {
+    payload = {
         "schema_version": 3,
         "task_id": "TASK-1",
         "status": status,
@@ -123,6 +155,9 @@ def handoff_payload(
             "evidence": evidence,
         },
     }
+    if decision.get("plan_gate", {}).get("required"):
+        payload["execution_receipt"]["plan_task_id"] = "T1"
+    return payload
 
 
 def setup_task(py: str, scripts: Path, project: Path, scope: list[str], *, delivery: bool = False) -> None:
@@ -171,10 +206,72 @@ def setup_controlled_git_task(
     )
     run(["git", "add", "request.json", "decision.json"], cwd=project)
     run(["git", "commit", "-m", "workflow decision"], cwd=project)
-    run([py, str(scripts / "init_runtime.py"), "--project-root", str(project), "--decision", str(decision_path)])
+    plan_bundle = planning(
+        ["src/a.txt"],
+        [
+            {
+                "id": "T1",
+                "plan_task_id": "T1",
+                "review_rubric_id": "task",
+                "review_rubric_version": 1,
+                "objective": "controlled fixture",
+                "files": ["src/a.txt"],
+                "steps": ["verify"],
+                "dependencies": [],
+                "acceptance": ["A1", "A2"],
+                "verification": ["contract"],
+                "rollback": "restore fixture",
+            }
+        ],
+    )
+    plan_bundle["schema_version"] = 5
+    plan_bundle["plan_task_ids"] = ["T1"]
+    plan_bundle["acceptance"] = [
+        {"id": "A1", "description": "first controlled acceptance"},
+        {"id": "A2", "description": "second controlled acceptance"},
+    ]
+    plan_bundle["acceptance_ids"] = ["A1", "A2"]
+    plan_input = write(project / "plan.json", plan_bundle)
+    manifest_path = project / "plan-manifest.json"
+    decision_hash = json.loads(decision_path.read_text(encoding="utf-8"))["decision_hash"]
+    run(
+        [
+            py,
+            str(scripts / "create_plan_manifest.py"),
+            "--input",
+            str(plan_input),
+            "--output",
+            str(manifest_path),
+            "--workflow-decision-hash",
+            decision_hash,
+        ]
+    )
+    review_input = write(
+        project / "plan-review-input.json",
+        plan_review_payload(scripts, decision_hash=decision_hash, evidence_prefix="fixture plan"),
+    )
+    review_path = project / "plan-review.json"
+    run([py, str(scripts / "create_plan_review.py"), "--input", str(review_input), "--manifest", str(manifest_path), "--output", str(review_path)])
+    run(["git", "add", "plan.json", "plan-manifest.json", "plan-review-input.json", "plan-review.json"], cwd=project)
+    run(["git", "commit", "-m", "approved plan"], cwd=project)
+    run(
+        [
+            py,
+            str(scripts / "init_runtime.py"),
+            "--project-root",
+            str(project),
+            "--decision",
+            str(decision_path),
+            "--plan-manifest",
+            str(manifest_path),
+            "--plan-review",
+            str(review_path),
+        ]
+    )
     controlled_task = task_payload("IN_PROGRESS", ["src/a.txt"])
     controlled_task["risk_flags"] = ["security_sensitive"]
     controlled_task["approval_reference"] = "contract-approval"
+    controlled_task["plan_task_id"] = "T1"
     task_input = write(
         project / ".phongka" / "task-input.json",
         controlled_task,
@@ -293,6 +390,23 @@ def claim(ids: list[str]) -> dict[str, Any]:
         "acceptance": [{"id": item, "status": "PASS", "evidence": f"evidence {item}"} for item in ids],
         "verification_status": "PASS",
     }
+
+
+def claim_for_project(project: Path, ids: list[str]) -> dict[str, Any]:
+    value = claim(ids)
+    state_path = project / ".phongka" / "state.json"
+    if state_path.is_file():
+        binding = json.loads(state_path.read_text(encoding="utf-8")).get("plan_binding", {})
+        if isinstance(binding, dict) and binding.get("bound"):
+            value.update(
+                {
+                    "plan_task_id": "T1",
+                    "plan_bundle_hash": binding["plan_bundle_hash"],
+                    "plan_review_hash": binding["plan_review_hash"],
+                    "acceptance_ids": list(binding["acceptance_ids"]),
+                }
+            )
+    return value
 
 
 def planning(scope: list[str], tasks: list[dict[str, Any]]) -> dict[str, Any]:
@@ -755,12 +869,27 @@ def main() -> int:
 
             custom_runtime = root / "custom-config-runtime"
             custom_decision = custom_runtime / "decision.json"
+            custom_request = write(
+                custom_runtime / "request.json",
+                {
+                    "profile": "personal",
+                    "task_route": "feature",
+                    "execution_preference": "standard",
+                    "estimated_files": 1,
+                    "concerns": 1,
+                    "risk_flags": [],
+                    "user_requested_review": False,
+                    "delivery_action": "none",
+                },
+            )
             run(
                 [
                     py,
                     str(scripts / "resolve_workflow.py"),
                     "--config",
                     str(cfg_path),
+                    "--input",
+                    str(custom_request),
                     "--output",
                     str(custom_decision),
                 ]
@@ -1119,6 +1248,504 @@ def main() -> int:
             )
             run([py, str(scripts / "validate_planning.py"), "--input", str(ordered)])
             passed.append("shared_file_requires_dependency_order")
+
+            v5_plan = planning(
+                ["src/a.py"],
+                [plan_task("T1", ["src/a.py"], [], rubrics["task"])],
+            )
+            v5_plan["schema_version"] = 5
+            v5_plan["tasks"][0]["plan_task_id"] = "T1"
+            v5_plan["acceptance"] = [{"id": "AC-01", "description": "works"}]
+            v5_plan["acceptance_ids"] = ["AC-01"]
+            v5_plan["plan_task_ids"] = ["T1"]
+            v5_path = write(root / "v5-plan.json", v5_plan)
+            run([py, str(scripts / "validate_planning.py"), "--input", str(v5_path), "--controlled"])
+            run([py, str(scripts / "validate_planning.py"), "--input", str(ordered), "--controlled"], expect=1)
+            cycle = planning(
+                ["src/a.py"],
+                [
+                    plan_task("T1", ["src/a.py"], ["T2"], rubrics["task"]),
+                    plan_task("T2", ["src/a.py"], ["T1"], rubrics["task"]),
+                ],
+            )
+            run([py, str(scripts / "validate_planning.py"), "--input", str(write(root / "cycle-plan.json", cycle))], expect=1)
+            manifest_path = root / "v5-manifest.json"
+            run([py, str(scripts / "create_plan_manifest.py"), "--input", str(v5_path), "--output", str(manifest_path)])
+            review_input = write(
+                root / "v5-review-input.json",
+                plan_review_payload(scripts, evidence_prefix="v5 fixture"),
+            )
+            review_path = root / "v5-review.json"
+            run([py, str(scripts / "create_plan_review.py"), "--input", str(review_input), "--manifest", str(manifest_path), "--output", str(review_path)])
+            incomplete_plan_review = copy.deepcopy(review_input.read_text(encoding="utf-8"))
+            incomplete_plan_review = json.loads(incomplete_plan_review)
+            incomplete_plan_review["criteria"] = incomplete_plan_review["criteria"][:-1]
+            run(
+                [
+                    py,
+                    str(scripts / "create_plan_review.py"),
+                    "--input",
+                    str(write(root / "incomplete-plan-review.json", incomplete_plan_review)),
+                    "--manifest",
+                    str(manifest_path),
+                    "--output",
+                    str(root / "incomplete-plan-review-output.json"),
+                ],
+                expect=1,
+            )
+            unknown_plan_review = copy.deepcopy(review_input.read_text(encoding="utf-8"))
+            unknown_plan_review = json.loads(unknown_plan_review)
+            unknown_plan_review["criteria"][0]["id"] = "unknown_plan_criterion"
+            run(
+                [
+                    py,
+                    str(scripts / "create_plan_review.py"),
+                    "--input",
+                    str(write(root / "unknown-plan-review.json", unknown_plan_review)),
+                    "--manifest",
+                    str(manifest_path),
+                    "--output",
+                    str(root / "unknown-plan-review-output.json"),
+                ],
+                expect=1,
+            )
+            failed_plan_review = copy.deepcopy(review_input.read_text(encoding="utf-8"))
+            failed_plan_review = json.loads(failed_plan_review)
+            failed_plan_review["criteria"][0]["status"] = "FAIL"
+            run(
+                [
+                    py,
+                    str(scripts / "create_plan_review.py"),
+                    "--input",
+                    str(write(root / "failed-plan-review.json", failed_plan_review)),
+                    "--manifest",
+                    str(manifest_path),
+                    "--output",
+                    str(root / "failed-plan-review-output.json"),
+                ],
+                expect=1,
+            )
+            passed.extend(
+                [
+                    "v5_plan_aggregation_and_hashes",
+                    "raw_v4_controlled_plan_rejected",
+                    "cyclic_plan_rejected",
+                    "canonical_plan_review_requires_complete_rubric",
+                    "unknown_plan_review_criterion_rejected",
+                    "pass_with_failed_plan_review_criterion_rejected",
+                ]
+            )
+
+            semantic_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            semantic_manifest["plan_task_ids"] = ["FORGED"]
+            semantic_manifest_path = write(root / "semantic-manifest.json", semantic_manifest)
+            semantic_acceptance_manifest = json.loads(
+                manifest_path.read_text(encoding="utf-8")
+            )
+            semantic_acceptance_manifest["acceptance_ids"] = ["FORGED-AC"]
+            semantic_acceptance_manifest_path = write(
+                root / "semantic-acceptance-manifest.json",
+                semantic_acceptance_manifest,
+            )
+            mismatched_acceptance_review = json.loads(
+                review_path.read_text(encoding="utf-8")
+            )
+            mismatched_acceptance_review["acceptance_ids"] = ["FORGED-AC"]
+            mismatched_acceptance_review["plan_review_hash"] = sha256_json(
+                {
+                    key: value
+                    for key, value in mismatched_acceptance_review.items()
+                    if key != "plan_review_hash"
+                }
+            )
+            mismatched_acceptance_review_path = write(
+                root / "mismatched-acceptance-review.json",
+                mismatched_acceptance_review,
+            )
+            expected_plan_decision_hash = "a" * 64
+            # The hash-covered canonical review binds the same bundle hash as the
+            # legacy manifest, so an omitted optional manifest affinity cannot
+            # substitute a review decision affinity.
+            matching_review = json.loads(review_path.read_text(encoding="utf-8"))
+            matching_review["workflow_decision_hash"] = expected_plan_decision_hash
+            matching_review["plan_review_hash"] = sha256_json(
+                {
+                    key: value
+                    for key, value in matching_review.items()
+                    if key != "plan_review_hash"
+                }
+            )
+            matching_review_path = write(
+                root / "legacy-manifest-matching-review.json", matching_review
+            )
+            mismatched_review = copy.deepcopy(matching_review)
+            mismatched_review["workflow_decision_hash"] = "b" * 64
+            mismatched_review["plan_review_hash"] = sha256_json(
+                {
+                    key: value
+                    for key, value in mismatched_review.items()
+                    if key != "plan_review_hash"
+                }
+            )
+            mismatched_review_path = write(
+                root / "mismatched-decision-review.json", mismatched_review
+            )
+            mismatched_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            mismatched_manifest["workflow_decision_hash"] = "b" * 64
+            mismatched_manifest_path = write(
+                root / "mismatched-decision-manifest.json", mismatched_manifest
+            )
+            plan_binding_rejection_code = (
+                "import sys; from pathlib import Path; "
+                "project=Path(sys.argv[1]); scripts=Path(sys.argv[2]); sys.path.insert(0,str(scripts)); "
+                "from runtime_utils import load_plan_binding,revalidate_plan_binding; "
+                "manifest=project/'v5-manifest.json'; review=project/'v5-review.json'; "
+                "exec(\"try:\\n load_plan_binding(project/'semantic-manifest.json', review)\\nexcept ValueError:\\n pass\\nelse:\\n raise AssertionError('semantic manifest mismatch accepted')\"); "
+                "exec(\"try:\\n load_plan_binding(project/'semantic-acceptance-manifest.json', review)\\nexcept ValueError:\\n pass\\nelse:\\n raise AssertionError('semantic acceptance mismatch accepted')\"); "
+                "exec(\"try:\\n load_plan_binding(manifest, project/'mismatched-acceptance-review.json')\\nexcept ValueError:\\n pass\\nelse:\\n raise AssertionError('review acceptance mismatch accepted')\"); "
+                "binding=load_plan_binding(manifest, review); "
+                "exec(\"try:\\n revalidate_plan_binding(project, binding)\\nexcept ValueError:\\n pass\\nelse:\\n raise AssertionError('hash-only binding accepted')\"); "
+                "expected='a'*64; "
+                "accepted=load_plan_binding(manifest, project/'legacy-manifest-matching-review.json', expected_decision_hash=expected, require_v5=True); assert accepted['bound']; "
+                "exec(\"try:\\n load_plan_binding(manifest, review, expected_decision_hash=expected, require_v5=True)\\nexcept ValueError as exc:\\n assert 'plan review' in str(exc)\\nelse:\\n raise AssertionError('missing review decision affinity accepted')\"); "
+                "exec(\"try:\\n load_plan_binding(manifest, project/'mismatched-decision-review.json', expected_decision_hash=expected, require_v5=True)\\nexcept ValueError as exc:\\n assert 'plan review' in str(exc)\\nelse:\\n raise AssertionError('mismatched review decision affinity accepted')\"); "
+                "exec(\"try:\\n load_plan_binding(project/'mismatched-decision-manifest.json', project/'legacy-manifest-matching-review.json', expected_decision_hash=expected, require_v5=True)\\nexcept ValueError as exc:\\n assert 'plan manifest' in str(exc)\\nelse:\\n raise AssertionError('mismatched manifest decision affinity accepted')\")"
+            )
+            runtime_python(py, scripts, root, plan_binding_rejection_code, {})
+            passed.extend(
+                [
+                    "semantic_plan_manifest_mismatch_rejected",
+                    "plan_review_acceptance_binding_mismatch_rejected",
+                    "required_hash_only_plan_binding_rejected",
+                    "legacy_manifest_matching_review_decision_affinity_accepted",
+                    "missing_plan_review_decision_affinity_rejected",
+                    "mismatched_plan_review_decision_affinity_rejected",
+                    "present_mismatched_plan_manifest_decision_affinity_rejected",
+                ]
+            )
+
+            legacy_v4_runtime = root / "legacy-v4-runtime"
+            legacy_v4_decision_path = decision(py, scripts, legacy_v4_runtime)
+            legacy_v4_decision_hash = json.loads(
+                legacy_v4_decision_path.read_text(encoding="utf-8")
+            )["decision_hash"]
+            legacy_v4_plan_path = write(
+                legacy_v4_runtime / "legacy-v4-plan.json",
+                json.loads(ordered.read_text(encoding="utf-8")),
+            )
+            legacy_v4_manifest_path = legacy_v4_runtime / "legacy-v4-manifest.json"
+            run(
+                [
+                    py,
+                    str(scripts / "create_plan_manifest.py"),
+                    "--input",
+                    str(legacy_v4_plan_path),
+                    "--output",
+                    str(legacy_v4_manifest_path),
+                    "--workflow-decision-hash",
+                    legacy_v4_decision_hash,
+                    "--allow-v4",
+                ]
+            )
+            legacy_v4_review_path = legacy_v4_runtime / "legacy-v4-review.json"
+            run(
+                [
+                    py,
+                    str(scripts / "create_plan_review.py"),
+                    "--input",
+                    str(
+                        write(
+                            legacy_v4_runtime / "legacy-v4-review-input.json",
+                            plan_review_payload(
+                                scripts,
+                                decision_hash=legacy_v4_decision_hash,
+                                evidence_prefix="legacy v4 fixture",
+                            ),
+                        )
+                    ),
+                    "--manifest",
+                    str(legacy_v4_manifest_path),
+                    "--output",
+                    str(legacy_v4_review_path),
+                ]
+            )
+            run(
+                [
+                    py,
+                    str(scripts / "init_runtime.py"),
+                    "--project-root",
+                    str(legacy_v4_runtime),
+                    "--decision",
+                    str(legacy_v4_decision_path),
+                    "--plan-manifest",
+                    str(legacy_v4_manifest_path),
+                    "--plan-review",
+                    str(legacy_v4_review_path),
+                ]
+            )
+            run(
+                [
+                    py,
+                    str(scripts / "validate_state.py"),
+                    "--project-root",
+                    str(legacy_v4_runtime),
+                ]
+            )
+            passed.append("legacy_v4_plan_binding_allowed_outside_controlled_gate")
+            legacy_v4_gate_code = (
+                "import sys; from pathlib import Path; "
+                "project=Path(sys.argv[1]); scripts=Path(sys.argv[2]); sys.path.insert(0,str(scripts)); "
+                "from runtime_utils import load_plan_binding; "
+                "exec(\"try:\\n load_plan_binding(project/'legacy-v4-manifest.json', project/'legacy-v4-review.json', require_v5=True)\\nexcept ValueError:\\n pass\\nelse:\\n raise AssertionError('v4 plan binding accepted by a v5 gate')\")"
+            )
+            runtime_python(py, scripts, legacy_v4_runtime, legacy_v4_gate_code, {})
+            passed.append("legacy_v4_plan_binding_rejected_when_v5_required")
+
+            legacy_controlled_request = {
+                "profile": "personal",
+                "task_route": "feature",
+                "execution_preference": "controlled",
+                "estimated_files": 1,
+                "concerns": 1,
+                "risk_flags": ["security_sensitive"],
+                "user_requested_review": False,
+                "delivery_action": "none",
+            }
+            legacy_controlled_request_path = write(
+                root / "legacy-controlled-request.json", legacy_controlled_request
+            )
+            legacy_current_path = root / "legacy-controlled-current.json"
+            run(
+                [
+                    py,
+                    str(scripts / "resolve_workflow.py"),
+                    "--input",
+                    str(legacy_controlled_request_path),
+                    "--output",
+                    str(legacy_current_path),
+                ]
+            )
+            legacy_controlled = json.loads(legacy_current_path.read_text(encoding="utf-8"))
+            legacy_controlled.pop("plan_gate")
+            for key in ("plan_bundle_hash", "plan_review_hash", "plan_task_ids"):
+                legacy_controlled["request_contract"].pop(key)
+            legacy_controlled["decision_hash"] = sha256_json(
+                {
+                    key: value
+                    for key, value in legacy_controlled.items()
+                    if key != "decision_hash"
+                }
+            )
+            legacy_controlled_code = (
+                "import json,sys; from pathlib import Path; "
+                "scripts=Path(sys.argv[2]); sys.path.insert(0,str(scripts)); import init_runtime; "
+                "decision=json.loads(sys.argv[3]); "
+                "exec(\"try:\\n init_runtime._decision_binding(decision)\\nexcept ValueError:\\n pass\\nelse:\\n raise AssertionError('legacy controlled decision without plan gate accepted')\")"
+            )
+            runtime_python(
+                py,
+                scripts,
+                root,
+                legacy_controlled_code,
+                legacy_controlled,
+            )
+            passed.append("legacy_controlled_decision_without_plan_gate_rejected")
+
+            unbound_controlled = root / "unbound-controlled-state"
+            setup_controlled_git_task(py, scripts, unbound_controlled, prepare=False)
+            unbound_state_path = unbound_controlled / ".phongka" / "state.json"
+            unbound_state = json.loads(unbound_state_path.read_text(encoding="utf-8"))
+            unbound_state.pop("plan_binding")
+            write(unbound_state_path, unbound_state)
+            run(
+                [
+                    py,
+                    str(scripts / "validate_state.py"),
+                    "--project-root",
+                    str(unbound_controlled),
+                ],
+                expect=1,
+            )
+            passed.append("controlled_state_without_plan_binding_rejected")
+
+            rejected_rebind = root / "rejected-rebind-plan-artifacts"
+            setup_controlled_git_task(py, scripts, rejected_rebind, prepare=False)
+            persisted_manifest = rejected_rebind / ".phongka" / "plan" / "manifest.json"
+            persisted_review = rejected_rebind / ".phongka" / "plan" / "review.json"
+            persisted_manifest_before = persisted_manifest.read_bytes()
+            persisted_review_before = persisted_review.read_bytes()
+            rebind_request = {
+                "profile": "personal",
+                "task_route": "feature",
+                "execution_preference": "standard",
+                "estimated_files": 1,
+                "concerns": 1,
+                "risk_flags": [],
+                "user_requested_review": False,
+                "delivery_action": "none",
+            }
+            rebind_decision_path = rejected_rebind / "rebind-decision.json"
+            run(
+                [
+                    py,
+                    str(scripts / "resolve_workflow.py"),
+                    "--input",
+                    str(write(rejected_rebind / "rebind-request.json", rebind_request)),
+                    "--output",
+                    str(rebind_decision_path),
+                ]
+            )
+            rebind_decision_hash = json.loads(
+                rebind_decision_path.read_text(encoding="utf-8")
+            )["decision_hash"]
+            rebind_manifest_path = rejected_rebind / "rebind-manifest.json"
+            run(
+                [
+                    py,
+                    str(scripts / "create_plan_manifest.py"),
+                    "--input",
+                    str(rejected_rebind / "plan.json"),
+                    "--output",
+                    str(rebind_manifest_path),
+                    "--workflow-decision-hash",
+                    rebind_decision_hash,
+                ]
+            )
+            rebind_review_path = rejected_rebind / "rebind-review.json"
+            run(
+                [
+                    py,
+                    str(scripts / "create_plan_review.py"),
+                    "--input",
+                    str(
+                        write(
+                            rejected_rebind / "rebind-review-input.json",
+                            plan_review_payload(
+                                scripts,
+                                decision_hash=rebind_decision_hash,
+                                evidence_prefix="rebind fixture",
+                            ),
+                        )
+                    ),
+                    "--manifest",
+                    str(rebind_manifest_path),
+                    "--output",
+                    str(rebind_review_path),
+                ]
+            )
+            run(
+                [
+                    py,
+                    str(scripts / "init_runtime.py"),
+                    "--project-root",
+                    str(rejected_rebind),
+                    "--decision",
+                    str(rebind_decision_path),
+                    "--plan-manifest",
+                    str(rebind_manifest_path),
+                    "--plan-review",
+                    str(rebind_review_path),
+                ],
+                expect=1,
+            )
+            if (
+                persisted_manifest.read_bytes() != persisted_manifest_before
+                or persisted_review.read_bytes() != persisted_review_before
+            ):
+                raise AssertionError("rejected rebind overwrote persisted plan artifacts")
+            passed.append("rejected_rebind_preserves_plan_artifact_bytes")
+
+            plan_transaction = root / "plan-transaction-rollback"
+            transaction_decision_path = setup_controlled_git_task(
+                py, scripts, plan_transaction, prepare=False
+            )
+            transaction_decision_hash = json.loads(
+                transaction_decision_path.read_text(encoding="utf-8")
+            )["decision_hash"]
+            transaction_manifest_path = plan_transaction / "transaction-manifest.json"
+            run(
+                [
+                    py,
+                    str(scripts / "create_plan_manifest.py"),
+                    "--input",
+                    str(plan_transaction / "plan.json"),
+                    "--output",
+                    str(transaction_manifest_path),
+                    "--workflow-decision-hash",
+                    transaction_decision_hash,
+                ]
+            )
+            transaction_review_path = plan_transaction / "transaction-review.json"
+            run(
+                [
+                    py,
+                    str(scripts / "create_plan_review.py"),
+                    "--input",
+                    str(
+                        write(
+                            plan_transaction / "transaction-review-input.json",
+                            plan_review_payload(
+                                scripts,
+                                decision_hash=transaction_decision_hash,
+                                evidence_prefix="transaction fixture",
+                            ),
+                        )
+                    ),
+                    "--manifest",
+                    str(transaction_manifest_path),
+                    "--output",
+                    str(transaction_review_path),
+                ]
+            )
+            plan_transaction_code = (
+                "import json,sys; from pathlib import Path; "
+                "project=Path(sys.argv[1]); scripts=Path(sys.argv[2]); payload=json.loads(sys.argv[3]); "
+                "sys.path.insert(0,str(scripts)); import init_runtime; "
+                "targets=[project/'.phongka'/'plan'/'manifest.json',project/'.phongka'/'plan'/'review.json',project/'.phongka'/'state.json']; "
+                "before={str(path):path.read_bytes() for path in targets}; original=init_runtime.write_json_atomic; calls={'count':0}; "
+                "exec(\"def fail(path,value):\\n calls['count']+=1\\n if calls['count']==2: raise OSError('injected second write failure')\\n return original(path,value)\"); "
+                "init_runtime.write_json_atomic=fail; sys.argv=['init_runtime.py','--project-root',str(project),'--decision',payload['decision'],'--plan-manifest',payload['manifest'],'--plan-review',payload['review']]; "
+                "rc=init_runtime.main(); assert rc==1 and all(path.read_bytes()==before[str(path)] for path in targets)"
+            )
+            runtime_python(
+                py,
+                scripts,
+                plan_transaction,
+                plan_transaction_code,
+                {
+                    "decision": str(transaction_decision_path),
+                    "manifest": str(transaction_manifest_path),
+                    "review": str(transaction_review_path),
+                },
+            )
+            passed.append("plan_binding_second_write_failure_rolls_back_exact_bytes")
+
+            bad_stage = handoff_payload(handoff_decision)
+            bad_stage["execution_receipt"]["stage"] = "verify"
+            run([py, str(scripts / "create_handoff.py"), "--project-root", str(handoff_project), "--input", str(write(handoff_project / "bad-stage.json", bad_stage)), "--decision", str(handoff_decision_path)], expect=1)
+            bad_limit = handoff_payload(handoff_decision)
+            bad_limit["execution_receipt"]["max_repair_rounds"] += 1
+            run([py, str(scripts / "create_handoff.py"), "--project-root", str(handoff_project), "--input", str(write(handoff_project / "bad-limit.json", bad_limit)), "--decision", str(handoff_decision_path)], expect=1)
+            passed.extend(["forged_receipt_stage_rejected", "repair_limit_mismatch_rejected"])
+
+            host_valid = write(
+                root / "host-capabilities.json",
+                {
+                    "schema_version": 1,
+                    "attested_at": "2026-01-01T00:00:00Z",
+                    "skills_exposed": True,
+                    "core_loaded": True,
+                    "resolver_available": True,
+                    "verification_gate": True,
+                    "subagent_wait_enforced": True,
+                    "tool_isolation_attested": True,
+                },
+            )
+            run([py, str(scripts / "validate_host_capabilities.py"), "--input", str(host_valid)])
+            host_false = json.loads(host_valid.read_text(encoding="utf-8"))
+            host_false["tool_isolation_attested"] = False
+            run([py, str(scripts / "validate_host_capabilities.py"), "--input", str(write(root / "host-capabilities-false.json", host_false))], expect=1)
+            passed.append("host_attestation_pass_and_fail_closed")
 
             missing_task_rubric = planning(
                 ["src/a.py"],
@@ -1518,6 +2145,102 @@ def main() -> int:
             run([py, str(scripts / "update_task_state.py"), "--project-root", str(integrity), "--input", str(write(integrity / "complete.json", task_payload("COMPLETED", ["src/a.txt"])))])
             run([py, str(scripts / "verify_completion_claim.py"), "--project-root", str(integrity), "--input", str(write(integrity / "claim.json", claim(["A1", "A2"])))])
             persisted = integrity / ".phongka" / "artifacts" / "TASK-1" / "completion-claim.json"
+            gate_persisted = integrity / ".phongka" / "artifacts" / "TASK-1" / "completion-gate.json"
+            claim_before_failure = persisted.read_bytes()
+            gate_before_failure = gate_persisted.read_bytes()
+            failed_claim = claim(["A1", "A2"])
+            failed_claim["acceptance"][0]["status"] = "FAIL"
+            failed_claim["verification_status"] = "FAIL"
+            run([py, str(scripts / "verify_completion_claim.py"), "--project-root", str(integrity), "--input", str(write(integrity / "failed-claim.json", failed_claim))], expect=1)
+            if persisted.read_bytes() != claim_before_failure or gate_persisted.read_bytes() != gate_before_failure:
+                raise AssertionError("failed completion claim deleted or changed valid artifacts")
+            passed.append("failed_claim_preserves_valid_artifacts")
+            claim_transaction_code = (
+                "import sys; from pathlib import Path; "
+                "project=Path(sys.argv[1]); scripts=Path(sys.argv[2]); sys.path.insert(0,str(scripts)); "
+                "import verify_completion_claim; "
+                "claim_path=project/'claim.json'; claim_target=project/'.phongka'/'artifacts'/'TASK-1'/'completion-claim.json'; gate_target=project/'.phongka'/'artifacts'/'TASK-1'/'completion-gate.json'; "
+                "claim_before=claim_target.read_bytes(); gate_before=gate_target.read_bytes(); original=verify_completion_claim.write_json_atomic; calls={'count':0}; "
+                "exec(\"def fail(path,value):\\n calls['count']+=1\\n if calls['count']==2: raise OSError('injected second write failure')\\n return original(path,value)\"); "
+                "verify_completion_claim.write_json_atomic=fail; sys.argv=['verify_completion_claim.py','--project-root',str(project),'--input',str(claim_path)]; "
+                "rc=verify_completion_claim.main(); assert rc==1 and claim_target.read_bytes()==claim_before and gate_target.read_bytes()==gate_before"
+            )
+            runtime_python(py, scripts, integrity, claim_transaction_code, {})
+            passed.append("completion_claim_second_write_failure_rolls_back_exact_bytes")
+            absent_claim_transaction = root / "claim-transaction-absent"
+            setup_task(py, scripts, absent_claim_transaction, ["src/a.txt"])
+            absent_claim_workspace = workspace(
+                py, scripts, absent_claim_transaction, ["src/a.txt"]
+            )
+            run(
+                [
+                    py,
+                    str(scripts / "record_verification_evidence.py"),
+                    "--project-root",
+                    str(absent_claim_transaction),
+                    "--input",
+                    str(
+                        write(
+                            absent_claim_transaction / "verification.json",
+                            verification(absent_claim_workspace),
+                        )
+                    ),
+                ]
+            )
+            run(
+                [
+                    py,
+                    str(scripts / "update_task_state.py"),
+                    "--project-root",
+                    str(absent_claim_transaction),
+                    "--input",
+                    str(
+                        write(
+                            absent_claim_transaction / "complete.json",
+                            task_payload("COMPLETED", ["src/a.txt"]),
+                        )
+                    ),
+                ]
+            )
+            write(
+                absent_claim_transaction / "claim.json",
+                claim(["A1", "A2"]),
+            )
+            absent_claim_transaction_code = (
+                "import sys; from pathlib import Path; "
+                "project=Path(sys.argv[1]); scripts=Path(sys.argv[2]); sys.path.insert(0,str(scripts)); "
+                "import verify_completion_claim; "
+                "claim_target=project/'.phongka'/'artifacts'/'TASK-1'/'completion-claim.json'; gate_target=project/'.phongka'/'artifacts'/'TASK-1'/'completion-gate.json'; "
+                "assert not claim_target.exists() and not gate_target.exists(); original=verify_completion_claim.write_json_atomic; calls={'count':0}; "
+                "exec(\"def fail(path,value):\\n calls['count']+=1\\n if calls['count']==2: raise OSError('injected second write failure')\\n return original(path,value)\"); "
+                "verify_completion_claim.write_json_atomic=fail; sys.argv=['verify_completion_claim.py','--project-root',str(project),'--input',str(project/'claim.json')]; "
+                "rc=verify_completion_claim.main(); assert rc==1 and not claim_target.exists() and not gate_target.exists()"
+            )
+            runtime_python(
+                py,
+                scripts,
+                absent_claim_transaction,
+                absent_claim_transaction_code,
+                {},
+            )
+            passed.append("completion_claim_second_write_failure_restores_absent_artifacts")
+            rollback_project = root / "state-rollback"
+            setup_task(py, scripts, rollback_project, ["src/a.txt"])
+            rollback_payload = task_payload("IN_PROGRESS", ["src/a.txt"])
+            rollback_payload["summary"] = "changed metadata"
+            rollback_code = (
+                "import json,sys; from pathlib import Path; "
+                "project=Path(sys.argv[1]); scripts=Path(sys.argv[2]); payload=json.loads(sys.argv[3]); "
+                "sys.path.insert(0,str(scripts)); import update_task_state; "
+                "input_path=project/'rollback-input.json'; input_path.write_text(json.dumps(payload),encoding='utf-8'); "
+                "task_path=project/'.phongka'/'tasks'/(payload['task_id']+'.json'); state_path=project/'.phongka'/'state.json'; "
+                "task_before=task_path.read_bytes(); state_before=state_path.read_bytes(); original=update_task_state.write_json_atomic; calls={'n':0}; "
+                "exec(\"def fail(path,value):\\n calls['n']+=1\\n if calls['n']==2: raise OSError('injected second write failure')\\n return original(path,value)\"); "
+                "update_task_state.write_json_atomic=fail; sys.argv=['update_task_state.py','--project-root',str(project),'--input',str(input_path)]; "
+                "rc=update_task_state.main(); assert rc==1 and task_path.read_bytes()==task_before and state_path.read_bytes()==state_before"
+            )
+            runtime_python(py, scripts, rollback_project, rollback_code, rollback_payload)
+            passed.append("state_write_failure_rolls_back_exact_bytes")
             tampered = json.loads(persisted.read_text())
             tampered["claim"] = "tampered"
             write(persisted, tampered)
@@ -1652,7 +2375,7 @@ def main() -> int:
             delivery_complete = task_payload("COMPLETED", ["src/a.txt"])
             delivery_complete["risk_flags"] = ["security_sensitive"]
             run([py, str(scripts / "update_task_state.py"), "--project-root", str(delivery_blocked), "--input", str(write(delivery_blocked / "complete.json", delivery_complete))])
-            run([py, str(scripts / "verify_completion_claim.py"), "--project-root", str(delivery_blocked), "--input", str(write(delivery_blocked / "claim.json", claim(["A1", "A2"])))])
+            run([py, str(scripts / "verify_completion_claim.py"), "--project-root", str(delivery_blocked), "--input", str(write(delivery_blocked / "claim.json", claim_for_project(delivery_blocked, ["A1", "A2"])))])
             blocked_delivery = {
                 "schema_version": 4,
                 "task_ids": ["TASK-1"],

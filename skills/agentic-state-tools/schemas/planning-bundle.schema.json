@@ -14,9 +14,7 @@
   "properties": {
     "schema_version": {
       "type": "integer",
-      "enum": [
-        4
-      ]
+      "enum": [4, 5]
     },
     "review_rubric_id": {
       "type": "string",
@@ -62,6 +60,12 @@
           "id": {
             "type": "string",
             "minLength": 1
+          },
+          "plan_task_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
           },
           "review_rubric_id": {
             "type": "string",
@@ -133,8 +137,7 @@
       "type": "array",
       "minItems": 1,
       "items": {
-        "type": "string",
-        "minLength": 1
+        "type": ["string", "object"]
       },
       "uniqueItems": true
     },
@@ -146,6 +149,34 @@
         "minLength": 1
       },
       "uniqueItems": true
+    },
+    "plan_bundle_hash": {
+      "type": "string",
+      "pattern": "[0-9a-f]{64}"
+    },
+    "plan_review_hash": {
+      "type": "string",
+      "pattern": "[0-9a-f]{64}"
+    },
+    "plan_task_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+      }
+    },
+    "acceptance_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "[A-Za-z0-9][A-Za-z0-9._:-]{0,127}"
+      }
     }
   },
   "additionalProperties": false

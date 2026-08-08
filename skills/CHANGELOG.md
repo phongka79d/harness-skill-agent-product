@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Hardened delegated-role contracts: roles are non-orchestrating, non-state-mutating leaves; only the Primary may orchestrate multiple independent tasks, read-only work may parallelize, and writers remain sequential. Added the external `HOST-0` fail-closed attestation boundary, `open_task`/worktree identity mapping, Core-only public entrypoint, declared host-owned debugger scratch scope, and exact universal handoff fields.
 - Added the package-local `i-have-adhd` companion skill and config-backed loading immediately after core for every resolved workflow, with generic package validation and route/state ordering coverage.
 - Made `agentic-engineering-core` the sole explicit workflow entrypoint for host slash-list selection, `$agentic-engineering-core`, `/agentic-engineering-core` prompt text, implicit repository work, and continuation of the current active `.phongka` workflow/task.
 - Added explicit Primary ownership, automatic route/depth resolution, ordered `required_skills` loading, host-truth activation guidance, implicit invocation metadata, and regression validation for the entrypoint contract.

@@ -23,11 +23,11 @@ flowchart TD
 
 Stages may be compressed, but they remain ordered. Debugging precedes repair. A material edit after review or verification invalidates that evidence. The built-in focused, standard, and controlled depths initialize the project-local `.phongka` runtime by default; a route with an explicit `state_mode: off` remains stateless. Recovery inspects existing state without rebinding; standalone delivery rebinds only an idle runtime and never opens a delivery task.
 
-`agentic-engineering-core` is the sole explicit workflow entrypoint. A host may select it through a native selector, host slash list, `$agentic-engineering-core`, prompt text beginning `/agentic-engineering-core`, or eligible implicit repository work; these are optional activation examples, never prerequisites. The receiving agent remains the sole Primary. The Primary classifies and resolves route/depth, loads the returned `required_skills` in order—core, configured required companions, state when required, then route skills—and owns the terminal report; required companions, including the shared `i-have-adhd` companion, are attached to the Primary and every delegated role prompt/handoff. They shape Primary user-facing output and each role agent's own commentary, handoff, and report, while remaining output guidance only and never becoming stages, agents, owners, or the Primary role. Follow-up steering is limited to the current active `.phongka` workflow/task and is not whole-chat persistence. The provider-neutral host contract and optional provider syntax examples are defined in [host-bootstrap.md](agentic-engineering-core/references/host-bootstrap.md).
+`agentic-engineering-core` is the sole public workflow entrypoint. A host may select it through a native selector, host slash list, `$agentic-engineering-core`, prompt text beginning `/agentic-engineering-core`, or eligible implicit repository work; these are optional activation examples, never prerequisites. Role skills are internal dispatch targets and cannot be invoked as alternate public entrypoints without Core routing and the shared envelope. The receiving agent remains the sole Primary. The Primary classifies and resolves route/depth, loads the returned `required_skills` in order—core, configured required companions, state when required, then route skills—and owns the terminal report; required companions, including the shared `i-have-adhd` companion, are attached to the Primary and every delegated role prompt/handoff. They shape Primary user-facing output and each role agent's own commentary, handoff, and report, while remaining output guidance only and never becoming stages, agents, owners, or the Primary role. Follow-up steering is limited to the current active `.phongka` workflow/task and is not whole-chat persistence. The provider-neutral host contract and optional provider syntax examples are defined in [host-bootstrap.md](agentic-engineering-core/references/host-bootstrap.md).
 
 ## Host contract
 
-At the project boundary, the host exposes `./skills`, loads the relevant `SKILL.md` and prompts, composes the shared envelope plus the selected role prompt, executes ordinary Python CLI/scripts, preserves the universal return fields, and enforces subagent waiting. `.codex-input.json` is not a package contract: it is neither required nor read/written/created by package scripts. Host scratch remains host-owned. Universal handoffs retain `STATUS:`, `SUMMARY:`, `FILES_READ:`, `FILES_CHANGED:`, `EVIDENCE:`, `FINDINGS_OR_IMPLEMENTATION:`, `RISKS:`, `OPEN_QUESTIONS:`, and `NEXT_STEP:`.
+At the project boundary, the host exposes `./skills`, loads the relevant `SKILL.md` and prompts, composes the shared envelope plus the selected role prompt, executes ordinary Python CLI/scripts, preserves the universal return fields, and enforces subagent waiting. `HOST-0` is an external attestation of those capabilities and of `open_task` plus controlled worktree mapping; if it is missing or contradictory, dispatch and source editing fail closed. `.codex-input.json` is not a package contract: it is neither required nor read/written/created by package scripts. Host scratch remains host-owned. Universal handoffs retain `STATUS:`, `SUMMARY:`, `FILES_READ:`, `FILES_CHANGED:`, `EVIDENCE:`, `FINDINGS_OR_IMPLEMENTATION:`, `RISKS:`, `OPEN_QUESTIONS:`, and `NEXT_STEP:`.
 
 ## Subagent allocation
 
@@ -37,7 +37,7 @@ At the project boundary, the host exposes `./skills`, loads the relevant `SKILL.
 | standard | 2 | 4 | 1 | 2 |
 | controlled | 3 | 6 | 1 | 3 |
 
-The Primary Agent is not counted. Limits are ceilings. Read-only roles may run concurrently. The default single-active-task runtime permits one writer at a time.
+The Primary Agent is not counted. Limits are ceilings. Only the Primary Agent may orchestrate multiple independent tasks, including unrelated subagent tasks. Read-only roles may run concurrently; the default single-active-task runtime permits one writer at a time. Delegated roles are leaves: they cannot spawn/subdelegate or mutate `.phongka` state.
 
 ## Dispatchable roles
 
@@ -57,7 +57,7 @@ Every role prompt is stored under its owning skill's `prompts/` directory and is
 
 ## Runtime
 
-The project-local `.phongka` runtime is the default state boundary for resolved required workflows; an explicit `state_mode: off` route does not create it.
+The project-local `.phongka` runtime is the default state boundary for resolved required workflows; an explicit `state_mode: off` route does not create it. Runtime state and artifacts are Primary Agent/host-owned; roles return evidence and never write them. `open_task` runs after `init_runtime` and binds the task ID before `prepare_worktree` maps the same ID to the deterministic path/branch when required.
 
 ```text
 project/.phongka/

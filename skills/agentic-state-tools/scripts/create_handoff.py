@@ -36,6 +36,20 @@ def _validate_receipt(
     task = ensure_task_binding(project_root, payload["task_id"])
     if receipt["task_id"] != payload["task_id"] or task["task_id"] != payload["task_id"]:
         raise ValueError("execution receipt task_id does not match the handoff task")
+    stages = task.get("stages")
+    if decision_path:
+        stages = read_json(decision_path).get("stages")
+    if not isinstance(stages, list):
+        stages = []
+    owners = {str(item.get("id")): str(item.get("owner")) for item in stages if isinstance(item, dict)}
+    expected_owner = owners.get(str(receipt.get("stage")))
+    if expected_owner is None:
+        raise ValueError("execution receipt stage is not present in the resolved workflow")
+    if receipt.get("role") != expected_owner:
+        raise ValueError("execution receipt role does not own the recorded stage")
+    plan_binding = task.get("plan_task_id")
+    if plan_binding is not None and receipt.get("plan_task_id") != plan_binding:
+        raise ValueError("execution receipt plan_task_id does not match the task")
     if receipt["outcome"] == "BLOCKED" and payload["status"] != "BLOCKED":
         raise ValueError("BLOCKED outcome requires a BLOCKED handoff")
     if receipt["status"] == "BLOCKED" and receipt["outcome"] != "BLOCKED":
@@ -64,9 +78,14 @@ def _validate_receipt(
     if task["workflow_decision_hash"] != decision["decision_hash"]:
         raise ValueError("handoff decision does not match the active task")
     contract = decision["execution_contract"]
+    depth = decision["execution_depth"]
+    workflow_limit = config["workflow"][f"{depth}_max_repair_cycles"]
+    policy_limit = config["subagent_policy"]["depths"][depth]["max_repair_rounds"]
+    if workflow_limit != policy_limit:
+        raise ValueError("repair limit sources diverge in central configuration")
     if receipt["max_attempts"] != contract["dispatch"]["max_total"]:
         raise ValueError("receipt max_attempts does not match the dispatch contract")
-    if receipt["max_repair_rounds"] != contract["repair"]["max_repair_rounds"]:
+    if receipt["max_repair_rounds"] != contract["repair"]["max_repair_rounds"] or receipt["max_repair_rounds"] != workflow_limit:
         raise ValueError("receipt max_repair_rounds does not match the repair contract")
     fallback_values = contract["receipt"]["fallback_values"]
     if receipt["outcome"] not in fallback_values:

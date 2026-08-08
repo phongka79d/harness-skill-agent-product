@@ -26,6 +26,8 @@ EXAMPLE_SCHEMAS = {
     "agentic-state-tools/examples/verification.example.json": "agentic-state-tools/schemas/verification-evidence.schema.json",
     "agentic-state-tools/examples/workflow-decision.example.json": "agentic-state-tools/schemas/workflow-decision.schema.json",
     "agentic-state-tools/examples/workflow-request.example.json": "agentic-state-tools/schemas/workflow-request.schema.json",
+    "agentic-state-tools/examples/plan-manifest.example.json": "agentic-state-tools/schemas/plan-manifest.schema.json",
+    "agentic-state-tools/examples/plan-review.example.json": "agentic-state-tools/schemas/plan-review.schema.json",
     "agentic-systematic-debugging/examples/debug-investigation.example.json": "agentic-state-tools/schemas/debug-investigation.schema.json",
     "agentic-verification-before-completion/examples/completion-claim.example.json": "agentic-state-tools/schemas/completion-claim.schema.json",
 }
@@ -60,7 +62,7 @@ def main() -> int:
                 expected_hash = sha256_json({key: item for key, item in value.items() if key != "decision_hash"})
                 if value["decision_hash"] != expected_hash:
                     raise ValueError(f"{example_rel}: decision_hash does not match content")
-            if example_rel.endswith(("review.example.json", "batch-review.example.json")):
+            if example_rel.endswith(("agentic-state-tools/examples/review.example.json", "agentic-state-tools/examples/batch-review.example.json")):
                 validate_review_outcome(value["outcome"], value["findings"])
             if example_rel.endswith("planning-bundle.example.json"):
                 graph = _dependency_graph(value["tasks"])

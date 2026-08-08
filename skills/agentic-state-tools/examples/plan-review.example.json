@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "review_mode": "plan",
+  "review_rubric_id": "plan",
+  "review_rubric_version": 1,
+  "outcome": "PASS",
+  "plan_bundle_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "plan_review_hash": "4fa12defe10078e2758fd9e0940504c375443d7d13284e9e288f25d703be72dc",
+  "acceptance_ids": ["AC-01"],
+  "criteria": [
+    {"id": "feasibility", "status": "PASS", "evidence": "The bounded plan is executable with the available scripts."},
+    {"id": "scope_file_boundaries", "status": "PASS", "evidence": "The example has one explicit repository-relative file."},
+    {"id": "dependency_order", "status": "PASS", "evidence": "The single task has no dependencies."},
+    {"id": "acceptance_verification", "status": "PASS", "evidence": "The acceptance ID and verification command are explicit."},
+    {"id": "risk_approval_yagni", "status": "PASS", "evidence": "Rollback and scope limits are declared without speculative work."}
+  ],
+  "reviewed_at": "2026-01-01T00:00:00Z"
+}

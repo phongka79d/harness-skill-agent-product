@@ -16,6 +16,8 @@ from runtime_utils import (  # noqa: E402
     refresh_checklist,
     require_scope_coverage,
     bound_worktree_identity,
+    runtime_root,
+    revalidate_plan_binding,
     utc_now,
     validate_task_id,
     verify_workspace_snapshot,
@@ -30,6 +32,7 @@ CALLER_FIELDS = {
     "checks",
     "workspace",
     "workspace_summary",
+    "plan_task_id",
 }
 VERIFYABLE = {"IN_PROGRESS", "COMPLETED", "ACCEPTED"}
 
@@ -62,6 +65,21 @@ def main() -> int:
         result["workflow_decision_hash"] = task["workflow_decision_hash"]
         result["recorded_at"] = utc_now()
 
+        state = read_json(runtime_root(args.project_root) / "state.json")
+        plan_binding = state.get("plan_binding", {})
+        if isinstance(plan_binding, dict) and plan_binding.get("required"):
+            revalidate_plan_binding(args.project_root, plan_binding, expected_decision_hash=task["workflow_decision_hash"])
+            if not plan_binding.get("bound"):
+                raise ValueError("verification requires a current PASS plan review")
+            if task.get("plan_task_id") not in plan_binding.get("plan_task_ids", []):
+                raise ValueError("task is not bound to an approved plan_task_id")
+            if result.get("plan_task_id") not in {None, task["plan_task_id"]}:
+                raise ValueError("verification plan_task_id does not match the task")
+            result["plan_task_id"] = task["plan_task_id"]
+            result["plan_bundle_hash"] = task.get("plan_bundle_hash")
+            result["plan_review_hash"] = task.get("plan_review_hash")
+            result["acceptance_ids"] = list(plan_binding.get("acceptance_ids", []))
+
         validate_file(
             result,
             HERE.parents[1] / "schemas" / "verification-evidence.schema.json",
@@ -77,6 +95,9 @@ def main() -> int:
             names.append(name)
         if len(names) != len(set(names)):
             raise ValueError("verification check names must be unique acceptance IDs")
+        if isinstance(plan_binding, dict) and plan_binding.get("required"):
+            if set(names) != set(plan_binding.get("acceptance_ids", [])):
+                raise ValueError("verification checks must exactly match approved plan acceptance IDs")
         statuses = {str(item.get("status", "")).upper() for item in checks}
         if result["status"] == "PASS" and statuses != {"PASS"}:
             raise ValueError("PASS requires every recorded check to pass")
