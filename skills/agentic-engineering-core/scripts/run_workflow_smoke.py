@@ -120,6 +120,28 @@ def _init_git_repo(project: Path) -> None:
     _run(["git", "add", "."], cwd=project)
     _run(["git", "commit", "-m", "initial"], cwd=project)
 
+def _plan_docs_fixture(project: Path) -> Path:
+    root = project / "2026-08-09-workflow-smoke"
+    plan_root = root / "plans" / "Plan-1"
+    batches = plan_root / "batches"
+    batches.mkdir(parents=True, exist_ok=True)
+    (root / "MasterPlan.md").write_text(
+        "# Workflow Smoke Plan\n\n- [Plan 1](plans/Plan-1/Plan.md)\n",
+        encoding="utf-8",
+    )
+    (plan_root / "Plan.md").write_text(
+        "# Plan 1\n\n- [Batch 1](batches/Batch-1.md)\n",
+        encoding="utf-8",
+    )
+    (batches / "Batch-1.md").write_text(
+        "# Batch 1\n\n"
+        "### Task T1: Smoke task\n\n"
+        "**Acceptance:** A1: expected result; A2: bounded file\n\n"
+        "- [ ] **Step 1: Run the smoke path**\n",
+        encoding="utf-8",
+    )
+    return root
+
 
 def _active_workspace_path(project: Path, relative: str) -> Path:
     state = json.loads((project / ".phongka" / "state.json").read_text(encoding="utf-8"))
@@ -209,6 +231,7 @@ def _init_and_open(py: str, scripts: Path, project: Path, decision_path: Path) -
             "verification": ["smoke"],
             "plan_task_ids": ["T1"],
         }
+        plan_docs = _plan_docs_fixture(project)
         plan_input = _write(project / "plan.json", plan_bundle)
         manifest_path = project / "plan-manifest.json"
         _run(
@@ -221,6 +244,8 @@ def _init_and_open(py: str, scripts: Path, project: Path, decision_path: Path) -
                 str(manifest_path),
                 "--workflow-decision-hash",
                 decision["decision_hash"],
+                "--plan-docs",
+                str(plan_docs),
             ]
         )
         plan_rubric = REVIEW_RUBRICS["plan"]
@@ -238,13 +263,64 @@ def _init_and_open(py: str, scripts: Path, project: Path, decision_path: Path) -
         review_path = project / "plan-review.json"
         _run([py, str(scripts / "create_plan_review.py"), "--input", str(review_input), "--manifest", str(manifest_path), "--output", str(review_path)])
         if decision["worktree"]["required"]:
-            _run(["git", "add", "plan.json", "plan-manifest.json", "plan-review-input.json", "plan-review.json"], cwd=project)
+            _run(
+                [
+                    "git",
+                    "add",
+                    "plan.json",
+                    "plan-manifest.json",
+                    "plan-review-input.json",
+                    "plan-review.json",
+                    plan_docs.name,
+                ],
+                cwd=project,
+            )
             _run(["git", "commit", "-m", "approved plan"], cwd=project)
-        init_command.extend(["--plan-manifest", str(manifest_path), "--plan-review", str(review_path)])
+        init_command.extend(
+            [
+                "--plan-manifest",
+                str(manifest_path),
+                "--plan-review",
+                str(review_path),
+                "--plan-docs",
+                str(plan_docs),
+            ]
+        )
     _run(init_command)
     state = json.loads((project / ".phongka" / "state.json").read_text(encoding="utf-8"))
     if state.get("required_skills") != decision["required_skills"] or state.get("stages") != decision["stages"]:
         raise AssertionError("runtime state did not retain the selected skills and stages")
+    if decision.get("plan_gate", {}).get("required"):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        review = json.loads(review_path.read_text(encoding="utf-8"))
+        binding = state.get("plan_binding", {})
+        expected_binding = {
+            "bound": True,
+            "plan_bundle_hash": manifest["plan_bundle_hash"],
+            "plan_review_hash": review["plan_review_hash"],
+            "plan_path": f".phongka/plan/{plan_docs.name}",
+            "plan_docs_hash": manifest["plan_docs_hash"],
+        }
+        if any(binding.get(key) != value for key, value in expected_binding.items()):
+            raise AssertionError("runtime state did not retain the reviewed plan binding")
+        installed = project / binding["plan_path"]
+        for relative in (
+            "MasterPlan.md",
+            "plans/Plan-1/Plan.md",
+            "plans/Plan-1/batches/Batch-1.md",
+        ):
+            source = plan_docs / relative
+            target = installed / relative
+            if not target.is_file() or target.read_bytes() != source.read_bytes():
+                raise AssertionError(f"installed plan document differs from staging: {relative}")
+        persisted_manifest = json.loads(
+            (project / ".phongka" / "plan" / "manifest.json").read_text(encoding="utf-8")
+        )
+        persisted_review = json.loads(
+            (project / ".phongka" / "plan" / "review.json").read_text(encoding="utf-8")
+        )
+        if persisted_manifest != manifest or persisted_review != review:
+            raise AssertionError("runtime plan artifacts differ from the reviewed inputs")
     settings = json.loads(
         _run(
             [
@@ -256,8 +332,19 @@ def _init_and_open(py: str, scripts: Path, project: Path, decision_path: Path) -
         ).stdout
     )
     wait = settings.get("subagent_wait", {})
+    execution = settings.get("execution", {})
+    if settings.get("schema_version") != 2:
+        raise AssertionError("runtime settings did not use schema version 2")
     if wait.get("check_interval_seconds", 0) >= wait.get("timeout_seconds", 0):
         raise AssertionError("runtime settings contain an invalid subagent wait policy")
+    if execution.get("mode") not in {"sync", "async"}:
+        raise AssertionError("runtime settings omit a supported execution mode")
+    if execution.get("dispatch_timeout_seconds", 0) < wait.get("check_interval_seconds", 0):
+        raise AssertionError("runtime dispatch timeout is shorter than the polling interval")
+    if execution.get("max_active_subagents") != decision["subagent_plan"]["max_active"]:
+        raise AssertionError("runtime max_active_subagents differs from the controlled decision")
+    if not isinstance(settings.get("primary_agent_fallback"), bool):
+        raise AssertionError("runtime settings omit the Primary fallback policy")
     task_path = project / ".phongka" / "task-input.json"
     task_payload = _task_payload("IN_PROGRESS", approval)
     if decision.get("plan_gate", {}).get("required"):
@@ -277,6 +364,19 @@ def _init_and_open(py: str, scripts: Path, project: Path, decision_path: Path) -
                 str(decision_path),
             ]
         )
+        prepared_state = json.loads(
+            (project / ".phongka" / "state.json").read_text(encoding="utf-8")
+        )
+        identity = prepared_state.get("worktree_identity")
+        expected_path = (
+            project.parent / f"{project.name}-worktrees" / "TASK-1"
+        ).resolve()
+        if (
+            not isinstance(identity, dict)
+            or (project / identity.get("path", "")).resolve() != expected_path
+            or identity.get("branch") != "phongka/task/TASK-1"
+        ):
+            raise AssertionError("controlled task did not bind the sibling native Git worktree")
 
 
 def _criterion_results(mode: str) -> list[dict[str, str]]:
@@ -569,6 +669,16 @@ def _stateful_delivery_smoke(py: str, scripts: Path, root: Path) -> int:
     checklist_text = checklist.read_text(encoding="utf-8")
     if "Current skill: `agentic-verification-before-completion`" not in checklist_text:
         raise AssertionError("checklist did not record the current skill")
+    detail_header = "| Task | Status | Plan task | Scope | Updated |"
+    detail_row = next(
+        (line for line in checklist_text.splitlines() if line.startswith("| `TASK-1` |")),
+        None,
+    )
+    if detail_header not in checklist_text or detail_row is None:
+        raise AssertionError("checklist did not render the task detail table")
+    for expected in ("`COMPLETED`", "`T1`", "src/module.txt"):
+        if expected not in detail_row:
+            raise AssertionError(f"checklist task detail omitted {expected}")
     stage_ids = [stage["id"] for stage in decision["stages"]]
     current_index = stage_ids.index("verify")
     for index, stage_id in enumerate(stage_ids):

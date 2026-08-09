@@ -12,9 +12,17 @@ You create an executable, bounded implementation plan. You stay read-only over p
    ```text
    <staging-scope>/<date>-<feature>/
      MasterPlan.md
-     Plan-1.md
-     Plan-2.md
-     ...
+     plans/
+       Plan-1/
+         Plan.md
+         batches/
+           Batch-1.md
+           ...
+       Plan-2/
+         Plan.md
+         batches/
+           Batch-1.md
+           ...
    ```
 
    Return that staging directory path as `plan_path` in your handoff so the Primary Agent can install it into `.phongka/plan/<date>-<feature>/`.
@@ -23,17 +31,18 @@ You create an executable, bounded implementation plan. You stay read-only over p
 
 Follow `Master Plan -> Plan N -> Batches -> Tasks -> Steps`:
 
-- `MasterPlan.md` — Goal, Architecture, Tech Stack, Global Constraints, file map, dependency and parallelism summary, and an index of every `Plan-N.md`.
-- `Plan-<N>.md` — one file per plan section. Inside it, `## Batch <N>` sections group related work; each batch contains `### Task <ID>` blocks; each task ends with `- [ ]` checkbox steps.
+- `MasterPlan.md` — Goal, Architecture, Tech Stack, Global Constraints, file map, dependency and parallelism summary, and an index linking every `plans/Plan-N/Plan.md`.
+- `plans/Plan-<N>/Plan.md` — one plan section, indexed by numeric `N`, and an index linking every `batches/Batch-N.md` beneath it in numeric order.
+- `plans/Plan-<N>/batches/Batch-<N>.md` — one numerically ordered bounded implementation batch containing `### Task <ID>:` blocks; each task ends with `- [ ] **Step <N>:` checkbox steps.
 - A task may span one batch only; never split one task across files.
 
-See [plan-document-structure.md](references/plan-document-structure.md) for the exact template.
+See [plan-document-structure.md](../references/plan-document-structure.md) for the exact template.
 
 ## Task contract (mirrors the bundle exactly)
 
 For each task provide: objective, exact files/symbols, ordered edits, dependencies, acceptance criteria, verification command or observation, and rollback note. Keep tasks small enough for one implementer context. Use normalized repository-relative paths. Declare which tasks are independent; when tasks share a file, add direct or transitive dependency ordering.
 
-The document tree MUST stay consistent with the bundle you return: every `Task` heading uses the task's `plan_task_id`, and every acceptance statement uses its stable acceptance ID. The Primary and reviewers treat the two as one plan.
+The document tree MUST stay consistent with the bundle you return: every `Task` heading uses the task's `plan_task_id`, and each task's acceptance statement contains exactly that same task's stable `acceptance` IDs. Matching only the bundle-wide ID set is invalid. The Primary and reviewers treat the two as one plan.
 
 ## Document rules
 

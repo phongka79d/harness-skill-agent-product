@@ -52,6 +52,92 @@ def sha256_json(value: Any) -> str:
     canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+def plan_docs_fixture(
+    project: Path,
+    *,
+    directory_name: str = "2026-08-09-contract-plan",
+    task_ids: list[str] | None = None,
+    acceptance_ids: list[str] | None = None,
+    task_acceptance_ids: dict[str, list[str]] | None = None,
+) -> Path:
+    """Write the canonical visible plan hierarchy used by runtime contracts."""
+    tasks = task_ids or ["T1"]
+    acceptance = acceptance_ids or ["A1", "A2"]
+    acceptance_by_task = task_acceptance_ids or {tasks[0]: acceptance}
+    root = project / directory_name
+    plan_root = root / "plans" / "Plan-1"
+    batches = plan_root / "batches"
+    batches.mkdir(parents=True, exist_ok=True)
+    (root / "MasterPlan.md").write_text(
+        "# Contract Plan\n\n"
+        "## Plans\n\n"
+        "- [Plan 1](plans/Plan-1/Plan.md)\n",
+        encoding="utf-8",
+    )
+    (plan_root / "Plan.md").write_text(
+        "# Plan 1\n\n"
+        "## Batches\n\n"
+        "- [Batch 1](batches/Batch-1.md)\n",
+        encoding="utf-8",
+    )
+    task_blocks = []
+    for task_id in tasks:
+        ids = acceptance_by_task.get(task_id, [])
+        acceptance_line = "; ".join(f"{item}: contract criterion" for item in ids)
+        task_blocks.append(
+            f"### Task {task_id}: Contract task\n\n"
+            f"**Acceptance:** {acceptance_line}\n\n"
+            "- [ ] **Step 1: Verify the contract**\n"
+        )
+    (batches / "Batch-1.md").write_text(
+        "# Batch 1\n\n" + "\n".join(task_blocks),
+        encoding="utf-8",
+    )
+    return root
+
+
+def numbered_plan_docs_fixture(project: Path) -> Path:
+    """Write a plan tree whose numeric and lexical traversal orders differ."""
+    root = project / "2026-08-09-numbered-plan"
+    plan_2 = root / "plans" / "Plan-2"
+    plan_10 = root / "plans" / "Plan-10"
+    for plan_root in (plan_2, plan_10):
+        (plan_root / "batches").mkdir(parents=True, exist_ok=True)
+    (root / "MasterPlan.md").write_text(
+        "# Numbered Plan\n\n"
+        "## Plans\n\n"
+        "- [Plan 2](plans/Plan-2/Plan.md)\n"
+        "- [Plan 10](plans/Plan-10/Plan.md)\n",
+        encoding="utf-8",
+    )
+    (plan_2 / "Plan.md").write_text(
+        "# Plan 2\n\n"
+        "## Batches\n\n"
+        "- [Batch 2](batches/Batch-2.md)\n"
+        "- [Batch 10](batches/Batch-10.md)\n",
+        encoding="utf-8",
+    )
+    (plan_10 / "Plan.md").write_text(
+        "# Plan 10\n\n"
+        "## Batches\n\n"
+        "- [Batch 2](batches/Batch-2.md)\n",
+        encoding="utf-8",
+    )
+    numbered_tasks = (
+        (plan_2 / "batches" / "Batch-2.md", "T2-B2", "A2-B2"),
+        (plan_2 / "batches" / "Batch-10.md", "T2-B10", "A2-B10"),
+        (plan_10 / "batches" / "Batch-2.md", "T10-B2", "A10-B2"),
+    )
+    for batch_path, task_id, acceptance_id in numbered_tasks:
+        batch_path.write_text(
+            f"# Numbered Batch\n\n"
+            f"### Task {task_id}: Numbered task\n\n"
+            f"**Acceptance:** {acceptance_id}: numbered criterion\n\n"
+            "- [ ] **Step 1: Verify numeric traversal**\n",
+            encoding="utf-8",
+        )
+    return root
+
 
 def decision(py: str, scripts: Path, project: Path, *, delivery: bool = False) -> Path:
     request = {
@@ -231,6 +317,7 @@ def setup_controlled_git_task(
         {"id": "A2", "description": "second controlled acceptance"},
     ]
     plan_bundle["acceptance_ids"] = ["A1", "A2"]
+    plan_docs = plan_docs_fixture(project)
     plan_input = write(project / "plan.json", plan_bundle)
     manifest_path = project / "plan-manifest.json"
     decision_hash = json.loads(decision_path.read_text(encoding="utf-8"))["decision_hash"]
@@ -244,6 +331,8 @@ def setup_controlled_git_task(
             str(manifest_path),
             "--workflow-decision-hash",
             decision_hash,
+            "--plan-docs",
+            str(plan_docs),
         ]
     )
     review_input = write(
@@ -252,7 +341,18 @@ def setup_controlled_git_task(
     )
     review_path = project / "plan-review.json"
     run([py, str(scripts / "create_plan_review.py"), "--input", str(review_input), "--manifest", str(manifest_path), "--output", str(review_path)])
-    run(["git", "add", "plan.json", "plan-manifest.json", "plan-review-input.json", "plan-review.json"], cwd=project)
+    run(
+        [
+            "git",
+            "add",
+            "plan.json",
+            "plan-manifest.json",
+            "plan-review-input.json",
+            "plan-review.json",
+            plan_docs.name,
+        ],
+        cwd=project,
+    )
     run(["git", "commit", "-m", "approved plan"], cwd=project)
     run(
         [
@@ -266,6 +366,8 @@ def setup_controlled_git_task(
             str(manifest_path),
             "--plan-review",
             str(review_path),
+            "--plan-docs",
+            str(plan_docs),
         ]
     )
     controlled_task = task_payload("IN_PROGRESS", ["src/a.txt"])
@@ -1302,9 +1404,15 @@ def main() -> int:
             )
             v5_plan["schema_version"] = 5
             v5_plan["tasks"][0]["plan_task_id"] = "T1"
+            v5_plan["tasks"][0]["acceptance"] = ["AC-01"]
             v5_plan["acceptance"] = [{"id": "AC-01", "description": "works"}]
             v5_plan["acceptance_ids"] = ["AC-01"]
             v5_plan["plan_task_ids"] = ["T1"]
+            v5_docs = plan_docs_fixture(
+                root,
+                directory_name="2026-08-09-v5-plan",
+                acceptance_ids=["AC-01"],
+            )
             v5_path = write(root / "v5-plan.json", v5_plan)
             run([py, str(scripts / "validate_planning.py"), "--input", str(v5_path), "--controlled"])
             run([py, str(scripts / "validate_planning.py"), "--input", str(ordered), "--controlled"], expect=1)
@@ -1317,7 +1425,111 @@ def main() -> int:
             )
             run([py, str(scripts / "validate_planning.py"), "--input", str(write(root / "cycle-plan.json", cycle))], expect=1)
             manifest_path = root / "v5-manifest.json"
-            run([py, str(scripts / "create_plan_manifest.py"), "--input", str(v5_path), "--output", str(manifest_path)])
+            run(
+                [
+                    py,
+                    str(scripts / "create_plan_manifest.py"),
+                    "--input",
+                    str(v5_path),
+                    "--output",
+                    str(manifest_path),
+                    "--plan-docs",
+                    str(v5_docs),
+                ]
+            )
+            numbered_plan = planning(
+                ["src/plan-2-batch-2.py", "src/plan-2-batch-10.py", "src/plan-10-batch-2.py"],
+                [
+                    plan_task("T2-B2", ["src/plan-2-batch-2.py"], [], rubrics["task"]),
+                    plan_task("T2-B10", ["src/plan-2-batch-10.py"], [], rubrics["task"]),
+                    plan_task("T10-B2", ["src/plan-10-batch-2.py"], [], rubrics["task"]),
+                ],
+            )
+            numbered_ids = ["T2-B2", "T2-B10", "T10-B2"]
+            numbered_acceptance = ["A2-B2", "A2-B10", "A10-B2"]
+            numbered_plan["schema_version"] = 5
+            numbered_plan["plan_task_ids"] = numbered_ids
+            numbered_plan["acceptance_ids"] = numbered_acceptance
+            numbered_plan["acceptance"] = [
+                {"id": acceptance_id, "description": "numbered criterion"}
+                for acceptance_id in numbered_acceptance
+            ]
+            for task, task_id, acceptance_id in zip(
+                numbered_plan["tasks"], numbered_ids, numbered_acceptance
+            ):
+                task["plan_task_id"] = task_id
+                task["acceptance"] = [acceptance_id]
+            numbered_path = write(root / "numbered-plan.json", numbered_plan)
+            numbered_docs = numbered_plan_docs_fixture(root)
+            run(
+                [
+                    py,
+                    str(scripts / "create_plan_manifest.py"),
+                    "--input",
+                    str(numbered_path),
+                    "--output",
+                    str(root / "numbered-plan-manifest.json"),
+                    "--plan-docs",
+                    str(numbered_docs),
+                ]
+            )
+
+            mapped_plan = planning(
+                ["src/mapped-one.py", "src/mapped-two.py"],
+                [
+                    plan_task("T1", ["src/mapped-one.py"], [], rubrics["task"]),
+                    plan_task("T2", ["src/mapped-two.py"], [], rubrics["task"]),
+                ],
+            )
+            mapped_plan["schema_version"] = 5
+            mapped_plan["plan_task_ids"] = ["T1", "T2"]
+            mapped_plan["acceptance_ids"] = ["AC-01", "AC-02"]
+            mapped_plan["acceptance"] = [
+                {"id": "AC-01", "description": "first task criterion"},
+                {"id": "AC-02", "description": "second task criterion"},
+            ]
+            mapped_plan["tasks"][0]["plan_task_id"] = "T1"
+            mapped_plan["tasks"][0]["acceptance"] = ["AC-01"]
+            mapped_plan["tasks"][1]["plan_task_id"] = "T2"
+            mapped_plan["tasks"][1]["acceptance"] = ["AC-02"]
+            mapped_path = write(root / "mapped-plan.json", mapped_plan)
+            mapped_docs = plan_docs_fixture(
+                root,
+                directory_name="2026-08-09-mapped-plan",
+                task_ids=["T1", "T2"],
+                task_acceptance_ids={"T1": ["AC-01"], "T2": ["AC-02"]},
+            )
+            run(
+                [
+                    py,
+                    str(scripts / "create_plan_manifest.py"),
+                    "--input",
+                    str(mapped_path),
+                    "--output",
+                    str(root / "mapped-plan-manifest.json"),
+                    "--plan-docs",
+                    str(mapped_docs),
+                ]
+            )
+            swapped_docs = plan_docs_fixture(
+                root,
+                directory_name="2026-08-09-swapped-plan",
+                task_ids=["T1", "T2"],
+                task_acceptance_ids={"T1": ["AC-02"], "T2": ["AC-01"]},
+            )
+            run(
+                [
+                    py,
+                    str(scripts / "create_plan_manifest.py"),
+                    "--input",
+                    str(mapped_path),
+                    "--output",
+                    str(root / "swapped-plan-manifest.json"),
+                    "--plan-docs",
+                    str(swapped_docs),
+                ],
+                expect=1,
+            )
             review_input = write(
                 root / "v5-review-input.json",
                 plan_review_payload(scripts, evidence_prefix="v5 fixture"),
@@ -1376,6 +1588,8 @@ def main() -> int:
                 [
                     "v5_plan_aggregation_and_hashes",
                     "raw_v4_controlled_plan_rejected",
+                    "numeric_plan_and_batch_order_preserved",
+                    "task_acceptance_mapping_enforced",
                     "cyclic_plan_rejected",
                     "canonical_plan_review_requires_complete_rubric",
                     "unknown_plan_review_criterion_rejected",
@@ -1645,6 +1859,10 @@ def main() -> int:
             rebind_decision_hash = json.loads(
                 rebind_decision_path.read_text(encoding="utf-8")
             )["decision_hash"]
+            rebind_plan_docs = plan_docs_fixture(
+                rejected_rebind,
+                directory_name="2026-08-09-rebind-plan",
+            )
             rebind_manifest_path = rejected_rebind / "rebind-manifest.json"
             run(
                 [
@@ -1656,6 +1874,8 @@ def main() -> int:
                     str(rebind_manifest_path),
                     "--workflow-decision-hash",
                     rebind_decision_hash,
+                    "--plan-docs",
+                    str(rebind_plan_docs),
                 ]
             )
             rebind_review_path = rejected_rebind / "rebind-review.json"
@@ -1692,6 +1912,8 @@ def main() -> int:
                     str(rebind_manifest_path),
                     "--plan-review",
                     str(rebind_review_path),
+                    "--plan-docs",
+                    str(rebind_plan_docs),
                 ],
                 expect=1,
             )
@@ -1709,6 +1931,10 @@ def main() -> int:
             transaction_decision_hash = json.loads(
                 transaction_decision_path.read_text(encoding="utf-8")
             )["decision_hash"]
+            transaction_plan_docs = plan_docs_fixture(
+                plan_transaction,
+                directory_name="2026-08-09-transaction-plan",
+            )
             transaction_manifest_path = plan_transaction / "transaction-manifest.json"
             run(
                 [
@@ -1720,6 +1946,8 @@ def main() -> int:
                     str(transaction_manifest_path),
                     "--workflow-decision-hash",
                     transaction_decision_hash,
+                    "--plan-docs",
+                    str(transaction_plan_docs),
                 ]
             )
             transaction_review_path = plan_transaction / "transaction-review.json"
@@ -1751,8 +1979,9 @@ def main() -> int:
                 "targets=[project/'.phongka'/'plan'/'manifest.json',project/'.phongka'/'plan'/'review.json',project/'.phongka'/'state.json']; "
                 "before={str(path):path.read_bytes() for path in targets}; original=init_runtime.write_json_atomic; calls={'count':0}; "
                 "exec(\"def fail(path,value):\\n calls['count']+=1\\n if calls['count']==2: raise OSError('injected second write failure')\\n return original(path,value)\"); "
-                "init_runtime.write_json_atomic=fail; sys.argv=['init_runtime.py','--project-root',str(project),'--decision',payload['decision'],'--plan-manifest',payload['manifest'],'--plan-review',payload['review']]; "
-                "rc=init_runtime.main(); assert rc==1 and all(path.read_bytes()==before[str(path)] for path in targets)"
+                "init_runtime.write_json_atomic=fail; sys.argv=['init_runtime.py','--project-root',str(project),'--decision',payload['decision'],'--plan-manifest',payload['manifest'],'--plan-review',payload['review'],'--plan-docs',payload['docs']]; "
+                "rc=init_runtime.main(); target=project/'.phongka'/'plan'/Path(payload['docs']).name; "
+                "assert rc==1 and all(path.read_bytes()==before[str(path)] for path in targets) and not target.exists()"
             )
             runtime_python(
                 py,
@@ -1763,6 +1992,7 @@ def main() -> int:
                     "decision": str(transaction_decision_path),
                     "manifest": str(transaction_manifest_path),
                     "review": str(transaction_review_path),
+                    "docs": str(transaction_plan_docs),
                 },
             )
             passed.append("plan_binding_second_write_failure_rolls_back_exact_bytes")

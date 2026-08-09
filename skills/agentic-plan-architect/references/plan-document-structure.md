@@ -33,8 +33,8 @@ copy rules, platform requirements - one line each, copied from the spec>
 
 | Plan | Batch count | Goal |
 |---|---|---|
-| Plan 1 | 2 | <one line> |
-| Plan 2 | 1 | <one line> |
+| [Plan 1](plans/Plan-1/Plan.md) | 2 | <one line> |
+| [Plan 2](plans/Plan-2/Plan.md) | 1 | <one line> |
 
 ## Dependency and parallelism
 
@@ -42,16 +42,28 @@ copy rules, platform requirements - one line each, copied from the spec>
 strictly sequential because they share files>
 ```
 
-## Plan-N.md
+## plans/Plan-N/Plan.md
 
-One file per plan section. `## Batch <N>` sections group tasks; each task is one `### Task <ID>` block with checkbox steps. Task IDs and acceptance IDs MUST exactly match the v5 bundle's `plan_task_id` and `acceptance` IDs.
+One file per plan section. It links the section's `batches/Batch-N.md` files and summarizes their goals and dependencies.
 
 ```markdown
 # Plan N: <Section Name>
 
 **Goal:** <what this plan section delivers>
 
-## Batch N: <Batch Name>
+## Batches
+
+| Batch | Goal |
+|---|---|
+| [Batch 1](batches/Batch-1.md) | <one line> |
+```
+
+## plans/Plan-N/batches/Batch-N.md
+
+One file per bounded batch. Each task is one `### Task <ID>:` block with checkbox steps. Every task ID MUST exactly match one v5 bundle `plan_task_id`, and that block's acceptance IDs MUST exactly match that same bundle task's `acceptance` array; matching only the bundle-wide ID set is invalid.
+
+```markdown
+# Batch N: <Batch Name>
 
 **Goal:** <what this batch delivers>
 
@@ -95,6 +107,7 @@ Expected: <exact observation>
 ## Rules
 
 - Each step is one bounded action (2-5 minutes): write the failing test, run it to see it fail, implement the minimal change, run it to see it pass, run the focused verification.
+- Number `Plan-N` directories and `Batch-N.md` files with positive integers and list them in numeric order (`2` before `10`).
 - Every code step contains the actual code. No `TBD`, `implement later`, `add error handling` without content, or `similar to Task N`.
 - A task belongs to exactly one batch; batches do not split a task across files.
 - Later tasks reference earlier tasks only through the exact names and signatures declared in `Produces`/`Consumes`.

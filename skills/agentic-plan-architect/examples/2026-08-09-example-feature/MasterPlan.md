@@ -26,7 +26,7 @@
 
 | Plan | Batch count | Goal |
 |---|---|---|
-| Plan 1 | 1 | Add the behavior and its regression coverage. |
+| [Plan 1](plans/Plan-1/Plan.md) | 1 | Add the behavior and its regression coverage. |
 
 ## Dependency and parallelism
 

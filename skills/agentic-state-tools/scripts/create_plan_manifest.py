@@ -9,6 +9,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve()
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parents[2] / "agentic-configuration" / "scripts"))
+from plan_docs import inspect_plan_docs  # noqa: E402
 from runtime_utils import sha256_json, utc_now, write_json_atomic  # noqa: E402
 from schema_validation import validate_file  # noqa: E402
 from validate_planning import validate_plan  # noqa: E402
@@ -25,7 +26,24 @@ def _ids(bundle: dict) -> tuple[list[str], list[str]]:
     return task_ids, acceptance_ids
 
 
-def create(input_path: str, output_path: str, *, task_id: str | None = None, decision_hash: str | None = None, require_v5: bool = True) -> dict:
+def _acceptance_ids_by_task(bundle: dict) -> dict[str, list[str]]:
+    return {
+        str(task.get("plan_task_id", task["id"])).strip(): [
+            str(acceptance_id).strip() for acceptance_id in task["acceptance"]
+        ]
+        for task in bundle["tasks"]
+    }
+
+
+def create(
+    input_path: str,
+    output_path: str,
+    *,
+    task_id: str | None = None,
+    decision_hash: str | None = None,
+    plan_docs_path: str | None = None,
+    require_v5: bool = True,
+) -> dict:
     bundle = json.loads(Path(input_path).read_text(encoding="utf-8"))
     if not isinstance(bundle, dict):
         raise ValueError("planning bundle must be an object")
@@ -39,6 +57,20 @@ def create(input_path: str, output_path: str, *, task_id: str | None = None, dec
         "bundle": bundle,
         "created_at": utc_now(),
     }
+    if require_v5 and not plan_docs_path:
+        raise ValueError("v5 planning requires reviewed human plan documents")
+    if plan_docs_path:
+        descriptor = inspect_plan_docs(plan_docs_path)
+        if descriptor["plan_task_ids"] != task_ids:
+            raise ValueError("plan docs Task IDs do not match the planning bundle")
+        if set(descriptor["acceptance_ids"]) != set(acceptance_ids):
+            raise ValueError("plan docs Acceptance IDs do not match the planning bundle")
+        if descriptor["acceptance_ids_by_task"] != _acceptance_ids_by_task(bundle):
+            raise ValueError(
+                "plan docs Acceptance IDs do not match their planning bundle Tasks"
+            )
+        result["plan_path"] = descriptor["plan_path"]
+        result["plan_docs_hash"] = descriptor["plan_docs_hash"]
     if task_id:
         result["task_id"] = task_id
     if decision_hash:
@@ -54,6 +86,7 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--task-id")
     parser.add_argument("--workflow-decision-hash")
+    parser.add_argument("--plan-docs", help="planner-authored <date>-<feature> plan tree")
     parser.add_argument("--allow-v4", action="store_true", help="allow a legacy bundle outside a controlled gate")
     args = parser.parse_args()
     try:
@@ -62,6 +95,7 @@ def main() -> int:
             args.output,
             task_id=args.task_id,
             decision_hash=args.workflow_decision_hash,
+            plan_docs_path=args.plan_docs,
             require_v5=not args.allow_v4,
         )
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:

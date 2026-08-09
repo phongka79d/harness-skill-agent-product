@@ -283,12 +283,22 @@ def validate_plan_binding_documents(
         raise ValueError("plan manifest acceptance IDs do not match the embedded v5 bundle")
     if sha256_json(bundle) != manifest["plan_bundle_hash"]:
         raise ValueError("plan manifest bundle hash is stale")
+    manifest_plan_path = manifest.get("plan_path")
+    manifest_docs_hash = manifest.get("plan_docs_hash")
+    if bool(manifest_plan_path) != bool(manifest_docs_hash):
+        raise ValueError("plan manifest must bind plan_path and plan_docs_hash together")
+    if require_v5 and not manifest_plan_path:
+        raise ValueError("v5 plan binding must include reviewed human plan documents")
 
     validate_review_contract(review, "plan")
     if review["plan_bundle_hash"] != manifest["plan_bundle_hash"]:
         raise ValueError("plan review is bound to another plan bundle")
     if review["acceptance_ids"] != manifest["acceptance_ids"]:
         raise ValueError("plan review acceptance IDs do not match the plan manifest")
+    if review.get("plan_path") != manifest_plan_path:
+        raise ValueError("plan review path does not match the plan manifest")
+    if review.get("plan_docs_hash") != manifest_docs_hash:
+        raise ValueError("plan review docs hash does not match the plan manifest")
     review_base = {key: value for key, value in review.items() if key != "plan_review_hash"}
     if sha256_json(review_base) != review["plan_review_hash"]:
         raise ValueError("plan review hash does not match its content")
@@ -312,6 +322,8 @@ def validate_plan_binding_documents(
         "plan_review_hash": review["plan_review_hash"],
         "plan_task_ids": list(manifest["plan_task_ids"]),
         "acceptance_ids": list(manifest["acceptance_ids"]),
+        "plan_path": manifest_plan_path,
+        "plan_docs_hash": manifest_docs_hash,
     }
 
 
@@ -368,9 +380,21 @@ def revalidate_plan_binding(
         "plan_review_hash",
         "plan_task_ids",
         "acceptance_ids",
+        "plan_path",
+        "plan_docs_hash",
     ):
         if current.get(key) != binding.get(key):
             raise ValueError(f"persisted plan binding changed: {key}")
+    plan_path = binding.get("plan_path")
+    plan_docs_hash = binding.get("plan_docs_hash")
+    if bool(plan_path) != bool(plan_docs_hash):
+        raise ValueError("plan binding must include plan_path and plan_docs_hash together")
+    if plan_path:
+        from plan_docs import inspect_plan_docs  # noqa: PLC0415
+
+        descriptor = inspect_plan_docs(project / plan_path)
+        if descriptor["plan_docs_hash"] != plan_docs_hash:
+            raise ValueError("persisted human plan documents changed")
     return binding
 
 

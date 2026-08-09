@@ -1,32 +1,41 @@
 {
   "schema_version": 1,
-  "plan_bundle_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "plan_bundle_hash": "5887cc4fe23598dcb2542e3bf2bff8472d975e06faaab49a68b8a1d8fc9621c5",
+  "plan_path": ".phongka/plan/2026-08-09-example-feature",
+  "plan_docs_hash": "8b2238d68151cbe3ec16edc90868a483fc10bf4877514e521dc733d8d56bf652",
   "plan_task_ids": ["T1"],
-  "acceptance_ids": ["AC-01"],
+  "acceptance_ids": ["A1", "A2"],
   "bundle": {
     "schema_version": 5,
     "review_rubric_id": "plan",
     "review_rubric_version": 1,
-    "goal": "bounded plan",
-    "scope": ["src/example.py"],
+    "goal": "Add one bounded behavior without changing public interfaces",
+    "scope": ["src/module.py", "tests/test_module.py"],
     "tasks": [
       {
         "id": "T1",
         "plan_task_id": "T1",
         "review_rubric_id": "task",
         "review_rubric_version": 1,
-        "objective": "bounded change",
-        "files": ["src/example.py"],
-        "steps": ["edit"],
+        "objective": "Add the behavior and its regression coverage",
+        "files": ["src/module.py", "tests/test_module.py"],
+        "steps": [
+          "Add a failing regression test for the requested behavior",
+          "Implement the smallest source change that makes the test pass",
+          "Inspect the final diff for scope compliance"
+        ],
         "dependencies": [],
-        "acceptance": ["works"],
-        "verification": ["test"],
-        "rollback": "restore file"
+        "acceptance": ["A1", "A2"],
+        "verification": ["Run the targeted test file", "Inspect the bounded diff"],
+        "rollback": "Revert the two bounded file edits"
       }
     ],
-    "acceptance": [{"id": "AC-01", "description": "works"}],
-    "acceptance_ids": ["AC-01"],
-    "verification": ["test"],
+    "acceptance": [
+      {"id": "A1", "description": "normalize passes the regression test"},
+      {"id": "A2", "description": "existing behavior remains unchanged"}
+    ],
+    "acceptance_ids": ["A1", "A2"],
+    "verification": ["Run the targeted test suite after the final edit"],
     "plan_task_ids": ["T1"]
   }
 }

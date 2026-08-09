@@ -72,7 +72,7 @@ project/.phongka/
 └── plan/
     ├── manifest.json         # canonical plan bundle
     ├── review.json           # plan review
-    └── <date>-<feature>/     # human-readable plan documents (MasterPlan.md + Plan-N.md)
+    └── <date>-<feature>/     # MasterPlan.md -> plans/Plan-N/Plan.md -> batches/Batch-N.md
 ```
 
 Controlled source edits run in a linked Git worktree at `../<project-name>-worktrees/<task-id>` (a sibling of the project root) on branch `phongka/task/<task-id>`; the runtime records path/branch/HEAD identity and never removes the worktree itself.

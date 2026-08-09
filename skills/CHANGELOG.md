@@ -1,9 +1,9 @@
 # Changelog
 
-## Unreleased
+## 3.6.0
 
 - Controlled linked worktrees moved out of the project to `../<project-name>-worktrees/<task-id>` (sibling directory) while keeping native `git worktree`; identity schemas and decision path templates now use `../{project_name}-worktrees/{task_id}`, and preparation/verification enforce the sibling base.
-- The Plan Architect now authors human-readable plan documents (`MasterPlan.md` + `Plan-<N>.md`, Master Plan -> Plan N -> Batches -> Tasks -> Steps) in its staging scope; `init_runtime.py --plan-docs` installs them into `.phongka/plan/<date>-<feature>/` and records `plan_binding.plan_path`.
+- The Plan Architect now authors reviewed hierarchical plan documents (`MasterPlan.md` -> `plans/Plan-N/Plan.md` -> `batches/Batch-N.md` -> Tasks -> Steps); controlled `init_runtime.py --plan-docs` atomically installs the hash-bound tree into `.phongka/plan/<date>-<feature>/` and records `plan_binding.plan_path` plus `plan_docs_hash`.
 - The checklist view adds a per-task table (Task, Status, Plan task, Scope, Updated) while keeping the compact stage view.
 - Runtime settings schema version `2` adds `execution` (`mode` sync/async, `dispatch_timeout_seconds`, `max_active_subagents`) and `primary_agent_fallback`, with automatic v1-to-v2 migration that preserves user `subagent_wait` values.
 - Hardened delegated-role contracts: roles are non-orchestrating, non-state-mutating leaves; only the Primary may orchestrate multiple independent tasks, read-only work may parallelize, and writers remain sequential. Added the external `HOST-0` fail-closed attestation boundary, `open_task`/worktree identity mapping, Core-only public entrypoint, declared host-owned debugger scratch scope, and exact universal handoff fields.

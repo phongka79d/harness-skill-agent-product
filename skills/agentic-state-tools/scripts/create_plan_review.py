@@ -42,6 +42,8 @@ def create(input_path: str, manifest_path: str, output_path: str) -> dict:
         "outcome": outcome,
         "plan_bundle_hash": manifest["plan_bundle_hash"],
         "acceptance_ids": list(manifest["acceptance_ids"]),
+        "plan_path": manifest.get("plan_path"),
+        "plan_docs_hash": manifest.get("plan_docs_hash"),
         "criteria": review_contract["criteria"],
         "reviewed_at": utc_now(),
     }

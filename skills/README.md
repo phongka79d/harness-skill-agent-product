@@ -1,4 +1,4 @@
-# Phongka Agentic Engineering Skills — v3.5.1
+# Phongka Agentic Engineering Skills — v3.6.0
 
 Portable engineering workflow skills for agent-capable hosts. The package defines one **Primary Agent**, 9 bounded model subagent roles, deterministic workflow scripts, reusable prompts, and a project-local `.phongka` runtime for bundled workflows with explicit stateless route opt-outs.
 
@@ -97,6 +97,11 @@ When the decision was resolved from a non-default config, pass the same `--confi
 .phongka/batch-review.json
 .phongka/delivery-decision.json
 .phongka/checklist/task-checklist-<task-id>.md
+.phongka/plan/manifest.json
+.phongka/plan/review.json
+.phongka/plan/<date>-<feature>/MasterPlan.md
+.phongka/plan/<date>-<feature>/plans/Plan-N/Plan.md
+.phongka/plan/<date>-<feature>/plans/Plan-N/batches/Batch-N.md
 ```
 
 `settings.json` is created from central `subagent_policy` and `execution` defaults only when missing. Users may edit `subagent_wait.check_interval_seconds`, `timeout_seconds`, and `close_on_timeout`, plus `execution` (`mode`: `sync`/`async`, `dispatch_timeout_seconds`, `max_active_subagents`) and `primary_agent_fallback`; later initialization validates and preserves those values. A schema v1 settings file is upgraded in place by `load_runtime_settings.py --ensure`, keeping the user's `subagent_wait` values. Actual polling, close, and dispatch operations remain host-enforced.

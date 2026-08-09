@@ -40,6 +40,8 @@ def validate_runtime(root: Path, state: dict) -> None:
                     raise ValueError(f"bound plan_binding is missing {field}")
             if not plan_binding.get("plan_task_ids") or not plan_binding.get("acceptance_ids"):
                 raise ValueError("bound plan_binding must include plan task and acceptance IDs")
+            if bool(plan_binding.get("plan_path")) != bool(plan_binding.get("plan_docs_hash")):
+                raise ValueError("bound plan_binding must pair plan_path with plan_docs_hash")
         if bound and not required:
             raise ValueError("optional plan_binding cannot be marked bound")
         if required and bound:

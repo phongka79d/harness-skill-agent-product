@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "review_rubric_id": "plan",
   "review_rubric_version": 1,
   "goal": "Add one bounded behavior without changing public interfaces",
@@ -7,6 +7,7 @@
   "tasks": [
     {
       "id": "T1",
+      "plan_task_id": "T1",
       "review_rubric_id": "task",
       "review_rubric_version": 1,
       "objective": "Add the behavior and its regression coverage",
@@ -17,11 +18,16 @@
         "Inspect the final diff for scope compliance"
       ],
       "dependencies": [],
-      "acceptance": ["The requested behavior passes", "Existing behavior remains unchanged"],
+      "acceptance": ["A1", "A2"],
       "verification": ["Run the targeted test file", "Inspect the bounded diff"],
       "rollback": "Revert the two bounded file edits"
     }
   ],
-  "acceptance": ["All task acceptance criteria pass"],
-  "verification": ["Run the targeted test suite after the final edit"]
+  "acceptance": [
+    {"id": "A1", "description": "normalize passes the regression test"},
+    {"id": "A2", "description": "existing behavior remains unchanged"}
+  ],
+  "acceptance_ids": ["A1", "A2"],
+  "verification": ["Run the targeted test suite after the final edit"],
+  "plan_task_ids": ["T1"]
 }

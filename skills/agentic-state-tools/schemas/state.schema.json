@@ -185,6 +185,10 @@
         "plan_path": {
           "type": ["string", "null"],
           "pattern": "^\\.phongka/plan/\\d{4}-\\d{2}-\\d{2}-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "plan_docs_hash": {
+          "type": ["string", "null"],
+          "pattern": "[0-9a-f]{64}"
         }
       },
       "additionalProperties": false
@@ -210,7 +214,7 @@
         },
         "path": {
           "type": "string",
-          "pattern": "^\\.\\./[A-Za-z0-9._-]+-worktrees/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          "pattern": "^\\.\\./[^/\\\\]+-worktrees/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
         },
         "branch": {
           "type": "string",

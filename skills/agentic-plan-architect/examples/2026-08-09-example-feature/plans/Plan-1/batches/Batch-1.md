@@ -1,8 +1,4 @@
-# Plan 1: Add the Behavior
-
-**Goal:** Deliver the new behavior with regression coverage.
-
-## Batch 1: Implementation
+# Batch 1: Implementation
 
 **Goal:** Implement and verify the behavior.
 

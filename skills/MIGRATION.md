@@ -4,7 +4,7 @@
 
 1. Controlled linked worktrees now live OUTSIDE the project at `../<project-name>-worktrees/<task-id>` (a sibling directory of the project root) instead of `.phongka/worktrees/<task-id>`. The decision `path_template` changed, so regenerate workflow decisions. A previously bound worktree keeps its recorded identity; re-preparation requires finishing or explicitly cleaning the old binding first.
 2. `.phongka/settings.json` is now schema version `2` and adds `execution` (`mode`, `dispatch_timeout_seconds`, `max_active_subagents`) and `primary_agent_fallback`. Run `load_runtime_settings.py --project-root <project> --ensure` once: it upgrades a v1 file in place and preserves your `subagent_wait` values. A v1 file read without `--ensure` fails closed.
-3. The Plan Architect now authors human-readable plan documents (`MasterPlan.md` + `Plan-<N>.md`) that `init_runtime.py --plan-docs <staging>` installs into `.phongka/plan/<date>-<feature>/`; the runtime records `plan_binding.plan_path`. This is a state-only addition and does not require regenerating decisions.
+3. The Plan Architect now authors reviewed hierarchical plan documents (`MasterPlan.md` -> `plans/Plan-N/Plan.md` -> `batches/Batch-N.md`). Controlled `init_runtime.py` requires `--plan-docs <staging>` with the matching manifest/review, atomically installs the hash-bound tree into `.phongka/plan/<date>-<feature>/`, and records `plan_binding.plan_path` plus `plan_docs_hash`. Regenerate controlled plan manifests/reviews because their schemas now bind the visible tree.
 4. The checklist view now includes a per-task table (Task, Status, Plan task, Scope, Updated); no configuration change is required.
 
 ## From 3.5.0 to 3.5.1
