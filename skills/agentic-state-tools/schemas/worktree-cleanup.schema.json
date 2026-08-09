@@ -42,7 +42,7 @@
         },
         "path": {
           "type": "string",
-          "pattern": "^\\.phongka/worktrees/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          "pattern": "^\\.\\./[A-Za-z0-9._-]+-worktrees/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
         },
         "branch": {
           "type": "string",

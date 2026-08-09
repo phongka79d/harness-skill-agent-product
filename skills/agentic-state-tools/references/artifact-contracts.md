@@ -19,7 +19,7 @@ Controlled integrated work may also use `.phongka/batch-review.json`, bound to t
 
 Task `scope` is a non-empty unique list of normalized repository-relative file paths. Absolute paths, parent traversal, `.phongka`, and `.agent` are rejected. Every review, batch review, and verification snapshot must include every scoped path for the task or task set. Additional relevant files may be included.
 
-The host `open_task` action binds the task ID and scope after `init_runtime`; controlled worktree preparation then binds the same task to `.phongka/worktrees/<task-id>` and its deterministic branch when `worktree.required` is true. Artifacts and evidence must use that binding. A missing `HOST-0` attestation or identity mismatch is a fail-closed condition.
+The host `open_task` action binds the task ID and scope after `init_runtime`; controlled worktree preparation then binds the same task to `../<project-name>-worktrees/<task-id>` (a linked Git worktree in a sibling directory of the project root) and its deterministic branch when `worktree.required` is true. Artifacts and evidence must use that binding. A missing `HOST-0` attestation or identity mismatch is a fail-closed condition.
 
 `record_verification_evidence.py` adds the current `work_revision`, workflow decision hash, and recording time. Every verification `checks[].name` is a stable acceptance ID and must be unique. Its `workspace.files` entries must come from the current project and contain `path`, `size`, and `sha256`; the recorder rechecks all files before writing.
 

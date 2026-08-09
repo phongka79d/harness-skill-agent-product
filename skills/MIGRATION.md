@@ -1,5 +1,12 @@
 # Migration
 
+## From 3.5.1 to 3.6.0
+
+1. Controlled linked worktrees now live OUTSIDE the project at `../<project-name>-worktrees/<task-id>` (a sibling directory of the project root) instead of `.phongka/worktrees/<task-id>`. The decision `path_template` changed, so regenerate workflow decisions. A previously bound worktree keeps its recorded identity; re-preparation requires finishing or explicitly cleaning the old binding first.
+2. `.phongka/settings.json` is now schema version `2` and adds `execution` (`mode`, `dispatch_timeout_seconds`, `max_active_subagents`) and `primary_agent_fallback`. Run `load_runtime_settings.py --project-root <project> --ensure` once: it upgrades a v1 file in place and preserves your `subagent_wait` values. A v1 file read without `--ensure` fails closed.
+3. The Plan Architect now authors human-readable plan documents (`MasterPlan.md` + `Plan-<N>.md`) that `init_runtime.py --plan-docs <staging>` installs into `.phongka/plan/<date>-<feature>/`; the runtime records `plan_binding.plan_path`. This is a state-only addition and does not require regenerating decisions.
+4. The checklist view now includes a per-task table (Task, Status, Plan task, Scope, Updated); no configuration change is required.
+
 ## From 3.5.0 to 3.5.1
 
 1. Central configuration schema version `5` adds required `subagent_policy.wait` defaults. Regenerate workflow decisions because the central configuration hash changes.

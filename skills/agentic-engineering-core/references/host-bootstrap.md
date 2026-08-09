@@ -26,7 +26,7 @@ The package is provider-neutral and cannot configure an external host or force i
 
 The resolved `runtime_actions.before` sequence is authoritative: `init_runtime` precedes `open_task`, and `prepare_worktree` follows `open_task` only when `worktree.required` is true. `open_task` is a host lifecycle action that uses `update_task_state.py` (the supported state-task writer) to bind a `task_id`, scope, decision, and approval to the project runtime; it is not permission for a role to write `.phongka`. The host must report the resulting task identity before dispatch.
 
-When a controlled decision requires a worktree, the host maps that opened `task_id` to `.phongka/worktrees/<task_id>` and branch `phongka/task/<task_id>`, then records the resulting path/branch/HEAD identity in both task and runtime state through the approved tools. Evidence and role edits use that bound path. If the mapping, identity, approval, or attestation is missing, preparation and dispatch fail closed. A disabled worktree contract does not permit a role to create an ad hoc worktree.
+When a controlled decision requires a worktree, the host maps that opened `task_id` to `../<project-name>-worktrees/<task_id>` (a linked Git worktree in a sibling directory of the project root) and branch `phongka/task/<task_id>`, then records the resulting path/branch/HEAD identity in both task and runtime state through the approved tools. Evidence and role edits use that bound path. If the mapping, identity, approval, or attestation is missing, preparation and dispatch fail closed. A disabled worktree contract does not permit a role to create an ad hoc worktree.
 
 ## Optional activation examples
 

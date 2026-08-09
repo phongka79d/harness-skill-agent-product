@@ -7,7 +7,7 @@
 - Each individual JSON state write is atomic. A process interruption between the task-file write and state-index write may leave an orphan; validation and recovery detect it and require explicit reconciliation.
 - Scripts never call a provider model, execute a merge, push a branch, deploy, or retry an uncertain side effect.
 
-- `open_task` is a host lifecycle action, not a delegated-role capability. After `init_runtime`, the host uses `update_task_state.py` to bind the task ID, normalized scope, workflow decision, and approval; controlled `prepare_worktree.py` then maps that ID to `.phongka/worktrees/<task-id>` and `phongka/task/<task-id>` when `worktree.required` is true.
+- `open_task` is a host lifecycle action, not a delegated-role capability. After `init_runtime`, the host uses `update_task_state.py` to bind the task ID, normalized scope, workflow decision, and approval; controlled `prepare_worktree.py` then maps that ID to `../<project-name>-worktrees/<task-id>` and `phongka/task/<task-id>` when `worktree.required` is true.
 - `HOST-0` is an external host attestation. Missing, stale, or contradictory attestation, or a task/worktree path/branch/HEAD mismatch, fails closed before dispatch or state mutation; package scripts cannot infer or fabricate it.
 
 - `resolve_workflow.py` uses central `default_profile` when `--profile` or request `profile` is omitted. Configuration loading rejects a default profile that has no bundled profile file.

@@ -61,7 +61,7 @@ The project-local `.phongka` runtime is the default state boundary for resolved 
 
 ```text
 project/.phongka/
-├── settings.json             # user-editable subagent wait policy
+├── settings.json             # user-editable runtime settings (wait, execution, fallback)
 ├── state.json
 ├── events.jsonl
 ├── tasks/<task-id>.json
@@ -69,12 +69,17 @@ project/.phongka/
 ├── batch-review.json
 ├── delivery-decision.json
 ├── checklist/task-checklist-<task-id>.md # task-specific progress view (render_checklist.py)
-└── worktrees/<task-id>/       # controlled source-editing isolation
+└── plan/
+    ├── manifest.json         # canonical plan bundle
+    ├── review.json           # plan review
+    └── <date>-<feature>/     # human-readable plan documents (MasterPlan.md + Plan-N.md)
 ```
+
+Controlled source edits run in a linked Git worktree at `../<project-name>-worktrees/<task-id>` (a sibling of the project root) on branch `phongka/task/<task-id>`; the runtime records path/branch/HEAD identity and never removes the worktree itself.
 
 ## Subagent waiting
 
-The Primary Agent snapshots `settings.json` at dispatch, computes one total deadline, and polls at the configured check interval. A poll timeout is non-terminal. At the total deadline it checks status once more; it leaves the agent running when `close_on_timeout` is false and may close it only when the field is true. Scripts validate the settings, while the host performs polling and close operations.
+The Primary Agent snapshots `settings.json` at dispatch, computes one total deadline, and polls at the configured check interval. A poll timeout is non-terminal. At the total deadline it checks status once more; it leaves the agent running when `close_on_timeout` is false and may close it only when the field is true. `execution.mode` (`sync`/`async`), `execution.dispatch_timeout_seconds`, `execution.max_active_subagents`, and `primary_agent_fallback` are per-project runtime knobs with central-config defaults. Scripts validate the settings, while the host performs polling and close operations.
 
 ## Progress rendering
 

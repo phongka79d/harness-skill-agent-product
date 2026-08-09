@@ -301,7 +301,7 @@ def _worktree_contract(depth: str, source_editing: bool) -> dict[str, Any]:
         "enabled": required,
         "required": required,
         "mode": "required" if required else "disabled",
-        "path_template": ".phongka/worktrees/{task_id}",
+        "path_template": "../{project_name}-worktrees/{task_id}",
         "branch_template": "phongka/task/{task_id}",
         "prepare_approval_required": required,
         "delivery_approval_required": required,

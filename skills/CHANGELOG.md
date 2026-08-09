@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Controlled linked worktrees moved out of the project to `../<project-name>-worktrees/<task-id>` (sibling directory) while keeping native `git worktree`; identity schemas and decision path templates now use `../{project_name}-worktrees/{task_id}`, and preparation/verification enforce the sibling base.
+- The Plan Architect now authors human-readable plan documents (`MasterPlan.md` + `Plan-<N>.md`, Master Plan -> Plan N -> Batches -> Tasks -> Steps) in its staging scope; `init_runtime.py --plan-docs` installs them into `.phongka/plan/<date>-<feature>/` and records `plan_binding.plan_path`.
+- The checklist view adds a per-task table (Task, Status, Plan task, Scope, Updated) while keeping the compact stage view.
+- Runtime settings schema version `2` adds `execution` (`mode` sync/async, `dispatch_timeout_seconds`, `max_active_subagents`) and `primary_agent_fallback`, with automatic v1-to-v2 migration that preserves user `subagent_wait` values.
 - Hardened delegated-role contracts: roles are non-orchestrating, non-state-mutating leaves; only the Primary may orchestrate multiple independent tasks, read-only work may parallelize, and writers remain sequential. Added the external `HOST-0` fail-closed attestation boundary, `open_task`/worktree identity mapping, Core-only public entrypoint, declared host-owned debugger scratch scope, and exact universal handoff fields.
 - Added the package-local `i-have-adhd` companion skill and config-backed loading immediately after core for every resolved workflow, with generic package validation and route/state ordering coverage.
 - Made `agentic-engineering-core` the sole explicit workflow entrypoint for host slash-list selection, `$agentic-engineering-core`, `/agentic-engineering-core` prompt text, implicit repository work, and continuation of the current active `.phongka` workflow/task.

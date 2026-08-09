@@ -19,6 +19,7 @@ from runtime_utils import (  # noqa: E402
     runtime_root,
     safe_child,
     sanitize_for_persistence,
+    task_state_path,
     validate_task_id,
     write_text_atomic,
 )
@@ -231,6 +232,28 @@ def render_checklist(
         f"- Task status: `{_inline(selected_task.get('status', 'unknown'))}`",
         f"- Task summary: `{_inline(selected_task.get('summary', ''))}`",
     ]
+
+    detail: dict[str, Any] = {}
+    try:
+        detail = read_json(task_state_path(root, selected_task_id))
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        detail = {}
+    scope = ", ".join(_inline(item) for item in detail.get("scope", []))
+    lines.extend(
+        [
+            "",
+            "## Task detail",
+            "",
+            "| Task | Status | Plan task | Scope | Updated |",
+            "|---|---|---|---|---|",
+        ]
+    )
+    lines.append(
+        f"| `{_inline(selected_task_id)}` | "
+        f"`{_inline(detail.get('status') or selected_task.get('status') or '')}` | "
+        f"`{_inline(detail.get('plan_task_id', ''))}` | {scope} | "
+        f"`{_inline(detail.get('updated_at', ''))}` |"
+    )
 
     lines.extend(["", "## Workflow stages", "Checkboxes mean reached, not completion."])
     current_id = progress.get("current_stage")

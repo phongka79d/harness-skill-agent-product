@@ -99,7 +99,7 @@ When the decision was resolved from a non-default config, pass the same `--confi
 .phongka/checklist/task-checklist-<task-id>.md
 ```
 
-`settings.json` is created from central `subagent_policy.wait` defaults only when missing. Users may edit `subagent_wait.check_interval_seconds`, `timeout_seconds`, and `close_on_timeout`; later initialization validates and preserves those values. Actual polling and close operations remain host-enforced.
+`settings.json` is created from central `subagent_policy` and `execution` defaults only when missing. Users may edit `subagent_wait.check_interval_seconds`, `timeout_seconds`, and `close_on_timeout`, plus `execution` (`mode`: `sync`/`async`, `dispatch_timeout_seconds`, `max_active_subagents`) and `primary_agent_fallback`; later initialization validates and preserves those values. A schema v1 settings file is upgraded in place by `load_runtime_settings.py --ensure`, keeping the user's `subagent_wait` values. Actual polling, close, and dispatch operations remain host-enforced.
 
 `.phongka` state, task/artifact/checklist files, and evidence indexes are Primary Agent/host-owned. Delegated roles may read them when assigned but never mutate them or invoke state-mutating CLI commands; generated, disposable, urgent, trivial, or cleanup labels do not grant an exception.
 
@@ -117,7 +117,7 @@ python skills/agentic-state-tools/scripts/render_checklist.py \
 
 The generated `checklist/task-checklist-<task-id>.md` is a task-specific view only. The renderer selects an explicit task, then the active task, then the latest valid task-bound stage event; it fails closed when no task can be selected. It reports `unknown` and leaves all stages unchecked until a valid stage event is recorded. Checked stages mean reached, not completion, and rendering one task preserves the other task files.
 
-Controlled source edits use `.phongka/worktrees/<task-id>` with a deterministic `phongka/task/<task-id>` branch. The host `open_task` action runs after `init_runtime` and binds the task ID and scope; `prepare_worktree` maps that same ID and records path/branch/HEAD identity. Preparation and delivery require approval; the runtime verifies path, branch, HEAD, and evidence bindings. Missing `HOST-0`, task/worktree mapping, or identity evidence fails closed. Git merge, push, and worktree removal remain host-approved external actions and are never performed by these scripts.
+Controlled source edits use a linked Git worktree at `../<project-name>-worktrees/<task-id>` (a sibling of the project root) with a deterministic `phongka/task/<task-id>` branch. The host `open_task` action runs after `init_runtime` and binds the task ID and scope; `prepare_worktree` maps that same ID and records path/branch/HEAD identity. Preparation and delivery require approval; the runtime verifies path, branch, HEAD, and evidence bindings. Missing `HOST-0`, task/worktree mapping, or identity evidence fails closed. Git merge, push, and worktree removal remain host-approved external actions and are never performed by these scripts.
 
 ## Validate the package
 

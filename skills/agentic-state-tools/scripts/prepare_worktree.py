@@ -18,13 +18,17 @@ from runtime_utils import (  # noqa: E402
     refresh_checklist,
     require_task_index_consistent,
     runtime_root,
-    safe_child,
     task_state_path,
     validate_task_id,
     utc_now,
     write_json_atomic,
 )
-from worktree import WorktreeError, prepare_identity, verify_identity  # noqa: E402
+from worktree import (  # noqa: E402
+    WorktreeError,
+    prepare_identity,
+    verify_identity,
+    worktree_base_dir,
+)
 
 STATE_SCHEMA = HERE.parents[1] / "schemas" / "state.schema.json"
 TASK_SCHEMA = HERE.parents[1] / "schemas" / "task-state.schema.json"
@@ -75,7 +79,7 @@ def main() -> int:
         if not contract.get("enabled"):
             raise ValueError("worktree contract is disabled")
         # The parent is deterministic and exact; Git itself creates only the target.
-        parent = safe_child(args.project_root, ".phongka", "worktrees")
+        parent = worktree_base_dir(args.project_root)
         if parent.exists() and (parent.is_symlink() or not parent.is_dir()):
             raise ValueError("worktree parent is not a real directory")
         parent.mkdir(parents=True, exist_ok=True)

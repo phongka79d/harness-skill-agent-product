@@ -109,7 +109,7 @@
     "enabled": false,
     "required": false,
     "mode": "disabled",
-    "path_template": ".phongka/worktrees/{task_id}",
+    "path_template": "../{project_name}-worktrees/{task_id}",
     "branch_template": "phongka/task/{task_id}",
     "prepare_approval_required": false,
     "delivery_approval_required": false,
@@ -160,5 +160,5 @@
     "task route debug: Investigate an unknown or uncertain root cause, then repair it.",
     "execution preference focused respected route/profile minimum"
   ],
-  "decision_hash": "a84dfa2f565e4ce95356db2a61cb860425cd263b2f930d67f354bdbd14b75ecd"
+  "decision_hash": "6475dd2ce0cd69294d008fa38b40c45da6c3a0de07b6acc6f7919c33718473ca"
 }

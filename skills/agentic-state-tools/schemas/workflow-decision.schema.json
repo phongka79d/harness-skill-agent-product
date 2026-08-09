@@ -601,7 +601,7 @@
         },
         "path_template": {
           "type": "string",
-          "pattern": "^\\.phongka/worktrees/\\{task_id\\}$"
+          "pattern": "^\\.\\./\\{project_name\\}-worktrees/\\{task_id\\}$"
         },
         "branch_template": {
           "type": "string",

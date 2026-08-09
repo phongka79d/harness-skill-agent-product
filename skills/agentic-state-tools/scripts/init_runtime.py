@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from runtime_utils import (  # noqa: E402
     read_json,
     restore_bytes_atomic,
     runtime_root,
+    safe_child,
     sha256_json,
     utc_now,
     validate_plan_binding_documents,
@@ -63,6 +65,7 @@ def _empty_plan_binding(decision: dict[str, Any]) -> dict[str, Any]:
         "plan_review_hash": gate.get("plan_review_hash"),
         "plan_task_ids": list(gate.get("plan_task_ids", [])),
         "acceptance_ids": [],
+        "plan_path": None,
     }
 
 
@@ -174,6 +177,35 @@ def _persist_json_transaction(
         raise
 
 
+PLAN_DOCS_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _install_plan_docs(root: Path, staging: str) -> str:
+    """Copy a planner-authored plan document tree into the runtime plan area."""
+    source = Path(staging)
+    if not source.is_dir() or source.is_symlink():
+        raise ValueError("plan docs staging must be a real directory")
+    name = source.name
+    if PLAN_DOCS_DIR_RE.fullmatch(name) is None:
+        raise ValueError("plan docs directory must be named <date>-<feature>")
+    if not (source / "MasterPlan.md").is_file():
+        raise ValueError("plan docs are missing MasterPlan.md")
+    entries = [child for child in source.iterdir() if child.is_file() and not child.is_symlink()]
+    if not any(child.name.startswith("Plan-") and child.name.endswith(".md") for child in entries):
+        raise ValueError("plan docs must include at least one Plan-<N>.md")
+    if any(child.is_symlink() or not child.is_file() for child in source.iterdir()):
+        raise ValueError("plan docs may contain only regular files")
+    if any(not child.name.endswith(".md") for child in entries):
+        raise ValueError("plan docs may contain only markdown files")
+    target = safe_child(root, "plan", name)
+    if target.exists():
+        raise ValueError(f"plan docs are already installed at {target.name}")
+    target.mkdir(parents=True)
+    for child in entries:
+        (target / child.name).write_bytes(child.read_bytes())
+    return f".phongka/plan/{name}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project-root", required=True)
@@ -196,6 +228,10 @@ def main() -> int:
     parser.add_argument("--config")
     parser.add_argument("--plan-manifest")
     parser.add_argument("--plan-review")
+    parser.add_argument(
+        "--plan-docs",
+        help="planner-authored plan document tree (<date>-<feature> staging dir) to install",
+    )
     parser.add_argument("--risk", action="append", default=[])
     args = parser.parse_args()
     try:
@@ -229,6 +265,15 @@ def main() -> int:
                 (plan_dir / "manifest.json", plan_documents[0]),
                 (plan_dir / "review.json", plan_documents[1]),
             ]
+        plan_path: str | None = None
+        if args.plan_docs:
+            expected = f".phongka/plan/{Path(args.plan_docs).name}"
+            existing = binding["plan_binding"].get("plan_path")
+            if existing == expected:
+                plan_path = existing
+            else:
+                plan_path = _install_plan_docs(root, args.plan_docs)
+                binding["plan_binding"]["plan_path"] = plan_path
         state_path = root / "state.json"
         project_id = (args.project_id or Path(args.project_root).resolve().name).strip()
         if not project_id:
@@ -241,9 +286,15 @@ def main() -> int:
             if state["project_id"] != project_id:
                 raise ValueError("existing runtime belongs to another project_id")
             if state["workflow_decision_hash"] == binding["workflow_decision_hash"]:
-                if plan_documents is not None:
+                if plan_documents is not None or plan_path is not None:
                     updated_state = copy.deepcopy(state)
-                    updated_state["plan_binding"] = binding["plan_binding"]
+                    if plan_documents is not None:
+                        updated_state["plan_binding"] = binding["plan_binding"]
+                    elif plan_path is not None:
+                        updated_state["plan_binding"] = {
+                            **updated_state["plan_binding"],
+                            "plan_path": plan_path,
+                        }
                     updated_state["revision"] = int(updated_state["revision"]) + 1
                     updated_state["updated_at"] = utc_now()
                     validate_file(updated_state, STATE_SCHEMA, "state")

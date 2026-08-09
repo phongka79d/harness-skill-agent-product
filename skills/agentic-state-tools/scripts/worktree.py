@@ -34,6 +34,15 @@ def repo_top_level(root: str | Path) -> Path:
     return top
 
 
+def worktree_base_dir(root: str | Path) -> Path:
+    """Sibling directory that hosts linked worktrees for one project."""
+    top = repo_top_level(root)
+    base = (top.parent / f"{top.name}-worktrees").resolve()
+    if base == top or base.is_symlink():
+        raise WorktreeError("worktree base must be a real sibling directory", "INSPECT_WORKTREE_PATH")
+    return base
+
+
 def head(root: str | Path) -> str:
     return _git(Path(root).resolve(), "rev-parse", "HEAD")
 
@@ -76,8 +85,14 @@ def _identity_shape(identity: Any) -> dict[str, str]:
     required = ("task_id", "path", "branch", "base_commit", "head_commit", "workflow_decision_hash", "repo_path")
     if any(not isinstance(identity.get(key), str) or not identity[key].strip() for key in required):
         raise WorktreeError("worktree identity is incomplete", "INSPECT_WORKTREE_IDENTITY")
-    if identity["repo_path"] != "." or Path(identity["path"]).is_absolute() or ".." in Path(identity["path"]).parts:
-        raise WorktreeError("worktree identity path is not project-relative", "INSPECT_WORKTREE_PATH")
+    if identity["repo_path"] != ".":
+        raise WorktreeError("worktree identity repo_path must be the project root", "INSPECT_WORKTREE_PATH")
+    raw = identity["path"].replace("\\", "/")
+    parts = tuple(part for part in raw.split("/") if part not in {"", "."})
+    if raw.startswith("/") or len(parts) < 3 or parts[0] != ".." or ".." in parts[1:]:
+        raise WorktreeError("worktree identity path must resolve to a sibling worktree", "INSPECT_WORKTREE_PATH")
+    if not parts[1].endswith("-worktrees"):
+        raise WorktreeError("worktree identity parent must be the sibling worktree base", "INSPECT_WORKTREE_PATH")
     return {key: identity[key] for key in required}
 
 
@@ -85,6 +100,9 @@ def verify_identity(project_root: str | Path, identity: Any, *, allow_dirty: boo
     expected = _identity_shape(identity)
     root = repo_top_level(project_root)
     target = (root / expected["path"]).resolve()
+    base = worktree_base_dir(root)
+    if target == base or base not in target.parents:
+        raise WorktreeError("bound worktree path is outside the sibling worktree base", "INSPECT_WORKTREE_PATH")
     if not target.is_dir() or target.is_symlink():
         raise WorktreeError("bound worktree path is missing or not a real directory", "INSPECT_WORKTREE_PATH")
     if repo_top_level(target) != target:
@@ -103,9 +121,10 @@ def verify_identity(project_root: str | Path, identity: Any, *, allow_dirty: boo
 def prepare_identity(project_root: str | Path, task_id: str, decision_hash: str) -> dict[str, str]:
     root = repo_top_level(project_root)
     base = head(root)
-    target = (root / ".phongka" / "worktrees" / task_id).resolve()
+    base_dir = worktree_base_dir(root)
+    target = (base_dir / task_id).resolve()
     branch_name = f"phongka/task/{task_id}"
-    if target.parent != (root / ".phongka" / "worktrees").resolve() or target.exists() or target.is_symlink():
+    if target.parent != base_dir or target.exists() or target.is_symlink():
         raise WorktreeError("worktree path collides with an existing path", "INSPECT_WORKTREE_PATH")
     if is_dirty(root):
         raise WorktreeError("base project worktree is dirty", "RECONCILE_BASE_DIRTY")
@@ -125,7 +144,7 @@ def prepare_identity(project_root: str | Path, task_id: str, decision_hash: str)
     _git(root, "worktree", "add", "-b", branch_name, str(target), base)
     identity = {
         "task_id": task_id,
-        "path": target.relative_to(root).as_posix(),
+        "path": f"../{root.name}-worktrees/{task_id}",
         "branch": branch_name,
         "base_commit": base,
         "head_commit": base,

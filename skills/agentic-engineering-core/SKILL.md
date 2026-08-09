@@ -48,7 +48,7 @@ For a new workflow request:
 4. Execute the unified lifecycle: **Route → Explore → Design/Plan → Execute → Review/Repair → Verify → Deliver/Record**.
 5. Use `project/.phongka` only when the decision requires persistent state.
 6. For controlled source-editing, execute `prepare_worktree` after opening the task; edits and workspace evidence use the bound Git worktree.
-7. Before each stateful model dispatch, load and snapshot `.phongka/settings.json` with `load_runtime_settings.py`; use its subagent wait interval, total timeout, and close policy for that dispatch.
+7. Before each stateful model dispatch, load and snapshot `.phongka/settings.json` with `load_runtime_settings.py`; use its subagent wait interval, total timeout, close policy, execution mode, and primary-agent fallback policy for that dispatch.
 8. For stateful work, mark the current stage and skill with `render_checklist.py` so `.phongka/checklist/task-checklist-<task-id>.md` stays useful to the user.
 9. Report one integrated result with current evidence and explicit limitations.
 

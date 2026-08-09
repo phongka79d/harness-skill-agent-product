@@ -26,7 +26,7 @@ These are ceilings, not quotas. They include repair and re-review dispatches. No
 
 ## Wait policy
 
-For a stateful workflow, the Primary Agent loads `.phongka/settings.json` with `load_runtime_settings.py` immediately before each model dispatch and snapshots `subagent_wait` for that dispatch. An explicitly stateless route uses the central `subagent_policy.wait` defaults. Settings changes apply to the next dispatch, not to an in-flight deadline.
+For a stateful workflow, the Primary Agent loads `.phongka/settings.json` with `load_runtime_settings.py` immediately before each model dispatch and snapshots `subagent_wait`, `execution`, and `primary_agent_fallback` for that dispatch. An explicitly stateless route uses the central `subagent_policy` and `execution` defaults. Settings changes apply to the next dispatch, not to an in-flight deadline.
 
 1. Record the dispatch start time and compute one total deadline from `timeout_seconds`.
 2. Poll for at most `check_interval_seconds` or the remaining total time, whichever is shorter.

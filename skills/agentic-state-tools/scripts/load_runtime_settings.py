@@ -30,6 +30,12 @@ def _validate(settings: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "subagent_wait.check_interval_seconds must be shorter than timeout_seconds"
         )
+    execution = settings["execution"]
+    if execution["dispatch_timeout_seconds"] < wait["check_interval_seconds"]:
+        raise ValueError(
+            "execution.dispatch_timeout_seconds must be at least "
+            "subagent_wait.check_interval_seconds"
+        )
     return settings
 
 
@@ -49,16 +55,41 @@ def _require_runtime(project_root: str | Path) -> None:
 
 def settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
     wait = config["subagent_policy"]["wait"]
+    policy = config["subagent_policy"]
     return _validate(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "subagent_wait": {
                 "check_interval_seconds": wait["check_interval_seconds"],
                 "timeout_seconds": wait["timeout_seconds"],
                 "close_on_timeout": wait["close_on_timeout"],
             },
+            "execution": {
+                "mode": config["execution"]["mode"],
+                "dispatch_timeout_seconds": wait["timeout_seconds"],
+                "max_active_subagents": policy["depths"]["controlled"]["max_active"],
+            },
+            "primary_agent_fallback": policy["synthesized_fallback"],
         }
     )
+
+
+def _migrate_v1(settings: dict[str, Any], config_path: str | Path | None = None) -> dict[str, Any]:
+    """Upgrade a schema v1 settings file in place, preserving user subagent_wait values."""
+    config = load_config(config_path)
+    wait = config["subagent_policy"]["wait"]
+    policy = config["subagent_policy"]
+    upgraded = {
+        "schema_version": 2,
+        "subagent_wait": settings["subagent_wait"],
+        "execution": {
+            "mode": config["execution"]["mode"],
+            "dispatch_timeout_seconds": wait["timeout_seconds"],
+            "max_active_subagents": policy["depths"]["controlled"]["max_active"],
+        },
+        "primary_agent_fallback": policy["synthesized_fallback"],
+    }
+    return _validate(upgraded)
 
 
 def read_runtime_settings(project_root: str | Path) -> dict[str, Any]:
@@ -66,7 +97,10 @@ def read_runtime_settings(project_root: str | Path) -> dict[str, Any]:
     path = _settings_path(project_root)
     if not path.is_file():
         raise ValueError("runtime settings are missing; run with --ensure")
-    return _validate(read_json(path))
+    settings = read_json(path)
+    if settings.get("schema_version") == 1:
+        raise ValueError("runtime settings are schema v1; run with --ensure to migrate")
+    return _validate(settings)
 
 
 def ensure_runtime_settings(
@@ -75,6 +109,11 @@ def ensure_runtime_settings(
     _require_runtime(project_root)
     path = _settings_path(project_root)
     if path.exists():
+        settings = read_json(path)
+        if settings.get("schema_version") == 1:
+            upgraded = _migrate_v1(settings, config_path)
+            write_json_atomic(path, upgraded)
+            return upgraded
         return read_runtime_settings(project_root)
     settings = settings_from_config(load_config(config_path))
     write_json_atomic(path, settings)

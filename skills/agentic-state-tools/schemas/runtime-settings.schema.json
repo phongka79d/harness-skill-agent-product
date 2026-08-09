@@ -3,13 +3,15 @@
   "type": "object",
   "required": [
     "schema_version",
-    "subagent_wait"
+    "subagent_wait",
+    "execution",
+    "primary_agent_fallback"
   ],
   "properties": {
     "schema_version": {
       "type": "integer",
       "enum": [
-        1
+        2
       ]
     },
     "subagent_wait": {
@@ -35,6 +37,37 @@
         }
       },
       "additionalProperties": false
+    },
+    "execution": {
+      "type": "object",
+      "required": [
+        "mode",
+        "dispatch_timeout_seconds",
+        "max_active_subagents"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "sync",
+            "async"
+          ]
+        },
+        "dispatch_timeout_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 86400
+        },
+        "max_active_subagents": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        }
+      },
+      "additionalProperties": false
+    },
+    "primary_agent_fallback": {
+      "type": "boolean"
     }
   },
   "additionalProperties": false

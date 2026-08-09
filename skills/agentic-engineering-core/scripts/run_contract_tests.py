@@ -561,6 +561,16 @@ def main() -> int:
             )
             settings_path = settings_project / ".phongka" / "settings.json"
             central_wait = base_cfg["subagent_policy"]["wait"]
+            expected_defaults = {
+                "schema_version": 2,
+                "subagent_wait": central_wait,
+                "execution": {
+                    "mode": base_cfg["execution"]["mode"],
+                    "dispatch_timeout_seconds": central_wait["timeout_seconds"],
+                    "max_active_subagents": base_cfg["subagent_policy"]["depths"]["controlled"]["max_active"],
+                },
+                "primary_agent_fallback": base_cfg["subagent_policy"]["synthesized_fallback"],
+            }
             created_settings = parse(
                 run(
                     [
@@ -571,19 +581,22 @@ def main() -> int:
                     ]
                 )
             )
-            assert created_settings == {
-                "schema_version": 1,
-                "subagent_wait": central_wait,
-            }
+            assert created_settings == expected_defaults
             passed.append("runtime_settings_created_from_central_defaults")
 
             user_settings = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "subagent_wait": {
                     "check_interval_seconds": 45,
                     "timeout_seconds": 600,
                     "close_on_timeout": True,
                 },
+                "execution": {
+                    "mode": "async",
+                    "dispatch_timeout_seconds": 600,
+                    "max_active_subagents": 2,
+                },
+                "primary_agent_fallback": False,
             }
             write(settings_path, user_settings)
             user_bytes = settings_path.read_bytes()
@@ -609,6 +622,32 @@ def main() -> int:
             )
             assert settings_path.read_bytes() == user_bytes
             passed.append("runtime_settings_user_values_preserved")
+
+            legacy_settings = {
+                "schema_version": 1,
+                "subagent_wait": {
+                    "check_interval_seconds": 40,
+                    "timeout_seconds": 700,
+                    "close_on_timeout": False,
+                },
+            }
+            write(settings_path, legacy_settings)
+            migrated = parse(
+                run(
+                    [
+                        py,
+                        str(settings_script),
+                        "--project-root",
+                        str(settings_project),
+                        "--ensure",
+                    ]
+                )
+            )
+            assert migrated["schema_version"] == 2
+            assert migrated["subagent_wait"] == legacy_settings["subagent_wait"]
+            assert migrated["execution"] == expected_defaults["execution"]
+            assert migrated["primary_agent_fallback"] == expected_defaults["primary_agent_fallback"]
+            passed.append("runtime_settings_v1_migrated_to_v2")
 
             invalid_settings = copy.deepcopy(user_settings)
             invalid_settings["subagent_wait"]["check_interval_seconds"] = 60
@@ -795,11 +834,11 @@ def main() -> int:
                 ],
                 expect=1,
             )
-            assert not (unapproved / ".phongka" / "worktrees" / "TASK-1").exists()
+            assert not (unapproved.parent / f"{unapproved.name}-worktrees" / "TASK-1").exists()
             passed.append("worktree_approval_boundary_rejected")
 
             path_mismatch = copy.deepcopy(controlled_workspace)
-            path_mismatch["worktree"]["path"] = ".phongka/worktrees/other-task"
+            path_mismatch["worktree"]["path"] = f"../{controlled.name}-worktrees/other-task"
             runtime_python(
                 py,
                 scripts,
@@ -928,6 +967,14 @@ def main() -> int:
                 )
             )
             assert custom_settings["subagent_wait"] == cfg["subagent_policy"]["wait"]
+            assert (
+                custom_settings["execution"]["dispatch_timeout_seconds"]
+                == cfg["subagent_policy"]["wait"]["timeout_seconds"]
+            )
+            assert (
+                custom_settings["primary_agent_fallback"]
+                == cfg["subagent_policy"]["synthesized_fallback"]
+            )
             passed.append("decision_requires_matching_config")
             passed.append("custom_config_wait_defaults_used")
 
